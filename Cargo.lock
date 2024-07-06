@@ -187,6 +187,7 @@ dependencies = [
  "rustdoc-json",
  "rustdoc-types",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -231,7 +232,6 @@ version = "0.0.1"
 dependencies = [
  "clap",
  "libruskel",
- "serde_json",
 ]
 
 [[package]]
