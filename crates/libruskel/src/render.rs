@@ -113,14 +113,44 @@ impl Renderer {
         }
     }
 
+    fn would_render_item(&self, item: &Item, crate_data: &Crate) -> bool {
+        if self.render_private_items {
+            return true;
+        }
+
+        let mut current_id = Some(&item.id);
+        while let Some(id) = current_id {
+            if let Some(current_item) = crate_data.index.get(id) {
+                if !matches!(current_item.visibility, Visibility::Public) {
+                    return false;
+                }
+                // Move to the parent module
+                current_id = crate_data.paths.get(id).and_then(|summary| {
+                    summary
+                        .path
+                        .get(summary.path.len().saturating_sub(2))
+                        .and_then(|parent_name| {
+                            crate_data
+                                .paths
+                                .iter()
+                                .find(|(_, s)| s.path.last() == Some(parent_name))
+                                .map(|(id, _)| id)
+                        })
+                });
+            } else {
+                return false;
+            }
+        }
+        true
+    }
+
     fn render_import(&self, item: &Item, crate_data: &Crate) -> String {
         if let ItemEnum::Import(import) = &item.inner {
             // Check if the imported item is present in the crate's index
             if let Some(imported_item) = import.id.as_ref().and_then(|id| crate_data.index.get(id))
             {
-                println!("Importing item: {:#?}", imported_item);
-                // If the item is not public, render it directly without the import declaration
-                if !matches!(imported_item.visibility, Visibility::Public) {
+                // If the item would not be rendered normally, render it inline
+                if !self.would_render_item(imported_item, crate_data) {
                     return self.render_item(imported_item, crate_data);
                 }
             }
@@ -558,7 +588,16 @@ impl Renderer {
     }
 
     fn render_module(&self, item: &Item, crate_data: &Crate) -> String {
-        let mut output = format!("mod {} {{\n", item.name.as_deref().unwrap_or("?"));
+        let visibility = match &item.visibility {
+            Visibility::Public => "pub ",
+            _ => "",
+        };
+
+        let mut output = format!(
+            "{}mod {} {{\n",
+            visibility,
+            item.name.as_deref().unwrap_or("?")
+        );
 
         if let ItemEnum::Module(module) = &item.inner {
             for item_id in &module.items {
@@ -1083,7 +1122,7 @@ mod tests {
         lines[1..lines.len() - 1].join("\n")
     }
 
-    fn render_roundtrip(source: &str, expected_output: &str) {
+    fn render(renderer: &Renderer, source: &str, expected_output: &str) {
         // Create a temporary directory for our dummy crate
         let temp_dir = TempDir::new().unwrap();
         let crate_path = temp_dir.path().join("src");
@@ -1107,7 +1146,6 @@ mod tests {
         let crate_data = ruskel.json().unwrap();
 
         // Render the crate data
-        let renderer = Renderer::new().with_private_items(true);
         let rendered = renderer.render(&crate_data).unwrap();
 
         // Strip the module declaration, normalize whitespace, and compare
@@ -1118,6 +1156,28 @@ mod tests {
             normalize_whitespace(&formatter.format_str(expected_output).unwrap());
 
         assert_eq!(normalized_rendered, normalized_expected);
+    }
+
+    /// Idempotent rendering test
+    fn render_roundtrip_idemp(source: &str) {
+        render(&Renderer::new(), source, source);
+    }
+
+    /// Idempotent rendering test with private items
+    fn render_roundtrip_private_idemp(source: &str) {
+        render(&Renderer::new().with_private_items(true), source, source);
+    }
+
+    fn render_roundtrip(source: &str, expected_output: &str) {
+        render(&Renderer::new(), source, expected_output);
+    }
+
+    fn render_roundtrip_private(source: &str, expected_output: &str) {
+        render(
+            &Renderer::new().with_private_items(true),
+            source,
+            expected_output,
+        );
     }
 
     #[test]
@@ -1138,7 +1198,7 @@ mod tests {
 
     #[test]
     fn test_render_private_function() {
-        render_roundtrip(
+        render_roundtrip_private(
             r#"
             fn private_function() {
                 // Function body
@@ -1147,6 +1207,14 @@ mod tests {
             r#"
             fn private_function() {}
             "#,
+        );
+        render_roundtrip(
+            r#"
+            fn private_function() {
+                // Function body
+            }
+            "#,
+            r#""#,
         );
     }
 
@@ -1185,17 +1253,16 @@ mod tests {
 
     #[test]
     fn test_render_module() {
-        render_roundtrip(
+        render_roundtrip_private_idemp(
             r#"
                 mod test_module {
                     pub fn test_function() {
-                        // Function body
                     }
                 }
-            "#,
-            r#"
-                mod test_module {
-                    pub fn test_function() {}
+
+                pub mod pub_module {
+                    pub fn pub_function() {
+                    }
                 }
             "#,
         );
@@ -1203,12 +1270,7 @@ mod tests {
 
     #[test]
     fn test_render_complex_type() {
-        render_roundtrip(
-            r#"
-                pub fn complex_type_function<'a>(arg: &'a mut [u8]) {
-                    // Function body
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 pub fn complex_type_function<'a>(arg: &'a mut [u8]) {
                 }
@@ -1333,21 +1395,22 @@ mod tests {
             r#"
                 /// This is a documented constant.
                 pub const CONSTANT: u32 = 42;
+                const PRIVATE_CONSTANT: &str = "Hello, world!";
             "#,
             r#"
                 /// This is a documented constant.
                 pub const CONSTANT: u32 = 42;
             "#,
         );
-    }
-
-    #[test]
-    fn test_render_private_constant() {
-        render_roundtrip(
+        render_roundtrip_private(
             r#"
+                /// This is a documented constant.
+                pub const CONSTANT: u32 = 42;
                 const PRIVATE_CONSTANT: &str = "Hello, world!";
             "#,
             r#"
+                /// This is a documented constant.
+                pub const CONSTANT: u32 = 42;
                 const PRIVATE_CONSTANT: &str = "Hello, world!";
             "#,
         );
@@ -1893,7 +1956,7 @@ mod tests {
     fn test_render_simple_impl() {
         render_roundtrip(
             r#"
-                struct MyStruct;
+                pub struct MyStruct;
 
                 impl MyStruct {
                     fn new() -> Self {
@@ -1906,7 +1969,7 @@ mod tests {
                 }
             "#,
             r#"
-                struct MyStruct;
+                pub struct MyStruct;
 
                 impl MyStruct {
                     fn new() -> Self {}
@@ -1919,7 +1982,7 @@ mod tests {
 
     #[test]
     fn test_render_impl_with_trait() {
-        render_roundtrip(
+        render_roundtrip_private(
             r#"
                 trait MyTrait {
                     fn trait_method(&self);
@@ -1949,7 +2012,7 @@ mod tests {
 
     #[test]
     fn test_render_impl_with_generics() {
-        render_roundtrip(
+        render_roundtrip_private(
             r#"
                 struct GenericStruct<T>(T);
 
@@ -1971,7 +2034,7 @@ mod tests {
 
     #[test]
     fn test_render_impl_with_associated_types() {
-        render_roundtrip(
+        render_roundtrip_private(
             r#"
                 struct MyIterator<T>(Vec<T>);
 
@@ -1998,7 +2061,7 @@ mod tests {
     #[test]
     fn test_render_unsafe_impl() {
         // FIXME: This appears to be a bug in rustdoc - unsafe is not set on the unsafe impl block.
-        render_roundtrip(
+        render_roundtrip_private(
             r#"
                 unsafe trait Foo {}
 
@@ -2034,17 +2097,21 @@ mod tests {
 
     #[test]
     fn test_render_imports_inline() {
-        render_roundtrip(
-            r#"
+        let input = r#"
                 mod private {
                     pub struct PrivateStruct;
                 }
 
                 pub use private::PrivateStruct;
-            "#,
+            "#;
+
+        render_roundtrip(
+            input,
             r#"
-                struct PrivateStruct;
+                pub struct PrivateStruct;
             "#,
         );
+
+        render_roundtrip_private(input, input);
     }
 }

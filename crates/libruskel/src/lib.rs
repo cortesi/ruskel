@@ -15,7 +15,6 @@ pub use crate::error::{Result, RuskelError};
 pub use crate::filter::Filter;
 
 fn generate_json<P: AsRef<Path>>(manifest_path: P) -> Result<Crate> {
-    println!("Generating JSON for {}", manifest_path.as_ref().display());
     let json_path = rustdoc_json::Builder::default()
         .toolchain("nightly")
         .manifest_path(manifest_path.as_ref())
