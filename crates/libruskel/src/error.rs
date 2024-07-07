@@ -23,6 +23,9 @@ pub enum RuskelError {
 
     #[error("Cargo error: {0}")]
     CargoError(#[from] anyhow::Error),
+
+    #[error("Formatting error: {0}")]
+    FormatError(#[from] rust_format::Error),
 }
 
 pub type Result<T> = std::result::Result<T, RuskelError>;

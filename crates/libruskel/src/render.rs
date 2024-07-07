@@ -5,16 +5,25 @@ use rustdoc_types::{
     TraitBoundModifier, Type, TypeBinding, TypeBindingKind, Visibility, WherePredicate,
 };
 
-pub struct Renderer;
+use crate::error::Result;
+
+pub struct Renderer {
+    formatter: RustFmt,
+}
 
 impl Renderer {
-    pub fn render(crate_data: &Crate) -> String {
-        let formatter = RustFmt::default();
+    pub fn new() -> Self {
+        Self {
+            formatter: RustFmt::default(),
+        }
+    }
+
+    pub fn render(&self, crate_data: &Crate) -> Result<String> {
         if let Some(root_item) = crate_data.index.get(&crate_data.root) {
             let unformatted = Self::render_item(root_item, crate_data, 0);
-            formatter.format_str(&unformatted).unwrap_or(unformatted)
+            Ok(self.formatter.format_str(&unformatted)?)
         } else {
-            String::new()
+            Ok(String::new())
         }
     }
 
@@ -22,9 +31,40 @@ impl Renderer {
         match &item.inner {
             ItemEnum::Module(_) => Self::render_module(item, crate_data, indent),
             ItemEnum::Function(_) => Self::render_function(item, indent),
+            ItemEnum::Constant { .. } => Self::render_constant(item, indent),
             // Add other item types as needed
             _ => String::new(),
         }
+    }
+
+    fn render_constant(item: &Item, indent: usize) -> String {
+        let indent_str = "    ".repeat(indent);
+        let visibility = match &item.visibility {
+            Visibility::Public => "pub ",
+            _ => "",
+        };
+
+        let mut output = String::new();
+
+        // Add doc comment if present
+        if let Some(docs) = &item.docs {
+            for line in docs.lines() {
+                output.push_str(&format!("{}/// {}\n", indent_str, line));
+            }
+        }
+
+        if let ItemEnum::Constant { type_, const_ } = &item.inner {
+            output.push_str(&format!(
+                "{}{}const {}: {} = {};\n",
+                indent_str,
+                visibility,
+                item.name.as_deref().unwrap_or("?"),
+                Self::render_type(type_),
+                const_.expr
+            ));
+        }
+
+        output
     }
 
     fn render_module(item: &Item, crate_data: &Crate, indent: usize) -> String {
@@ -511,7 +551,8 @@ mod tests {
         let crate_data = ruskel.json().unwrap();
 
         // Render the crate data
-        let rendered = Renderer::render(&crate_data);
+        let renderer = Renderer::new();
+        let rendered = renderer.render(&crate_data).unwrap();
 
         // Strip the module declaration, normalize whitespace, and compare
         let normalized_rendered = normalize_whitespace(&strip_module_declaration(&rendered));
@@ -726,6 +767,32 @@ mod tests {
                     for<'a> F: Fn(&'a str) -> bool,
                 {
                 }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_constant() {
+        render_roundtrip(
+            r#"
+                /// This is a documented constant.
+                pub const CONSTANT: u32 = 42;
+            "#,
+            r#"
+                /// This is a documented constant.
+                pub const CONSTANT: u32 = 42;
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_private_constant() {
+        render_roundtrip(
+            r#"
+                const PRIVATE_CONSTANT: &str = "Hello, world!";
+            "#,
+            r#"
+                const PRIVATE_CONSTANT: &str = "Hello, world!";
             "#,
         );
     }
