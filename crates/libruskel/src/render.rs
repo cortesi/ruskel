@@ -1,7 +1,7 @@
 use rust_format::{Formatter, RustFmt};
 use rustdoc_types::{
     Crate, DynTrait, FnDecl, FunctionPointer, GenericArg, GenericArgs, GenericBound,
-    GenericParamDef, GenericParamDefKind, Generics, Id, Item, ItemEnum, Path, PolyTrait,
+    GenericParamDef, GenericParamDefKind, Generics, Id, Impl, Item, ItemEnum, Path, PolyTrait,
     StructKind, Term, TraitBoundModifier, Type, TypeBinding, TypeBindingKind, VariantKind,
     Visibility, WherePredicate,
 };
@@ -10,35 +10,167 @@ use crate::error::Result;
 
 pub struct Renderer {
     formatter: RustFmt,
+    render_auto_impls: bool,
 }
 
 impl Renderer {
     pub fn new() -> Self {
         Self {
             formatter: RustFmt::default(),
+            render_auto_impls: false,
+        }
+    }
+
+    pub fn with_auto_impls(mut self, render_auto_impls: bool) -> Self {
+        self.render_auto_impls = render_auto_impls;
+        self
+    }
+
+    fn should_render_impl(&self, impl_: &Impl) -> bool {
+        if self.render_auto_impls {
+            true // Render all impls if render_auto_impls is true
+        } else {
+            if impl_.synthetic {
+                return false; // Never render synthetic impls when render_auto_impls is false
+            }
+
+            // List of standard traits that we don't want to render by default
+            const STANDARD_TRAITS: &[&str] = &[
+                "Any",
+                "Send",
+                "Sync",
+                "Unpin",
+                "UnwindSafe",
+                "RefUnwindSafe",
+                "Borrow",
+                "BorrowMut",
+                "From",
+                "Into",
+                "TryFrom",
+                "TryInto",
+                "AsRef",
+                "AsMut",
+                "Default",
+                "Clone",
+                "Copy",
+                "Debug",
+                "PartialEq",
+                "Eq",
+                "PartialOrd",
+                "Ord",
+                "Hash",
+                "Deref",
+                "DerefMut",
+                "Drop",
+                "IntoIterator",
+            ];
+
+            // Check if the impl is for a standard trait
+            if let Some(trait_path) = &impl_.trait_ {
+                let trait_name = trait_path
+                    .name
+                    .split("::")
+                    .last()
+                    .unwrap_or(&trait_path.name);
+                !STANDARD_TRAITS.contains(&trait_name)
+            } else {
+                true // Always render inherent impls (impls without a trait)
+            }
         }
     }
 
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
         if let Some(root_item) = crate_data.index.get(&crate_data.root) {
-            let unformatted = Self::render_item(root_item, crate_data);
-            println!("{}", unformatted);
+            let unformatted = self.render_item(root_item, crate_data);
+            println!("Unformatted output:\n{}", unformatted);
             Ok(self.formatter.format_str(&unformatted)?)
         } else {
             Ok(String::new())
         }
     }
 
-    fn render_item(item: &Item, crate_data: &Crate) -> String {
+    fn render_item(&self, item: &Item, crate_data: &Crate) -> String {
+        println!("Rendering item: {}", item.name.as_deref().unwrap_or("?"));
         match &item.inner {
-            ItemEnum::Module(_) => Self::render_module(item, crate_data),
+            ItemEnum::Module(_) => self.render_module(item, crate_data),
             ItemEnum::Function(_) => Self::render_function(item, false),
             ItemEnum::Constant { .. } => Self::render_constant(item),
-            ItemEnum::Struct(_) => Self::render_struct(item, crate_data),
+            ItemEnum::Struct(_) => self.render_struct(item, crate_data),
             ItemEnum::Enum(_) => Self::render_enum(item, crate_data),
             ItemEnum::Trait(_) => Self::render_trait(item, crate_data),
             // Add other item types as needed
             _ => String::new(),
+        }
+    }
+
+    fn render_impl(&self, item: &Item, crate_data: &Crate) -> String {
+        let mut output = String::new();
+
+        if let ItemEnum::Impl(impl_) = &item.inner {
+            let generics = Self::render_generics(&impl_.generics);
+            let where_clause = Self::render_where_clause(&impl_.generics);
+
+            let unsafe_prefix = if impl_.is_unsafe { "unsafe " } else { "" };
+
+            let trait_part = if let Some(trait_) = &impl_.trait_ {
+                format!("{} for ", Self::render_path(trait_))
+            } else {
+                String::new()
+            };
+
+            output.push_str(&format!(
+                "{}impl{} {}{}{}{}",
+                unsafe_prefix,
+                generics,
+                trait_part,
+                Self::render_type(&impl_.for_),
+                where_clause,
+                " {\n"
+            ));
+
+            for item_id in &impl_.items {
+                if let Some(item) = crate_data.index.get(item_id) {
+                    output.push_str(&Self::render_impl_item(item));
+                }
+            }
+
+            output.push_str("}\n");
+        }
+
+        output
+    }
+
+    fn render_impl_item(item: &Item) -> String {
+        match &item.inner {
+            ItemEnum::Function(_) => Self::render_function(item, false),
+            ItemEnum::Constant { .. } => Self::render_constant(item),
+            ItemEnum::AssocType { .. } => Self::render_associated_type(item),
+            _ => String::new(),
+        }
+    }
+
+    fn render_associated_type(item: &Item) -> String {
+        if let ItemEnum::AssocType {
+            bounds, default, ..
+        } = &item.inner
+        {
+            let bounds_str = if !bounds.is_empty() {
+                format!(": {}", Self::render_generic_bounds(bounds))
+            } else {
+                String::new()
+            };
+            let default_str = default
+                .as_ref()
+                .map(|d| format!(" = {}", Self::render_type(d)))
+                .unwrap_or_default();
+            format!(
+                "type {}{}{};\n",
+                item.name.as_deref().unwrap_or("?"),
+                bounds_str,
+                default_str
+            )
+        } else {
+            String::new()
         }
     }
 
@@ -239,7 +371,7 @@ impl Renderer {
             .join(" + ")
     }
 
-    fn render_struct(item: &Item, crate_data: &Crate) -> String {
+    fn render_struct(&self, item: &Item, crate_data: &Crate) -> String {
         let visibility = match &item.visibility {
             Visibility::Public => "pub ",
             _ => "",
@@ -313,6 +445,17 @@ impl Renderer {
                     output.push_str("}\n");
                 }
             }
+
+            // Render impl blocks
+            for impl_id in &struct_.impls {
+                if let Some(impl_item) = crate_data.index.get(impl_id) {
+                    if let ItemEnum::Impl(impl_) = &impl_item.inner {
+                        if self.should_render_impl(impl_) {
+                            output.push_str(&self.render_impl(impl_item, crate_data));
+                        }
+                    }
+                }
+            }
         }
 
         output
@@ -367,13 +510,13 @@ impl Renderer {
         output
     }
 
-    fn render_module(item: &Item, crate_data: &Crate) -> String {
+    fn render_module(&self, item: &Item, crate_data: &Crate) -> String {
         let mut output = format!("mod {} {{\n", item.name.as_deref().unwrap_or("?"));
 
         if let ItemEnum::Module(module) = &item.inner {
             for item_id in &module.items {
                 if let Some(item) = crate_data.index.get(item_id) {
-                    output.push_str(&Self::render_item(item, crate_data));
+                    output.push_str(&self.render_item(item, crate_data));
                 }
             }
         }
@@ -621,7 +764,7 @@ impl Renderer {
                             .unwrap_or_default();
                         let args_str = Self::render_generic_args(args);
                         format!(
-                            "<{}{}>:{}{}",
+                            "<{}{}>::{}{}",
                             Self::render_type(self_type),
                             trait_part,
                             name,
@@ -672,7 +815,6 @@ impl Renderer {
     fn render_generic_args(args: &GenericArgs) -> String {
         match args {
             GenericArgs::AngleBracketed { args, bindings } => {
-                println!("{:?} {:?}", args, bindings);
                 if args.is_empty() && bindings.is_empty() {
                     String::new()
                 } else {
@@ -1697,6 +1839,132 @@ mod tests {
                 Variant3(&'a [T]),
             }
         "#,
+        );
+    }
+
+    #[test]
+    fn test_render_simple_impl() {
+        render_roundtrip(
+            r#"
+                struct MyStruct;
+
+                impl MyStruct {
+                    fn new() -> Self {
+                        MyStruct
+                    }
+
+                    fn mymethod(&self) {
+                        // Method body
+                    }
+                }
+            "#,
+            r#"
+                struct MyStruct;
+
+                impl MyStruct {
+                    fn new() -> Self {}
+
+                    fn mymethod(&self) {}
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_impl_with_trait() {
+        render_roundtrip(
+            r#"
+                trait MyTrait {
+                    fn trait_method(&self);
+                }
+
+                struct MyStruct;
+
+                impl MyTrait for MyStruct {
+                    fn trait_method(&self) {
+                        // Method body
+                    }
+                }
+            "#,
+            r#"
+                trait MyTrait {
+                    fn trait_method(&self);
+                }
+
+                struct MyStruct;
+
+                impl MyTrait for MyStruct {
+                    fn trait_method(&self) {}
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_impl_with_generics() {
+        render_roundtrip(
+            r#"
+                struct GenericStruct<T>(T);
+
+                impl<T: Clone> GenericStruct<T> {
+                    fn get_value(&self) -> T {
+                        self.0.clone()
+                    }
+                }
+            "#,
+            r#"
+                struct GenericStruct<T>(T);
+
+                impl<T: Clone> GenericStruct<T> {
+                    fn get_value(&self) -> T { }
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_impl_with_associated_types() {
+        render_roundtrip(
+            r#"
+                struct MyIterator<T>(Vec<T>);
+
+                impl<T> Iterator for MyIterator<T> {
+                    type Item = T;
+
+                    fn next(&mut self) -> Option<Self::Item> {
+                        self.0.pop()
+                    }
+                }
+            "#,
+            r#"
+                struct MyIterator<T>(Vec<T>);
+
+                impl<T> Iterator for MyIterator<T> {
+                    type Item = T;
+
+                    fn next(&mut self) -> Option<Self::Item> { }
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_unsafe_impl() {
+        render_roundtrip(
+            r#"
+                unsafe trait Foo {}
+
+                struct UnsafeStruct;
+
+                unsafe impl Foo for UnsafeStruct {}
+            "#,
+            r#"
+                unsafe trait Foo {}
+
+                struct UnsafeStruct;
+
+                unsafe impl Foo for UnsafeStruct {}
+            "#,
         );
     }
 }
