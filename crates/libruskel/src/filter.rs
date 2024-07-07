@@ -32,9 +32,7 @@ impl Filter {
     ///
     /// Currently supports file paths, returning `Filter::File` for .rs files
     /// (with paths relative to the workspace root) and `Filter::None` for other targets.
-    pub fn new(target: &str, workspace_root: &Path) -> Result<Self> {
-        let target_path = PathBuf::from(target);
-
+    pub fn from_path(target_path: &Path, workspace_root: &Path) -> Result<Self> {
         if target_path.extension().map_or(false, |ext| ext == "rs") {
             println!(
                 "Filtering by file: {} {}",
@@ -43,7 +41,7 @@ impl Filter {
             );
             match target_path.strip_prefix(workspace_root) {
                 Ok(relative_path) => Ok(Filter::File(relative_path.to_path_buf())),
-                Err(_) => Err(RuskelError::InvalidTargetPath(target_path)),
+                Err(_) => Err(RuskelError::InvalidTargetPath(target_path.into())),
             }
         } else {
             Ok(Filter::None)
@@ -228,8 +226,8 @@ mod tests {
     #[test]
     fn test_filter_new_file() {
         let workspace_root = Path::new("/workspace");
-        let target = "/workspace/src/lib.rs";
-        let filter = Filter::new(target, workspace_root);
+        let target = Path::new("/workspace/src/lib.rs");
+        let filter = Filter::from_path(target, workspace_root);
         assert!(matches!(filter, Ok(Filter::File(_))));
         if let Ok(Filter::File(path)) = filter {
             assert_eq!(path, PathBuf::from("src/lib.rs"));
@@ -239,8 +237,8 @@ mod tests {
     #[test]
     fn test_filter_new_non_file() {
         let workspace_root = Path::new("/workspace");
-        let target = "/workspace";
-        let filter = Filter::new(target, workspace_root);
+        let target = Path::new("/workspace");
+        let filter = Filter::from_path(target, workspace_root);
         assert!(matches!(filter, Ok(Filter::None)));
     }
 }

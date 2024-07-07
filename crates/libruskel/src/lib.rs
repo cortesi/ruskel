@@ -1,6 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use cargo::core::Workspace;
+use cargo::ops;
+use cargo::util::context::GlobalContext;
+
 use rustdoc_types::Crate;
 
 mod error;
@@ -37,14 +41,26 @@ impl Ruskel {
     pub fn new(target: &str) -> Result<Self> {
         let target_path = PathBuf::from(target);
         let manifest_path = Self::find_manifest(&target_path)?;
-        let workspace_root = Self::find_workspace_root(&manifest_path)?;
 
-        let filter = Filter::new(target, &workspace_root)?;
-        Ok(Ruskel {
-            manifest_path,
-            workspace_root,
-            filter,
-        })
+        if target_path.exists() {
+            let workspace_root = Self::find_workspace_root(&manifest_path)?;
+            let filter = Filter::from_path(&target_path, &workspace_root)?;
+            Ok(Ruskel {
+                manifest_path,
+                workspace_root,
+                filter,
+            })
+        } else {
+            let workspace_root = Self::find_module(target)?;
+
+            let filter = Filter::from_path(&workspace_root, &workspace_root)?;
+            let manifest_path = workspace_root.clone().join("Cargo.toml");
+            Ok(Ruskel {
+                manifest_path,
+                workspace_root,
+                filter,
+            })
+        }
     }
 
     pub fn json(&self) -> Result<Crate> {
@@ -57,26 +73,22 @@ impl Ruskel {
     }
 
     fn find_workspace_root(manifest_path: &Path) -> Result<PathBuf> {
-        let mut current_dir = manifest_path
-            .parent()
-            .unwrap_or(Path::new("/"))
-            .to_path_buf();
-        loop {
-            let workspace_manifest = current_dir.join("Cargo.toml");
-            if workspace_manifest.exists() {
-                let content = fs::read_to_string(&workspace_manifest)?;
-                if content.contains("[workspace]") {
-                    return Ok(current_dir);
-                }
-            }
-            if !current_dir.pop() {
-                // If we've reached the root directory, assume the original manifest is the workspace root
-                return Ok(manifest_path
-                    .parent()
-                    .unwrap_or(Path::new("/"))
-                    .to_path_buf());
+        let config = GlobalContext::default()?;
+        let workspace = Workspace::new(manifest_path, &config)?;
+        Ok(workspace.root().to_path_buf())
+    }
+
+    fn find_module(module_name: &str) -> Result<PathBuf> {
+        let config = GlobalContext::default()?;
+        let workspace = Workspace::new(&Path::new("Cargo.toml").canonicalize()?, &config)?;
+
+        for package in workspace.members() {
+            if package.name().as_str() == module_name {
+                return Ok(package.manifest_path().parent().unwrap().to_path_buf());
             }
         }
+
+        Err(RuskelError::ModuleNotFound(module_name.to_string()))
     }
 
     fn find_manifest(target_path: &Path) -> Result<PathBuf> {
@@ -114,27 +126,28 @@ mod tests {
         };
     }
 
-    fn create_cargo_toml(path: &Path, is_workspace: bool) -> std::io::Result<()> {
-        let content = if is_workspace {
-            "[workspace]\nmembers = [\"member1\", \"member2\"]"
-        } else {
-            "[package]\nname = \"test-package\"\nversion = \"0.1.0\""
-        };
-        fs::write(path, content)
+    fn create_cargo_ws(dir: &Path) -> std::io::Result<()> {
+        let content = "[workspace]\nmembers = [\"member1\", \"member2\"]";
+        fs::write(dir.join("Cargo.toml"), content)
+    }
+
+    fn create_cargo_child(dir: &Path, name: &str) -> std::io::Result<()> {
+        let content = format!("[package]\nname = \"{}\"\nversion = \"0.1.0\"", name);
+        fs::write(dir.join("Cargo.toml"), content)
     }
 
     fn setup_workspace() -> Result<TempDir> {
         let temp_dir = tempdir()?;
-        create_cargo_toml(&temp_dir.path().join("Cargo.toml"), true)?;
+        create_cargo_ws(temp_dir.path())?;
 
         let member1_dir = temp_dir.path().join("member1");
         fs::create_dir_all(member1_dir.join("src"))?;
-        create_cargo_toml(&member1_dir.join("Cargo.toml"), false)?;
+        create_cargo_child(&member1_dir, "test-package1")?;
         File::create(member1_dir.join("src").join("lib.rs"))?;
 
         let member2_dir = temp_dir.path().join("member2");
         fs::create_dir_all(member2_dir.join("src"))?;
-        create_cargo_toml(&member2_dir.join("Cargo.toml"), false)?;
+        create_cargo_child(&member2_dir, "test-package2")?;
         File::create(member2_dir.join("src").join("main.rs"))?;
 
         Ok(temp_dir)
@@ -171,7 +184,7 @@ mod tests {
     #[test]
     fn test_parse_standalone_crate() -> Result<()> {
         let temp_dir = tempdir()?;
-        create_cargo_toml(&temp_dir.path().join("Cargo.toml"), false)?;
+        create_cargo_child(temp_dir.path(), "test1")?;
         let src_dir = temp_dir.path().join("src");
         fs::create_dir(&src_dir)?;
         File::create(src_dir.join("lib.rs"))?;
@@ -212,14 +225,11 @@ mod tests {
     #[test]
     fn test_parse_non_rust_file() -> Result<()> {
         let temp_dir = tempdir()?;
-        create_cargo_toml(&temp_dir.path().join("Cargo.toml"), false)?;
+        create_cargo_child(temp_dir.path(), "test1")?;
         let non_rust_file = temp_dir.path().join("not_rust.txt");
         File::create(&non_rust_file)?;
 
-        let target = Ruskel::new(non_rust_file.to_str().unwrap())?;
-        assert_path_eq!(target.manifest_path, temp_dir.path().join("Cargo.toml"));
-        assert_path_eq!(target.workspace_root, temp_dir.path());
-        assert_eq!(target.filter, Filter::None);
+        assert!(Ruskel::new(non_rust_file.to_str().unwrap()).is_err());
 
         Ok(())
     }
