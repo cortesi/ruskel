@@ -426,8 +426,110 @@ impl Renderer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Ruskel;
+    use indoc::indoc;
+    use pretty_assertions::assert_eq;
     use rustdoc_types::{Abi, FnDecl, Function, Generics, Header, Id, Module, Type as RustDocType};
     use std::collections::HashMap;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn normalize_whitespace(s: &str) -> String {
+        let lines: Vec<&str> = s
+            .lines()
+            .map(|line| line.trim_end()) // Remove trailing whitespace
+            .filter(|line| !line.is_empty()) // Remove blank lines
+            .collect();
+
+        if lines.is_empty() {
+            return String::new();
+        }
+
+        // Find the minimum indentation
+        let min_indent = lines
+            .iter()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| line.len() - line.trim_start().len())
+            .min()
+            .unwrap_or(0);
+
+        // Dedent all lines by the minimum indentation
+        lines
+            .into_iter()
+            .map(|line| {
+                if line.len() > min_indent {
+                    &line[min_indent..]
+                } else {
+                    line.trim_start()
+                }
+            })
+            .collect::<Vec<&str>>()
+            .join("\n")
+    }
+
+    fn strip_module_declaration(s: &str) -> String {
+        let lines: Vec<&str> = s
+            .lines()
+            .map(|line| line.trim_end())
+            .filter(|line| !line.is_empty())
+            .collect();
+
+        if lines.len() <= 2 {
+            return String::new();
+        }
+
+        lines[1..lines.len() - 1].join("\n")
+    }
+
+    fn render_roundtrip(source: &str, expected_output: &str) {
+        // Create a temporary directory for our dummy crate
+        let temp_dir = TempDir::new().unwrap();
+        let crate_path = temp_dir.path().join("src");
+        fs::create_dir(&crate_path).unwrap();
+
+        // Write the source code to a file
+        let lib_rs_path = crate_path.join("lib.rs");
+        fs::write(&lib_rs_path, source).unwrap();
+
+        // Create a dummy Cargo.toml
+        let cargo_toml_content = r#"
+        [package]
+        name = "dummy_crate"
+        version = "0.1.0"
+        edition = "2021"
+        "#;
+        fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml_content).unwrap();
+
+        // Parse the crate using Ruskel
+        let ruskel = Ruskel::new(lib_rs_path.to_str().unwrap()).unwrap();
+        let crate_data = ruskel.json().unwrap();
+
+        // Render the crate data
+        let rendered = Renderer::render(&crate_data);
+
+        // Strip the module declaration, normalize whitespace, and compare
+        let normalized_rendered = normalize_whitespace(&strip_module_declaration(&rendered));
+        let normalized_expected = normalize_whitespace(expected_output);
+
+        assert_eq!(normalized_rendered, normalized_expected);
+    }
+
+    #[test]
+    fn test_render_public_function() {
+        render_roundtrip(
+            r#"
+                /// This is a documented function.
+                pub fn test_function() {
+                    // Function body
+                }
+            "#,
+            r#"
+                /// This is a documented function.
+                pub fn test_function() {
+                }
+            "#,
+        );
+    }
 
     fn create_function(
         id: &str,
@@ -485,20 +587,6 @@ mod tests {
                 is_stripped: false,
             }),
         }
-    }
-
-    #[test]
-    fn test_render_public_function() {
-        let function = create_function(
-            "test_function",
-            "test_function",
-            Visibility::Public,
-            vec![],
-            None,
-            None,
-        );
-        let output = Renderer::render_function(&function, 0);
-        assert_eq!(output, "pub fn test_function() {\n}\n");
     }
 
     #[test]
