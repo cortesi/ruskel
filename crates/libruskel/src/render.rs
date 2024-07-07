@@ -2,8 +2,8 @@ use rust_format::{Formatter, RustFmt};
 use rustdoc_types::{
     Crate, DynTrait, FnDecl, FunctionPointer, GenericArg, GenericArgs, GenericBound,
     GenericParamDef, GenericParamDefKind, Generics, Id, Item, ItemEnum, Path, PolyTrait,
-    StructKind, Term, TraitBoundModifier, Type, TypeBinding, TypeBindingKind, Visibility,
-    WherePredicate,
+    StructKind, Term, TraitBoundModifier, Type, TypeBinding, TypeBindingKind, VariantKind,
+    Visibility, WherePredicate,
 };
 
 use crate::error::Result;
@@ -22,6 +22,7 @@ impl Renderer {
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
         if let Some(root_item) = crate_data.index.get(&crate_data.root) {
             let unformatted = Self::render_item(root_item, crate_data);
+            println!("{}", unformatted);
             Ok(self.formatter.format_str(&unformatted)?)
         } else {
             Ok(String::new())
@@ -34,10 +35,109 @@ impl Renderer {
             ItemEnum::Function(_) => Self::render_function(item, false),
             ItemEnum::Constant { .. } => Self::render_constant(item),
             ItemEnum::Struct(_) => Self::render_struct(item, crate_data),
+            ItemEnum::Enum(_) => Self::render_enum(item, crate_data),
             ItemEnum::Trait(_) => Self::render_trait(item, crate_data),
             // Add other item types as needed
             _ => String::new(),
         }
+    }
+
+    fn render_enum(item: &Item, crate_data: &Crate) -> String {
+        let visibility = match &item.visibility {
+            Visibility::Public => "pub ",
+            _ => "",
+        };
+
+        let mut output = String::new();
+
+        // Add doc comment if present
+        if let Some(docs) = &item.docs {
+            for line in docs.lines() {
+                output.push_str(&format!("/// {}\n", line));
+            }
+        }
+
+        if let ItemEnum::Enum(enum_) = &item.inner {
+            let generics = Self::render_generics(&enum_.generics);
+            let where_clause = Self::render_where_clause(&enum_.generics);
+
+            output.push_str(&format!(
+                "{}enum {}{}{} {{\n",
+                visibility,
+                item.name.as_deref().unwrap_or("?"),
+                generics,
+                where_clause
+            ));
+
+            for variant_id in &enum_.variants {
+                if let Some(variant_item) = crate_data.index.get(variant_id) {
+                    output.push_str(&Self::render_enum_variant(variant_item, crate_data));
+                }
+            }
+
+            output.push_str("}\n");
+        }
+
+        output
+    }
+
+    fn render_enum_variant(item: &Item, crate_data: &Crate) -> String {
+        let mut output = String::new();
+
+        // Add doc comment if present
+        if let Some(docs) = &item.docs {
+            for line in docs.lines() {
+                output.push_str(&format!("    /// {}\n", line));
+            }
+        }
+
+        if let ItemEnum::Variant(variant) = &item.inner {
+            output.push_str(&format!("    {}", item.name.as_deref().unwrap_or("?")));
+
+            match &variant.kind {
+                VariantKind::Plain => {}
+                VariantKind::Tuple(fields) => {
+                    let fields_str = fields
+                        .iter()
+                        .filter_map(|field| {
+                            field.as_ref().map(|id| {
+                                if let Some(field_item) = crate_data.index.get(id) {
+                                    if let ItemEnum::StructField(ty) = &field_item.inner {
+                                        Self::render_type(ty)
+                                    } else {
+                                        "".to_string()
+                                    }
+                                } else {
+                                    "".to_string()
+                                }
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    output.push_str(&format!("({})", fields_str));
+                }
+                VariantKind::Struct { fields, .. } => {
+                    output.push_str(" {\n");
+                    for field in fields {
+                        if let Some(_field_item) = crate_data.index.get(field) {
+                            output.push_str(&format!(
+                                "        {}\n",
+                                Self::render_struct_field(crate_data, field)
+                            ));
+                        }
+                    }
+                    output.push_str("    }");
+                }
+            }
+
+            if let Some(discriminant) = &variant.discriminant {
+                output.push_str(&format!(" = {}", discriminant.expr));
+            }
+
+            output.push_str(",\n");
+        }
+
+        output
     }
 
     fn render_trait(item: &Item, crate_data: &Crate) -> String {
@@ -1375,6 +1475,126 @@ mod tests {
                 fn get_item(&self) -> Self::Item;
             }
         "#,
+        );
+    }
+
+    #[test]
+    fn test_render_simple_enum() {
+        render_roundtrip(
+            r#"
+                /// A simple enum
+                pub enum SimpleEnum {
+                    Variant1,
+                    Variant2,
+                    Variant3,
+                }
+            "#,
+            r#"
+                /// A simple enum
+                pub enum SimpleEnum {
+                    Variant1,
+                    Variant2,
+                    Variant3,
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_enum_with_tuple_variants() {
+        render_roundtrip(
+            r#"
+                /// An enum with tuple variants
+                pub enum TupleEnum {
+                    Variant1(i32, String),
+                    Variant2(bool),
+                }
+            "#,
+            r#"
+                /// An enum with tuple variants
+                pub enum TupleEnum {
+                    Variant1(i32, String),
+                    Variant2(bool),
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_enum_with_struct_variants() {
+        render_roundtrip(
+            r#"
+                /// An enum with struct variants
+                pub enum StructEnum {
+                    Variant1 {
+                        field1: i32,
+                        field2: String,
+                    },
+                    Variant2 {
+                        field: bool,
+                    },
+                }
+            "#,
+            r#"
+                /// An enum with struct variants
+                pub enum StructEnum {
+                    Variant1 {
+                        field1: i32,
+                        field2: String,
+                    },
+                    Variant2 {
+                        field: bool,
+                    },
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_enum_with_mixed_variants() {
+        render_roundtrip(
+            r#"
+                /// An enum with mixed variant types
+                pub enum MixedEnum {
+                    Variant1,
+                    Variant2(i32, String),
+                    Variant3 {
+                        field: bool,
+                    },
+                }
+            "#,
+            r#"
+                /// An enum with mixed variant types
+                pub enum MixedEnum {
+                    Variant1,
+                    Variant2(i32, String),
+                    Variant3 {
+                        field: bool,
+                    },
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_enum_with_discriminants() {
+        render_roundtrip(
+            r#"
+                /// An enum with discriminants
+                pub enum DiscriminantEnum {
+                    Variant1 = 1,
+                    Variant2 = 2,
+                    Variant3 = 4,
+                }
+            "#,
+            r#"
+                /// An enum with discriminants
+                pub enum DiscriminantEnum {
+                    Variant1 = 1,
+                    Variant2 = 2,
+                    Variant3 = 4,
+                }
+            "#,
         );
     }
 }
