@@ -1,8 +1,9 @@
 use rust_format::{Formatter, RustFmt};
 use rustdoc_types::{
     Crate, DynTrait, FnDecl, FunctionPointer, GenericArg, GenericArgs, GenericBound,
-    GenericParamDef, GenericParamDefKind, Generics, Item, ItemEnum, Path, PolyTrait, Term,
-    TraitBoundModifier, Type, TypeBinding, TypeBindingKind, Visibility, WherePredicate,
+    GenericParamDef, GenericParamDefKind, Generics, Id, Item, ItemEnum, Path, PolyTrait,
+    StructKind, Term, TraitBoundModifier, Type, TypeBinding, TypeBindingKind, Visibility,
+    WherePredicate,
 };
 
 use crate::error::Result;
@@ -21,6 +22,7 @@ impl Renderer {
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
         if let Some(root_item) = crate_data.index.get(&crate_data.root) {
             let unformatted = Self::render_item(root_item, crate_data, 0);
+            println!("{}", unformatted);
             Ok(self.formatter.format_str(&unformatted)?)
         } else {
             Ok(String::new())
@@ -32,8 +34,118 @@ impl Renderer {
             ItemEnum::Module(_) => Self::render_module(item, crate_data, indent),
             ItemEnum::Function(_) => Self::render_function(item, indent),
             ItemEnum::Constant { .. } => Self::render_constant(item, indent),
+            ItemEnum::Struct(_) => Self::render_struct(item, crate_data, indent),
             // Add other item types as needed
             _ => String::new(),
+        }
+    }
+
+    fn render_struct(item: &Item, crate_data: &Crate, indent: usize) -> String {
+        let indent_str = "    ".repeat(indent);
+        let visibility = match &item.visibility {
+            Visibility::Public => "pub ",
+            _ => "",
+        };
+
+        let mut output = String::new();
+
+        // Add doc comment if present
+        if let Some(docs) = &item.docs {
+            for line in docs.lines() {
+                output.push_str(&format!("{}/// {}\n", indent_str, line));
+            }
+        }
+
+        if let ItemEnum::Struct(struct_) = &item.inner {
+            let generics = Self::render_generics(&struct_.generics);
+            let where_clause = Self::render_where_clause(&struct_.generics);
+
+            match &struct_.kind {
+                StructKind::Unit => {
+                    output.push_str(&format!(
+                        "{}{}struct {}{}{};\n",
+                        indent_str,
+                        visibility,
+                        item.name.as_deref().unwrap_or("?"),
+                        generics,
+                        where_clause
+                    ));
+                }
+                StructKind::Tuple(fields) => {
+                    let fields_str = fields
+                        .iter()
+                        .filter_map(|field| {
+                            field.as_ref().map(|id| {
+                                if let Some(field_item) = crate_data.index.get(id) {
+                                    if let ItemEnum::StructField(ty) = &field_item.inner {
+                                        let visibility = match &field_item.visibility {
+                                            Visibility::Public => "pub ",
+                                            _ => "",
+                                        };
+                                        format!("{}{}", visibility, Self::render_type(ty))
+                                    } else {
+                                        "".to_string()
+                                    }
+                                } else {
+                                    "".to_string()
+                                }
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    output.push_str(&format!(
+                        "{}{}struct {}{}({}){};\n",
+                        indent_str,
+                        visibility,
+                        item.name.as_deref().unwrap_or("?"),
+                        generics,
+                        fields_str,
+                        where_clause
+                    ));
+                }
+                StructKind::Plain { fields, .. } => {
+                    output.push_str(&format!(
+                        "{}{}struct {}{}{} {{\n",
+                        indent_str,
+                        visibility,
+                        item.name.as_deref().unwrap_or("?"),
+                        generics,
+                        where_clause
+                    ));
+                    for field in fields {
+                        output.push_str(&Self::render_struct_field(
+                            crate_data,
+                            field,
+                            &format!("{}    ", indent_str),
+                        ));
+                    }
+                    output.push_str(&format!("{}}}\n", indent_str));
+                }
+            }
+        }
+
+        output
+    }
+
+    fn render_struct_field(crate_data: &Crate, field_id: &Id, indent: &str) -> String {
+        if let Some(field_item) = crate_data.index.get(field_id) {
+            let visibility = match &field_item.visibility {
+                Visibility::Public => "pub ",
+                _ => "",
+            };
+            if let ItemEnum::StructField(ty) = &field_item.inner {
+                format!(
+                    "{}{}{}: {},\n",
+                    indent,
+                    visibility,
+                    field_item.name.as_deref().unwrap_or("?"),
+                    Self::render_type(ty)
+                )
+            } else {
+                format!("{}// Unknown field type\n", indent)
+            }
+        } else {
+            format!("{}// Field not found\n", indent)
         }
     }
 
@@ -793,6 +905,82 @@ mod tests {
             "#,
             r#"
                 const PRIVATE_CONSTANT: &str = "Hello, world!";
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_unit_struct() {
+        render_roundtrip(
+            r#"
+                /// A unit struct
+                pub struct UnitStruct;
+            "#,
+            r#"
+                /// A unit struct
+                pub struct UnitStruct;
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_tuple_struct() {
+        render_roundtrip(
+            r#"
+                /// A tuple struct
+                pub struct TupleStruct(pub i32, String);
+            "#,
+            r#"
+                /// A tuple struct
+                pub struct TupleStruct(pub i32, String);
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_plain_struct() {
+        render_roundtrip(
+            r#"
+                /// A plain struct
+                pub struct PlainStruct {
+                    pub field1: i32,
+                    field2: String,
+                }
+            "#,
+            r#"
+                /// A plain struct
+                pub struct PlainStruct {
+                    pub field1: i32,
+                    field2: String,
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_generic_struct() {
+        render_roundtrip(
+            r#"
+                /// A generic struct
+                pub struct GenericStruct<T, U>
+                where
+                    T: Clone,
+                    U: Default,
+                {
+                    field1: T,
+                    field2: U,
+                }
+            "#,
+            r#"
+                /// A generic struct
+                pub struct GenericStruct<T, U>
+                where
+                    T: Clone,
+                    U: Default,
+                {
+                    field1: T,
+                    field2: U,
+                }
             "#,
         );
     }
