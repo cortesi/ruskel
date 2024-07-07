@@ -1,10 +1,12 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use rustdoc_types::{Crate, Item};
+use rustdoc_types::Crate;
 
 mod error;
+mod filter;
 pub use crate::error::{Result, RuskelError};
+pub use crate::filter::Filter;
 
 fn generate_json<P: AsRef<Path>>(manifest_path: P) -> Result<Crate> {
     println!("Generating JSON for {}", manifest_path.as_ref().display());
@@ -17,43 +19,6 @@ fn generate_json<P: AsRef<Path>>(manifest_path: P) -> Result<Crate> {
     let json_content = fs::read_to_string(&json_path)?;
     let crate_data: Crate = serde_json::from_str(&json_content)?;
     Ok(crate_data)
-}
-
-/// The filtering options for Ruskel output.
-///
-/// Specifies how crate data should be filtered before presentation.
-#[derive(Debug, PartialEq)]
-pub enum Filter {
-    /// No filtering applied. Includes all crate items.
-    None,
-
-    /// Include only items from the specified file.
-    ///
-    /// Path is relative to the workspace root.
-    File(PathBuf),
-}
-
-impl Filter {
-    pub fn filter_crate(&self, crate_data: &Crate) -> Crate {
-        match self {
-            Filter::None => crate_data.clone(),
-            Filter::File(file_path) => {
-                let mut filtered_crate = crate_data.clone();
-                filtered_crate.index = crate_data
-                    .index
-                    .iter()
-                    .filter_map(|(id, item)| {
-                        if item_matches_file(item, file_path) {
-                            Some((id.clone(), item.clone()))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                filtered_crate
-            }
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -70,20 +35,11 @@ pub struct Ruskel {
 
 impl Ruskel {
     pub fn new(target: &str) -> Result<Self> {
-        let target_path = PathBuf::from(target).canonicalize()?;
+        let target_path = PathBuf::from(target);
         let manifest_path = Self::find_manifest(&target_path)?;
         let workspace_root = Self::find_workspace_root(&manifest_path)?;
 
-        let filter =
-            if target_path.is_file() && target_path.extension().map_or(false, |ext| ext == "rs") {
-                match target_path.strip_prefix(&workspace_root) {
-                    Ok(relative_path) => Filter::File(relative_path.to_path_buf()),
-                    Err(_) => return Err(RuskelError::InvalidTargetPath(target_path)),
-                }
-            } else {
-                Filter::None
-            };
-
+        let filter = Filter::new(target, &workspace_root)?;
         Ok(Ruskel {
             manifest_path,
             workspace_root,
@@ -141,13 +97,6 @@ impl Ruskel {
         }
         Err(RuskelError::ManifestNotFound)
     }
-}
-
-fn item_matches_file(item: &Item, file_path: &Path) -> bool {
-    item.span
-        .as_ref()
-        .map(|span| Path::new(&span.filename))
-        .map_or(false, |item_path| item_path == file_path)
 }
 
 #[cfg(test)]
