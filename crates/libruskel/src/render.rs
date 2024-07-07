@@ -21,7 +21,7 @@ impl Renderer {
 
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
         if let Some(root_item) = crate_data.index.get(&crate_data.root) {
-            let unformatted = Self::render_item(root_item, crate_data, 0);
+            let unformatted = Self::render_item(root_item, crate_data);
             println!("{}", unformatted);
             Ok(self.formatter.format_str(&unformatted)?)
         } else {
@@ -29,19 +29,18 @@ impl Renderer {
         }
     }
 
-    fn render_item(item: &Item, crate_data: &Crate, indent: usize) -> String {
+    fn render_item(item: &Item, crate_data: &Crate) -> String {
         match &item.inner {
-            ItemEnum::Module(_) => Self::render_module(item, crate_data, indent),
-            ItemEnum::Function(_) => Self::render_function(item, indent),
-            ItemEnum::Constant { .. } => Self::render_constant(item, indent),
-            ItemEnum::Struct(_) => Self::render_struct(item, crate_data, indent),
+            ItemEnum::Module(_) => Self::render_module(item, crate_data),
+            ItemEnum::Function(_) => Self::render_function(item),
+            ItemEnum::Constant { .. } => Self::render_constant(item),
+            ItemEnum::Struct(_) => Self::render_struct(item, crate_data),
             // Add other item types as needed
             _ => String::new(),
         }
     }
 
-    fn render_struct(item: &Item, crate_data: &Crate, indent: usize) -> String {
-        let indent_str = "    ".repeat(indent);
+    fn render_struct(item: &Item, crate_data: &Crate) -> String {
         let visibility = match &item.visibility {
             Visibility::Public => "pub ",
             _ => "",
@@ -52,7 +51,7 @@ impl Renderer {
         // Add doc comment if present
         if let Some(docs) = &item.docs {
             for line in docs.lines() {
-                output.push_str(&format!("{}/// {}\n", indent_str, line));
+                output.push_str(&format!("/// {}\n", line));
             }
         }
 
@@ -63,8 +62,7 @@ impl Renderer {
             match &struct_.kind {
                 StructKind::Unit => {
                     output.push_str(&format!(
-                        "{}{}struct {}{}{};\n",
-                        indent_str,
+                        "{}struct {}{}{};\n",
                         visibility,
                         item.name.as_deref().unwrap_or("?"),
                         generics,
@@ -94,8 +92,7 @@ impl Renderer {
                         .collect::<Vec<_>>()
                         .join(", ");
                     output.push_str(&format!(
-                        "{}{}struct {}{}({}){};\n",
-                        indent_str,
+                        "{}struct {}{}({}){};\n",
                         visibility,
                         item.name.as_deref().unwrap_or("?"),
                         generics,
@@ -105,21 +102,16 @@ impl Renderer {
                 }
                 StructKind::Plain { fields, .. } => {
                     output.push_str(&format!(
-                        "{}{}struct {}{}{} {{\n",
-                        indent_str,
+                        "{}struct {}{}{} {{\n",
                         visibility,
                         item.name.as_deref().unwrap_or("?"),
                         generics,
                         where_clause
                     ));
                     for field in fields {
-                        output.push_str(&Self::render_struct_field(
-                            crate_data,
-                            field,
-                            &format!("{}    ", indent_str),
-                        ));
+                        output.push_str(&Self::render_struct_field(crate_data, field));
                     }
-                    output.push_str(&format!("{}}}\n", indent_str));
+                    output.push_str("}\n");
                 }
             }
         }
@@ -127,7 +119,7 @@ impl Renderer {
         output
     }
 
-    fn render_struct_field(crate_data: &Crate, field_id: &Id, indent: &str) -> String {
+    fn render_struct_field(crate_data: &Crate, field_id: &Id) -> String {
         if let Some(field_item) = crate_data.index.get(field_id) {
             let visibility = match &field_item.visibility {
                 Visibility::Public => "pub ",
@@ -135,22 +127,20 @@ impl Renderer {
             };
             if let ItemEnum::StructField(ty) = &field_item.inner {
                 format!(
-                    "{}{}{}: {},\n",
-                    indent,
+                    "{}{}: {},\n",
                     visibility,
                     field_item.name.as_deref().unwrap_or("?"),
                     Self::render_type(ty)
                 )
             } else {
-                format!("{}// Unknown field type\n", indent)
+                "// Unknown field type\n".to_string()
             }
         } else {
-            format!("{}// Field not found\n", indent)
+            "// Field not found\n".to_string()
         }
     }
 
-    fn render_constant(item: &Item, indent: usize) -> String {
-        let indent_str = "    ".repeat(indent);
+    fn render_constant(item: &Item) -> String {
         let visibility = match &item.visibility {
             Visibility::Public => "pub ",
             _ => "",
@@ -161,14 +151,13 @@ impl Renderer {
         // Add doc comment if present
         if let Some(docs) = &item.docs {
             for line in docs.lines() {
-                output.push_str(&format!("{}/// {}\n", indent_str, line));
+                output.push_str(&format!("/// {}\n", line));
             }
         }
 
         if let ItemEnum::Constant { type_, const_ } = &item.inner {
             output.push_str(&format!(
-                "{}{}const {}: {} = {};\n",
-                indent_str,
+                "{}const {}: {} = {};\n",
                 visibility,
                 item.name.as_deref().unwrap_or("?"),
                 Self::render_type(type_),
@@ -179,28 +168,22 @@ impl Renderer {
         output
     }
 
-    fn render_module(item: &Item, crate_data: &Crate, indent: usize) -> String {
-        let indent_str = "    ".repeat(indent);
-        let mut output = format!(
-            "{}mod {} {{\n",
-            indent_str,
-            item.name.as_deref().unwrap_or("?")
-        );
+    fn render_module(item: &Item, crate_data: &Crate) -> String {
+        let mut output = format!("mod {} {{\n", item.name.as_deref().unwrap_or("?"));
 
         if let ItemEnum::Module(module) = &item.inner {
             for item_id in &module.items {
                 if let Some(item) = crate_data.index.get(item_id) {
-                    output.push_str(&Self::render_item(item, crate_data, indent + 1));
+                    output.push_str(&Self::render_item(item, crate_data));
                 }
             }
         }
 
-        output.push_str(&format!("{}}}\n", indent_str));
+        output.push_str("}\n");
         output
     }
 
-    fn render_function(item: &Item, indent: usize) -> String {
-        let indent_str = "    ".repeat(indent);
+    fn render_function(item: &Item) -> String {
         let visibility = match &item.visibility {
             Visibility::Public => "pub ",
             _ => "",
@@ -211,7 +194,7 @@ impl Renderer {
         // Add doc comment if present
         if let Some(docs) = &item.docs {
             for line in docs.lines() {
-                output.push_str(&format!("{}/// {}\n", indent_str, line));
+                output.push_str(&format!("/// {}\n", line));
             }
         }
 
@@ -222,8 +205,7 @@ impl Renderer {
             let where_clause = Self::render_where_clause(&function.generics);
 
             output.push_str(&format!(
-                "{}{}fn {}{}({}){}{} {{",
-                indent_str,
+                "{}fn {}{}({}){}{} {{",
                 visibility,
                 item.name.as_deref().unwrap_or("?"),
                 generics,
@@ -237,7 +219,7 @@ impl Renderer {
             ));
         }
 
-        output.push_str(&format!("\n{}}}\n", indent_str));
+        output.push_str("\n}\n");
         output
     }
 
