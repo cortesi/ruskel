@@ -88,6 +88,19 @@ impl Ruskel {
             }
         }
 
+        // Fetch all packages
+        let options = ops::FetchOptions {
+            gctx: &config,
+            targets: vec![],
+        };
+        let (_, ps) = ops::fetch(&workspace, &options)?;
+
+        for i in ps.packages() {
+            if i.name().as_str() == module_name {
+                return Ok(i.manifest_path().parent().unwrap().to_path_buf());
+            }
+        }
+
         Err(RuskelError::ModuleNotFound(module_name.to_string()))
     }
 
