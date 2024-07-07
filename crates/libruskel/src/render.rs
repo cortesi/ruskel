@@ -1,3 +1,4 @@
+use rust_format::{Formatter, RustFmt};
 use rustdoc_types::{
     Crate, DynTrait, FnDecl, FunctionPointer, GenericArg, GenericArgs, GenericBound,
     GenericParamDef, GenericParamDefKind, Generics, Item, ItemEnum, Path, PolyTrait, Term,
@@ -8,8 +9,10 @@ pub struct Renderer;
 
 impl Renderer {
     pub fn render(crate_data: &Crate) -> String {
+        let formatter = RustFmt::default();
         if let Some(root_item) = crate_data.index.get(&crate_data.root) {
-            Self::render_item(root_item, crate_data, 0)
+            let unformatted = Self::render_item(root_item, crate_data, 0);
+            formatter.format_str(&unformatted).unwrap_or(unformatted)
         } else {
             String::new()
         }
@@ -261,22 +264,28 @@ impl Renderer {
     fn render_generic_args(args: &GenericArgs) -> String {
         match args {
             GenericArgs::AngleBracketed { args, bindings } => {
-                let args = args
-                    .iter()
-                    .map(Self::render_generic_arg)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let bindings = bindings
-                    .iter()
-                    .map(Self::render_type_binding)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let all = if bindings.is_empty() {
-                    args
+                if args.is_empty() && bindings.is_empty() {
+                    // Return an empty string for empty angle brackets. It's not clear to me why we
+                    // see empty AngleBracketed when none is expected.
+                    String::new()
                 } else {
-                    format!("{}, {}", args, bindings)
-                };
-                format!("<{}>", all)
+                    let args = args
+                        .iter()
+                        .map(Self::render_generic_arg)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let bindings = bindings
+                        .iter()
+                        .map(Self::render_type_binding)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let all = if bindings.is_empty() {
+                        args
+                    } else {
+                        format!("{}, {}", args, bindings)
+                    };
+                    format!("<{}>", all)
+                }
             }
             GenericArgs::Parenthesized { inputs, output } => {
                 let inputs = inputs
@@ -427,10 +436,7 @@ impl Renderer {
 mod tests {
     use super::*;
     use crate::Ruskel;
-    use indoc::indoc;
     use pretty_assertions::assert_eq;
-    use rustdoc_types::{Abi, FnDecl, Function, Generics, Header, Id, Module, Type as RustDocType};
-    use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
 
@@ -509,7 +515,10 @@ mod tests {
 
         // Strip the module declaration, normalize whitespace, and compare
         let normalized_rendered = normalize_whitespace(&strip_module_declaration(&rendered));
-        let normalized_expected = normalize_whitespace(expected_output);
+
+        let formatter = RustFmt::default();
+        let normalized_expected =
+            normalize_whitespace(&formatter.format_str(expected_output).unwrap());
 
         assert_eq!(normalized_rendered, normalized_expected);
     }
@@ -525,457 +534,199 @@ mod tests {
             "#,
             r#"
                 /// This is a documented function.
-                pub fn test_function() {
-                }
+                pub fn test_function() {}
             "#,
         );
     }
 
-    fn create_function(
-        id: &str,
-        name: &str,
-        visibility: Visibility,
-        inputs: Vec<(String, RustDocType)>,
-        output: Option<RustDocType>,
-        docs: Option<String>,
-    ) -> Item {
-        Item {
-            id: Id(id.to_string()),
-            crate_id: 0,
-            name: Some(name.to_string()),
-            span: None,
-            visibility,
-            docs,
-            links: HashMap::new(),
-            attrs: vec![],
-            deprecation: None,
-            inner: ItemEnum::Function(Function {
-                decl: FnDecl {
-                    inputs,
-                    output,
-                    c_variadic: false,
-                },
-                generics: Generics {
-                    params: vec![],
-                    where_predicates: vec![],
-                },
-                header: Header {
-                    const_: false,
-                    unsafe_: false,
-                    async_: false,
-                    abi: Abi::Rust,
-                },
-                has_body: true,
-            }),
-        }
-    }
-
-    fn create_module(id: &str, name: &str, visibility: Visibility, items: Vec<Id>) -> Item {
-        Item {
-            id: Id(id.to_string()),
-            crate_id: 0,
-            name: Some(name.to_string()),
-            span: None,
-            visibility,
-            docs: None,
-            links: HashMap::new(),
-            attrs: vec![],
-            deprecation: None,
-            inner: ItemEnum::Module(Module {
-                is_crate: false,
-                items,
-                is_stripped: false,
-            }),
-        }
-    }
-
     #[test]
     fn test_render_private_function() {
-        let function = create_function(
-            "private_function",
-            "private_function",
-            Visibility::Default,
-            vec![],
-            None,
-            None,
+        render_roundtrip(
+            r#"
+            fn private_function() {
+                // Function body
+            }
+            "#,
+            r#"
+            fn private_function() {}
+            "#,
         );
-        let output = Renderer::render_function(&function, 0);
-        assert_eq!(output, "fn private_function() {\n}\n");
     }
 
     #[test]
     fn test_render_function_with_args_and_return() {
-        let function = create_function(
-            "complex_function",
-            "complex_function",
-            Visibility::Public,
-            vec![
-                (
-                    "arg1".to_string(),
-                    RustDocType::Primitive("i32".to_string()),
-                ),
-                (
-                    "arg2".to_string(),
-                    RustDocType::Primitive("String".to_string()),
-                ),
-            ],
-            Some(RustDocType::Primitive("bool".to_string())),
-            None,
-        );
-        let output = Renderer::render_function(&function, 0);
-        assert_eq!(
-            output,
-            "pub fn complex_function(arg1: i32, arg2: String) -> bool {\n}\n"
+        render_roundtrip(
+            r#"
+            pub fn complex_function(arg1: i32, arg2: String) -> bool {
+                // Function body
+            }
+            "#,
+            r#"
+            pub fn complex_function(arg1: i32, arg2: String) -> bool {}
+            "#,
         );
     }
 
     #[test]
     fn test_render_function_with_docs() {
-        let function = create_function(
-            "documented_function",
-            "documented_function",
-            Visibility::Public,
-            vec![],
-            None,
-            Some("This is a documented function.".to_string()),
-        );
-        let output = Renderer::render_function(&function, 0);
-        assert_eq!(
-            output,
-            "/// This is a documented function.\npub fn documented_function() {\n}\n"
+        render_roundtrip(
+            r#"
+            /// This is a documented function.
+            /// It has multiple lines of documentation.
+            pub fn documented_function() {
+                // Function body
+            }
+        "#,
+            r#"
+            /// This is a documented function.
+            /// It has multiple lines of documentation.
+            pub fn documented_function() {
+            }
+        "#,
         );
     }
 
     #[test]
     fn test_render_module() {
-        let function_id = Id("function".to_string());
-        let module = create_module(
-            "test_module",
-            "test_module",
-            Visibility::Public,
-            vec![function_id.clone()],
+        render_roundtrip(
+            r#"
+                mod test_module {
+                    pub fn test_function() {
+                        // Function body
+                    }
+                }
+            "#,
+            r#"
+                mod test_module {
+                    pub fn test_function() {}
+                }
+            "#,
         );
-
-        let mut index = HashMap::new();
-        index.insert(
-            function_id.clone(),
-            create_function(
-                "test_function",
-                "test_function",
-                Visibility::Public,
-                vec![],
-                None,
-                None,
-            ),
-        );
-
-        let crate_data = Crate {
-            root: Id("root".to_string()),
-            crate_version: None,
-            includes_private: false,
-            index,
-            paths: HashMap::new(),
-            external_crates: HashMap::new(),
-            format_version: 0,
-        };
-
-        let output = Renderer::render_module(&module, &crate_data, 0);
-        let expected = "mod test_module {\n    pub fn test_function() {\n    }\n}\n";
-        assert_eq!(output, expected);
     }
 
     #[test]
     fn test_render_complex_type() {
-        let complex_type = RustDocType::BorrowedRef {
-            lifetime: Some("'a".to_string()),
-            mutable: true,
-            type_: Box::new(RustDocType::Slice(Box::new(RustDocType::Primitive(
-                "u8".to_string(),
-            )))),
-        };
-        let rendered = Renderer::render_type(&complex_type);
-        assert_eq!(rendered, "&'a mut [u8]");
+        render_roundtrip(
+            r#"
+                pub fn complex_type_function<'a>(arg: &'a mut [u8]) {
+                    // Function body
+                }
+            "#,
+            r#"
+                pub fn complex_type_function<'a>(arg: &'a mut [u8]) {
+                }
+            "#,
+        );
     }
 
     #[test]
     fn test_render_function_pointer() {
-        let fn_pointer = RustDocType::FunctionPointer(Box::new(FunctionPointer {
-            decl: FnDecl {
-                inputs: vec![
-                    (
-                        "arg1".to_string(),
-                        RustDocType::Primitive("i32".to_string()),
-                    ),
-                    (
-                        "arg2".to_string(),
-                        RustDocType::Primitive("String".to_string()),
-                    ),
-                ],
-                output: Some(RustDocType::Primitive("bool".to_string())),
-                c_variadic: false,
-            },
-            generic_params: vec![],
-            header: Header {
-                const_: false,
-                unsafe_: false,
-                async_: false,
-                abi: Abi::Rust,
-            },
-        }));
-        let rendered = Renderer::render_type(&fn_pointer);
-        assert_eq!(rendered, "fn(arg1: i32, arg2: String) -> bool");
+        render_roundtrip(
+            r#"
+                pub fn function_with_fn_pointer(f: fn(arg1: i32, arg2: String) -> bool) {
+                    // Function body
+                }
+            "#,
+            r#"
+                pub fn function_with_fn_pointer(f: fn(arg1: i32, arg2: String) -> bool) {
+                }
+            "#,
+        );
     }
 
     #[test]
     fn test_render_function_with_generics() {
-        let mut function = create_function(
-            "generic_function",
-            "generic_function",
-            Visibility::Public,
-            vec![
-                ("t".to_string(), RustDocType::Generic("T".to_string())),
-                ("u".to_string(), RustDocType::Generic("U".to_string())),
-            ],
-            Some(RustDocType::Generic("T".to_string())),
-            None,
-        );
-        if let ItemEnum::Function(ref mut f) = function.inner {
-            f.generics.params = vec![
-                GenericParamDef {
-                    name: "T".to_string(),
-                    kind: GenericParamDefKind::Type {
-                        bounds: vec![],
-                        default: None,
-                        synthetic: false,
-                    },
-                },
-                GenericParamDef {
-                    name: "U".to_string(),
-                    kind: GenericParamDefKind::Type {
-                        bounds: vec![],
-                        default: None,
-                        synthetic: false,
-                    },
-                },
-            ];
-        }
-        let output = Renderer::render_function(&function, 0);
-        assert_eq!(
-            output,
-            "pub fn generic_function<T, U>(t: T, u: U) -> T {\n}\n"
+        render_roundtrip(
+            r#"
+                pub fn generic_function<T, U>(t: T, u: U) -> T {
+                    // Function body
+                }
+            "#,
+            r#"
+                pub fn generic_function<T, U>(t: T, u: U) -> T {
+                }
+            "#,
         );
     }
 
     #[test]
     fn test_render_function_with_lifetimes() {
-        let mut function = create_function(
-            "lifetime_function",
-            "lifetime_function",
-            Visibility::Public,
-            vec![(
-                "x".to_string(),
-                RustDocType::BorrowedRef {
-                    lifetime: Some("'a".to_string()),
-                    mutable: false,
-                    type_: Box::new(RustDocType::Primitive("str".to_string())),
-                },
-            )],
-            Some(RustDocType::BorrowedRef {
-                lifetime: Some("'a".to_string()),
-                mutable: false,
-                type_: Box::new(RustDocType::Primitive("str".to_string())),
-            }),
-            None,
-        );
-        if let ItemEnum::Function(ref mut f) = function.inner {
-            f.generics.params = vec![GenericParamDef {
-                name: "'a".to_string(),
-                kind: GenericParamDefKind::Lifetime { outlives: vec![] },
-            }];
-        }
-        let output = Renderer::render_function(&function, 0);
-        assert_eq!(
-            output,
-            "pub fn lifetime_function<'a>(x: &'a str) -> &'a str {\n}\n"
+        render_roundtrip(
+            r#"
+                pub fn lifetime_function<'a>(x: &'a str) -> &'a str {
+                    // Function body
+                }
+            "#,
+            r#"
+                pub fn lifetime_function<'a>(x: &'a str) -> &'a str {}
+            "#,
         );
     }
 
     #[test]
     fn test_render_function_with_where_clause() {
-        let mut function = create_function(
-            "where_function",
-            "where_function",
-            Visibility::Public,
-            vec![("t".to_string(), RustDocType::Generic("T".to_string()))],
-            Some(RustDocType::Generic("T".to_string())),
-            None,
-        );
-        if let ItemEnum::Function(ref mut f) = function.inner {
-            f.generics.params = vec![GenericParamDef {
-                name: "T".to_string(),
-                kind: GenericParamDefKind::Type {
-                    bounds: vec![],
-                    default: None,
-                    synthetic: false,
-                },
-            }];
-            f.generics.where_predicates = vec![WherePredicate::BoundPredicate {
-                type_: RustDocType::Generic("T".to_string()),
-                bounds: vec![GenericBound::TraitBound {
-                    trait_: Path {
-                        name: "Clone".to_string(),
-                        id: Id("0".to_string()),
-                        args: None,
-                    },
-                    generic_params: vec![],
-                    modifier: TraitBoundModifier::None,
-                }],
-                generic_params: vec![],
-            }];
-        }
-        let output = Renderer::render_function(&function, 0);
-        assert_eq!(
-            output,
-            "pub fn where_function<T>(t: T) -> T where T: Clone {\n}\n"
+        render_roundtrip(
+            r#"
+                pub fn where_function<T>(t: T) -> T
+                where
+                    T: Clone,
+                {
+                    // Function body
+                }
+            "#,
+            r#"
+                pub fn where_function<T>(t: T) -> T
+                where
+                    T: Clone,
+                {
+                }
+            "#,
         );
     }
 
     #[test]
     fn test_render_function_with_complex_generics_and_where_clause() {
-        let mut function = create_function(
-            "complex_function",
-            "complex_function",
-            Visibility::Public,
-            vec![
-                ("t".to_string(), RustDocType::Generic("T".to_string())),
-                ("u".to_string(), RustDocType::Generic("U".to_string())),
-            ],
-            Some(RustDocType::Generic("R".to_string())),
-            None,
+        render_roundtrip(
+            r#"
+                pub fn complex_function<T, U, R>(t: T, u: U) -> R
+                where
+                    T: Clone,
+                    U: std::fmt::Debug,
+                    R: From<T>,
+                {
+                    // Function body
+                }
+            "#,
+            r#"
+                pub fn complex_function<T, U, R>(t: T, u: U) -> R
+                where
+                    T: Clone,
+                    U: std::fmt::Debug,
+                    R: From<T>,
+                {
+                }
+            "#,
         );
-        if let ItemEnum::Function(ref mut f) = function.inner {
-            f.generics.params = vec![
-                GenericParamDef {
-                    name: "T".to_string(),
-                    kind: GenericParamDefKind::Type {
-                        bounds: vec![],
-                        default: None,
-                        synthetic: false,
-                    },
-                },
-                GenericParamDef {
-                    name: "U".to_string(),
-                    kind: GenericParamDefKind::Type {
-                        bounds: vec![],
-                        default: None,
-                        synthetic: false,
-                    },
-                },
-                GenericParamDef {
-                    name: "R".to_string(),
-                    kind: GenericParamDefKind::Type {
-                        bounds: vec![],
-                        default: None,
-                        synthetic: false,
-                    },
-                },
-            ];
-            f.generics.where_predicates = vec![
-                WherePredicate::BoundPredicate {
-                    type_: RustDocType::Generic("T".to_string()),
-                    bounds: vec![GenericBound::TraitBound {
-                        trait_: Path {
-                            name: "Clone".to_string(),
-                            id: Id("0".to_string()),
-                            args: None,
-                        },
-                        generic_params: vec![],
-                        modifier: TraitBoundModifier::None,
-                    }],
-                    generic_params: vec![],
-                },
-                WherePredicate::BoundPredicate {
-                    type_: RustDocType::Generic("U".to_string()),
-                    bounds: vec![GenericBound::TraitBound {
-                        trait_: Path {
-                            name: "Debug".to_string(),
-                            id: Id("1".to_string()),
-                            args: None,
-                        },
-                        generic_params: vec![],
-                        modifier: TraitBoundModifier::None,
-                    }],
-                    generic_params: vec![],
-                },
-                WherePredicate::BoundPredicate {
-                    type_: RustDocType::Generic("R".to_string()),
-                    bounds: vec![GenericBound::TraitBound {
-                        trait_: Path {
-                            name: "From".to_string(),
-                            id: Id("2".to_string()),
-                            args: Some(Box::new(GenericArgs::AngleBracketed {
-                                args: vec![GenericArg::Type(RustDocType::Generic("T".to_string()))],
-                                bindings: vec![],
-                            })),
-                        },
-                        generic_params: vec![],
-                        modifier: TraitBoundModifier::None,
-                    }],
-                    generic_params: vec![],
-                },
-            ];
-        }
-        let output = Renderer::render_function(&function, 0);
-        assert_eq!(output, "pub fn complex_function<T, U, R>(t: T, u: U) -> R where T: Clone, U: Debug, R: From<T> {\n}\n");
     }
 
     #[test]
     fn test_render_function_with_hrtb() {
-        let mut function = create_function(
-            "hrtb_function",
-            "hrtb_function",
-            Visibility::Public,
-            vec![("f".to_string(), RustDocType::Generic("F".to_string()))],
-            Some(RustDocType::Tuple(vec![])),
-            None,
-        );
-        if let ItemEnum::Function(ref mut f) = function.inner {
-            f.generics.params = vec![GenericParamDef {
-                name: "F".to_string(),
-                kind: GenericParamDefKind::Type {
-                    bounds: vec![],
-                    default: None,
-                    synthetic: false,
-                },
-            }];
-            f.generics.where_predicates = vec![WherePredicate::BoundPredicate {
-                type_: RustDocType::Generic("F".to_string()),
-                bounds: vec![GenericBound::TraitBound {
-                    trait_: Path {
-                        name: "Fn".to_string(),
-                        id: Id("0".to_string()),
-                        args: Some(Box::new(GenericArgs::Parenthesized {
-                            inputs: vec![RustDocType::BorrowedRef {
-                                lifetime: Some("'a".to_string()),
-                                mutable: false,
-                                type_: Box::new(RustDocType::Primitive("str".to_string())),
-                            }],
-                            output: Some(RustDocType::Primitive("bool".to_string())),
-                        })),
-                    },
-                    generic_params: vec![],
-                    modifier: TraitBoundModifier::None,
-                }],
-                generic_params: vec![GenericParamDef {
-                    name: "'a".to_string(),
-                    kind: GenericParamDefKind::Lifetime { outlives: vec![] },
-                }],
-            }];
-        }
-        let output = Renderer::render_function(&function, 0);
-        assert_eq!(
-            output,
-            "pub fn hrtb_function<F>(f: F) -> () where for<'a> F: Fn(&'a str) -> bool {\n}\n"
+        render_roundtrip(
+            r#"
+                pub fn hrtb_function<F>(f: F)
+                where
+                    for<'a> F: Fn(&'a str) -> bool,
+                {
+                    // Function body
+                }
+            "#,
+            r#"
+                pub fn hrtb_function<F>(f: F) 
+                where
+                    for<'a> F: Fn(&'a str) -> bool,
+                {
+                }
+            "#,
         );
     }
 }
