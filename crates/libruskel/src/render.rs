@@ -11,6 +11,7 @@ use crate::error::Result;
 pub struct Renderer {
     formatter: RustFmt,
     render_auto_impls: bool,
+    render_private_items: bool,
 }
 
 impl Renderer {
@@ -18,11 +19,17 @@ impl Renderer {
         Self {
             formatter: RustFmt::default(),
             render_auto_impls: false,
+            render_private_items: false,
         }
     }
 
     pub fn with_auto_impls(mut self, render_auto_impls: bool) -> Self {
         self.render_auto_impls = render_auto_impls;
+        self
+    }
+
+    pub fn with_private_items(mut self, render_private_items: bool) -> Self {
+        self.render_private_items = render_private_items;
         self
     }
 
@@ -89,6 +96,10 @@ impl Renderer {
     }
 
     fn render_item(&self, item: &Item, crate_data: &Crate) -> String {
+        if !self.render_private_items && !matches!(item.visibility, Visibility::Public) {
+            return String::new(); // Don't render private items if not requested
+        }
+
         match &item.inner {
             ItemEnum::Module(_) => self.render_module(item, crate_data),
             ItemEnum::Function(_) => Self::render_function(item, false),
@@ -1096,7 +1107,7 @@ mod tests {
         let crate_data = ruskel.json().unwrap();
 
         // Render the crate data
-        let renderer = Renderer::new();
+        let renderer = Renderer::new().with_private_items(true);
         let rendered = renderer.render(&crate_data).unwrap();
 
         // Strip the module declaration, normalize whitespace, and compare
