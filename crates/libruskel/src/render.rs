@@ -22,7 +22,6 @@ impl Renderer {
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
         if let Some(root_item) = crate_data.index.get(&crate_data.root) {
             let unformatted = Self::render_item(root_item, crate_data);
-            println!("{}", unformatted);
             Ok(self.formatter.format_str(&unformatted)?)
         } else {
             Ok(String::new())
@@ -32,12 +31,112 @@ impl Renderer {
     fn render_item(item: &Item, crate_data: &Crate) -> String {
         match &item.inner {
             ItemEnum::Module(_) => Self::render_module(item, crate_data),
-            ItemEnum::Function(_) => Self::render_function(item),
+            ItemEnum::Function(_) => Self::render_function(item, false),
             ItemEnum::Constant { .. } => Self::render_constant(item),
             ItemEnum::Struct(_) => Self::render_struct(item, crate_data),
+            ItemEnum::Trait(_) => Self::render_trait(item, crate_data),
             // Add other item types as needed
             _ => String::new(),
         }
+    }
+
+    fn render_trait(item: &Item, crate_data: &Crate) -> String {
+        let visibility = match &item.visibility {
+            Visibility::Public => "pub ",
+            _ => "",
+        };
+
+        let mut output = String::new();
+
+        // Add doc comment if present
+        if let Some(docs) = &item.docs {
+            for line in docs.lines() {
+                output.push_str(&format!("/// {}\n", line));
+            }
+        }
+
+        if let ItemEnum::Trait(trait_) = &item.inner {
+            let generics = Self::render_generics(&trait_.generics);
+            let where_clause = Self::render_where_clause(&trait_.generics);
+
+            let bounds = if !trait_.bounds.is_empty() {
+                format!(": {}", Self::render_generic_bounds(&trait_.bounds))
+            } else {
+                String::new()
+            };
+
+            let unsafe_prefix = if trait_.is_unsafe { "unsafe " } else { "" };
+
+            output.push_str(&format!(
+                "{}{}trait {}{}{}{} {{\n",
+                visibility,
+                unsafe_prefix,
+                item.name.as_deref().unwrap_or("?"),
+                generics,
+                bounds,
+                where_clause
+            ));
+
+            for item_id in &trait_.items {
+                if let Some(item) = crate_data.index.get(item_id) {
+                    output.push_str(&Self::render_trait_item(item));
+                }
+            }
+
+            output.push_str("}\n");
+        }
+
+        output
+    }
+
+    fn render_trait_item(item: &Item) -> String {
+        match &item.inner {
+            ItemEnum::Function(_) => Self::render_function(item, true),
+            ItemEnum::AssocConst { type_, default } => {
+                let default_str = default
+                    .as_ref()
+                    .map(|d| format!(" = {}", d))
+                    .unwrap_or_default();
+                format!(
+                    "const {}: {}{};\n",
+                    item.name.as_deref().unwrap_or("?"),
+                    Self::render_type(type_),
+                    default_str
+                )
+            }
+            ItemEnum::AssocType {
+                bounds,
+                generics,
+                default,
+            } => {
+                let bounds_str = if !bounds.is_empty() {
+                    format!(": {}", Self::render_generic_bounds(bounds))
+                } else {
+                    String::new()
+                };
+                let generics_str = Self::render_generics(generics);
+                let default_str = default
+                    .as_ref()
+                    .map(|d| format!(" = {}", Self::render_type(d)))
+                    .unwrap_or_default();
+                format!(
+                    "type {}{}{}{};\n",
+                    item.name.as_deref().unwrap_or("?"),
+                    generics_str,
+                    bounds_str,
+                    default_str
+                )
+            }
+            _ => String::new(),
+        }
+    }
+
+    fn render_generic_bounds(bounds: &[GenericBound]) -> String {
+        bounds
+            .iter()
+            .map(Self::render_generic_bound)
+            .collect::<Vec<_>>()
+            .join(" + ")
     }
 
     fn render_struct(item: &Item, crate_data: &Crate) -> String {
@@ -183,7 +282,7 @@ impl Renderer {
         output
     }
 
-    fn render_function(item: &Item) -> String {
+    fn render_function(item: &Item, is_trait_method: bool) -> String {
         let visibility = match &item.visibility {
             Visibility::Public => "pub ",
             _ => "",
@@ -204,9 +303,27 @@ impl Renderer {
             let return_type = Self::render_return_type(&function.decl);
             let where_clause = Self::render_where_clause(&function.generics);
 
+            // Handle unsafe, const, and async keywords
+            let mut prefixes = Vec::new();
+            if function.header.const_ {
+                prefixes.push("const");
+            }
+            if function.header.unsafe_ {
+                prefixes.push("unsafe");
+            }
+            if function.header.async_ {
+                prefixes.push("async");
+            }
+            let prefix = if !prefixes.is_empty() {
+                format!("{} ", prefixes.join(" "))
+            } else {
+                String::new()
+            };
+
             output.push_str(&format!(
-                "{}fn {}{}({}){}{} {{",
+                "{}{}fn {}{}({}){}{}",
                 visibility,
+                prefix,
                 item.name.as_deref().unwrap_or("?"),
                 generics,
                 args,
@@ -217,9 +334,18 @@ impl Renderer {
                 },
                 where_clause
             ));
+
+            if is_trait_method {
+                if function.has_body {
+                    output.push_str(" {\n}\n");
+                } else {
+                    output.push_str(";\n");
+                }
+            } else {
+                output.push_str(" {\n}\n");
+            }
         }
 
-        output.push_str("\n}\n");
         output
     }
 
@@ -291,7 +417,36 @@ impl Renderer {
     fn render_function_args(decl: &FnDecl) -> String {
         decl.inputs
             .iter()
-            .map(|(name, ty)| format!("{}: {}", name, Self::render_type(ty)))
+            .map(|(name, ty)| {
+                if name == "self" {
+                    match ty {
+                        Type::BorrowedRef { mutable, .. } => {
+                            if *mutable {
+                                "&mut self".to_string()
+                            } else {
+                                "&self".to_string()
+                            }
+                        }
+                        Type::ResolvedPath(path) => {
+                            if path.name == "Self" && path.args.is_none() {
+                                "self".to_string()
+                            } else {
+                                format!("self: {}", Self::render_type(ty))
+                            }
+                        }
+                        Type::Generic(name) => {
+                            if name == "Self" {
+                                "self".to_string()
+                            } else {
+                                format!("self: {}", Self::render_type(ty))
+                            }
+                        }
+                        _ => format!("self: {}", Self::render_type(ty)),
+                    }
+                } else {
+                    format!("{}: {}", name, Self::render_type(ty))
+                }
+            })
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -345,18 +500,37 @@ impl Renderer {
                 let mutability = if *mutable { "mut " } else { "" };
                 format!("&{}{}{}", lifetime, mutability, Self::render_type(type_))
             }
+
             Type::QualifiedPath {
                 name,
-                args: _,
+                args,
                 self_type,
                 trait_,
             } => {
-                let trait_part = trait_
-                    .as_ref()
-                    .map(|t| format!(" as {}", Self::render_path(t)))
-                    .unwrap_or_default();
-                format!("<{}{}>::{}", Self::render_type(self_type), trait_part, name)
+                match &**self_type {
+                    Type::Generic(s) if s == "Self" => {
+                        // This is the Self::AssocType case
+                        let args_str = Self::render_generic_args(args);
+                        format!("Self::{}{}", name, args_str)
+                    }
+                    _ => {
+                        // This is a <Type as Trait>::AssocType case
+                        let trait_part = trait_
+                            .as_ref()
+                            .map(|t| format!(" as {}", Self::render_path(t)))
+                            .unwrap_or_default();
+                        let args_str = Self::render_generic_args(args);
+                        format!(
+                            "<{}{}>:{}{}",
+                            Self::render_type(self_type),
+                            trait_part,
+                            name,
+                            args_str
+                        )
+                    }
+                }
             }
+
             Type::Pat { .. } => "/* pattern */".to_string(), // This is a special case, might need more specific handling
         }
     }
@@ -398,9 +572,8 @@ impl Renderer {
     fn render_generic_args(args: &GenericArgs) -> String {
         match args {
             GenericArgs::AngleBracketed { args, bindings } => {
+                println!("{:?} {:?}", args, bindings);
                 if args.is_empty() && bindings.is_empty() {
-                    // Return an empty string for empty angle brackets. It's not clear to me why we
-                    // see empty AngleBracketed when none is expected.
                     String::new()
                 } else {
                     let args = args
@@ -1062,6 +1235,146 @@ mod tests {
                     value: T,
                 }
             "#,
+        );
+    }
+
+    #[test]
+    fn test_render_simple_trait() {
+        render_roundtrip(
+            r#"
+                /// A simple trait
+                pub trait SimpleTrait {
+                    fn method(&self);
+                }
+            "#,
+            r#"
+                /// A simple trait
+                pub trait SimpleTrait {
+                    fn method(&self);
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_trait_with_generics() {
+        render_roundtrip(
+            r#"
+                /// A trait with generics
+                pub trait GenericTrait<T> {
+                    fn method(&self, value: T);
+                }
+            "#,
+            r#"
+                /// A trait with generics
+                pub trait GenericTrait<T> {
+                    fn method(&self, value: T);
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_trait_with_default_methods() {
+        render_roundtrip(
+            r#"
+                /// A trait with default methods
+                pub trait TraitWithDefault {
+                    fn method_with_default(&self) {
+                        // Default implementation
+                    }
+                    fn method_without_default(&self);
+                }
+            "#,
+            r#"
+                /// A trait with default methods
+                pub trait TraitWithDefault {
+                    fn method_with_default(&self) {}
+                    fn method_without_default(&self);
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_unsafe_trait() {
+        render_roundtrip(
+            r#"
+                /// An unsafe trait
+                pub unsafe trait UnsafeTrait {
+                    unsafe fn unsafe_method(&self);
+                }
+            "#,
+            r#"
+                /// An unsafe trait
+                pub unsafe trait UnsafeTrait {
+                    unsafe fn unsafe_method(&self);
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_trait_with_supertraits() {
+        render_roundtrip(
+            r#"
+                /// A trait with supertraits
+                pub trait SuperTrait: std::fmt::Debug + Clone {
+                    fn super_method(&self);
+                }
+            "#,
+            r#"
+                /// A trait with supertraits
+                pub trait SuperTrait: std::fmt::Debug + Clone {
+                    fn super_method(&self);
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_trait_with_self_methods() {
+        render_roundtrip(
+            r#"
+                pub trait TraitWithSelfMethods {
+                    fn method1(self);
+                    fn method2(&self);
+                    fn method3(&mut self);
+                    fn method4(self: Box<Self>);
+                }
+            "#,
+            r#"
+                pub trait TraitWithSelfMethods {
+                    fn method1(self);
+                    fn method2(&self);
+                    fn method3(&mut self);
+                    fn method4(self: Box<Self>);
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_trait_with_associated_types() {
+        render_roundtrip(
+            r#"
+            /// A trait with associated types
+            pub trait TraitWithAssocTypes {
+                type Item;
+                type Container<T>;
+                type WithBounds: Clone + 'static;
+                fn get_item(&self) -> Self::Item;
+            }
+        "#,
+            r#"
+            /// A trait with associated types
+            pub trait TraitWithAssocTypes {
+                type Item;
+                type Container<T>;
+                type WithBounds: Clone + 'static;
+                fn get_item(&self) -> Self::Item;
+            }
+        "#,
         );
     }
 }
