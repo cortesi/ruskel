@@ -1597,4 +1597,106 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn test_render_enum_with_generics() {
+        render_roundtrip(
+            r#"
+            /// An enum with generic types
+            pub enum GenericEnum<T, U> {
+                Variant1(T),
+                Variant2(U),
+                Variant3(T, U),
+            }
+        "#,
+            r#"
+            /// An enum with generic types
+            pub enum GenericEnum<T, U> {
+                Variant1(T),
+                Variant2(U),
+                Variant3(T, U),
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_render_enum_with_lifetimes() {
+        render_roundtrip(
+            r#"
+            /// An enum with lifetimes
+            pub enum LifetimeEnum<'a, 'b> {
+                Variant1(&'a str),
+                Variant2(&'b str),
+                Variant3(&'a str, &'b str),
+            }
+        "#,
+            r#"
+            /// An enum with lifetimes
+            pub enum LifetimeEnum<'a, 'b> {
+                Variant1(&'a str),
+                Variant2(&'b str),
+                Variant3(&'a str, &'b str),
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_render_enum_with_generics_and_where_clause() {
+        render_roundtrip(
+            r#"
+            /// An enum with generics and a where clause
+            pub enum ComplexEnum<T, U>
+            where
+                T: Clone,
+                U: Default,
+            {
+                Variant1(T),
+                Variant2(U),
+                Variant3 {
+                    field1: T,
+                    field2: U,
+                },
+            }
+        "#,
+            r#"
+            /// An enum with generics and a where clause
+            pub enum ComplexEnum<T, U>
+            where
+                T: Clone,
+                U: Default,
+            {
+                Variant1(T),
+                Variant2(U),
+                Variant3 {
+                    field1: T,
+                    field2: U,
+                },
+            }
+        "#,
+        );
+    }
+
+    #[test]
+    fn test_render_enum_with_lifetimes_and_generics() {
+        render_roundtrip(
+            r#"
+            /// An enum with lifetimes and generics
+            pub enum MixedEnum<'a, T: 'a> {
+                Variant1(&'a T),
+                Variant2(T),
+                Variant3(&'a [T]),
+            }
+        "#,
+            r#"
+            /// An enum with lifetimes and generics
+            pub enum MixedEnum<'a, T: 'a> {
+                Variant1(&'a T),
+                Variant2(T),
+                Variant3(&'a [T]),
+            }
+        "#,
+        );
+    }
 }
