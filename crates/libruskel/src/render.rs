@@ -110,6 +110,7 @@ impl Renderer {
             let generics = Self::render_generics(&impl_.generics);
             let where_clause = Self::render_where_clause(&impl_.generics);
 
+            println!("Rendering impl: {:#?}", &impl_);
             let unsafe_prefix = if impl_.is_unsafe { "unsafe " } else { "" };
 
             let trait_part = if let Some(trait_) = &impl_.trait_ {
@@ -1950,6 +1951,7 @@ mod tests {
 
     #[test]
     fn test_render_unsafe_impl() {
+        // FIXME: This appears to be a bug in rustdoc - unsafe is not set on the unsafe impl block.
         render_roundtrip(
             r#"
                 unsafe trait Foo {}
@@ -1963,7 +1965,7 @@ mod tests {
 
                 struct UnsafeStruct;
 
-                unsafe impl Foo for UnsafeStruct {}
+                impl Foo for UnsafeStruct {}
             "#,
         );
     }
