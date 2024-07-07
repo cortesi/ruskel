@@ -19,32 +19,52 @@ fn generate_json<P: AsRef<Path>>(manifest_path: P) -> Result<Crate> {
     Ok(crate_data)
 }
 
-fn filter_crate(crate_data: &Crate, file_path: &Path) -> Crate {
-    let mut filtered_crate = crate_data.clone();
-    filtered_crate.index = crate_data
-        .index
-        .iter()
-        .filter_map(|(id, item)| {
-            if item_matches_file(item, file_path) {
-                Some((id.clone(), item.clone()))
-            } else {
-                None
-            }
-        })
-        .collect();
-    filtered_crate
-}
-
+/// The filtering options for Ruskel output.
+///
+/// Specifies how crate data should be filtered before presentation.
 #[derive(Debug, PartialEq)]
 pub enum Filter {
+    /// No filtering applied. Includes all crate items.
     None,
+
+    /// Include only items from the specified file.
+    ///
+    /// Path is relative to the workspace root.
     File(PathBuf),
+}
+
+impl Filter {
+    pub fn filter_crate(&self, crate_data: &Crate) -> Crate {
+        match self {
+            Filter::None => crate_data.clone(),
+            Filter::File(file_path) => {
+                let mut filtered_crate = crate_data.clone();
+                filtered_crate.index = crate_data
+                    .index
+                    .iter()
+                    .filter_map(|(id, item)| {
+                        if item_matches_file(item, file_path) {
+                            Some((id.clone(), item.clone()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                filtered_crate
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct Ruskel {
+    /// Path to the Cargo.toml file for the target crate.
     pub manifest_path: PathBuf,
+
+    /// Root directory of the workspace containing the target crate.
     pub workspace_root: PathBuf,
+
+    /// Filtering options for output.
     pub filter: Filter,
 }
 
@@ -76,8 +96,8 @@ impl Ruskel {
     }
 
     pub fn pretty_raw_json(&self) -> Result<String> {
-        let crate_data = self.json()?;
-        pretty_print_json(&crate_data, &self.filter)
+        let crate_data = self.filter.filter_crate(&self.json()?);
+        serde_json::to_string_pretty(&crate_data).map_err(RuskelError::JsonParseError)
     }
 
     fn find_workspace_root(manifest_path: &Path) -> Result<PathBuf> {
@@ -120,18 +140,6 @@ impl Ruskel {
             }
         }
         Err(RuskelError::ManifestNotFound)
-    }
-}
-
-pub fn pretty_print_json(crate_data: &Crate, filter: &Filter) -> Result<String> {
-    match filter {
-        Filter::None => {
-            serde_json::to_string_pretty(&crate_data).map_err(RuskelError::JsonParseError)
-        }
-        Filter::File(file_path) => {
-            let filtered_crate = filter_crate(crate_data, file_path);
-            serde_json::to_string_pretty(&filtered_crate).map_err(RuskelError::JsonParseError)
-        }
     }
 }
 
