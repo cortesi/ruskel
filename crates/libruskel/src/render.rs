@@ -966,4 +966,102 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn test_render_struct_with_lifetime() {
+        render_roundtrip(
+            r#"
+                /// A struct with a lifetime
+                pub struct LifetimeStruct<'a> {
+                    field: &'a str,
+                }
+            "#,
+            r#"
+                /// A struct with a lifetime
+                pub struct LifetimeStruct<'a> {
+                    field: &'a str,
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_struct_with_generic() {
+        render_roundtrip(
+            r#"
+                /// A struct with a generic type
+                pub struct GenericStruct<T> {
+                    field: T,
+                }
+            "#,
+            r#"
+                /// A struct with a generic type
+                pub struct GenericStruct<T> {
+                    field: T,
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_struct_with_multiple_generics_and_where_clause() {
+        render_roundtrip(
+            r#"
+                /// A struct with multiple generic types and a where clause
+                pub struct ComplexStruct<T, U>
+                where
+                    T: Clone,
+                    U: Default,
+                {
+                    field1: T,
+                    field2: U,
+                }
+            "#,
+            r#"
+                /// A struct with multiple generic types and a where clause
+                pub struct ComplexStruct<T, U>
+                where
+                    T: Clone,
+                    U: Default,
+                {
+                    field1: T,
+                    field2: U,
+                }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_tuple_struct_with_generics() {
+        render_roundtrip(
+            r#"
+                /// A tuple struct with generic types
+                pub struct TupleStruct<T, U>(T, U);
+            "#,
+            r#"
+                /// A tuple struct with generic types
+                pub struct TupleStruct<T, U>(T, U);
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_struct_with_lifetime_and_generic() {
+        render_roundtrip(
+            r#"
+                /// A struct with both lifetime and generic type
+                pub struct MixedStruct<'a, T> {
+                    reference: &'a str,
+                    value: T,
+                }
+            "#,
+            r#"
+                /// A struct with both lifetime and generic type
+                pub struct MixedStruct<'a, T> {
+                    reference: &'a str,
+                    value: T,
+                }
+            "#,
+        );
+    }
 }
