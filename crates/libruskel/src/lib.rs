@@ -9,6 +9,8 @@ use rustdoc_types::Crate;
 
 mod error;
 mod filter;
+mod render;
+
 pub use crate::error::{Result, RuskelError};
 pub use crate::filter::Filter;
 
