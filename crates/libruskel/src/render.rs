@@ -82,7 +82,6 @@ impl Renderer {
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
         if let Some(root_item) = crate_data.index.get(&crate_data.root) {
             let unformatted = self.render_item(root_item, crate_data);
-            println!("Unformatted output:\n{}", unformatted);
             Ok(self.formatter.format_str(&unformatted)?)
         } else {
             Ok(String::new())
@@ -90,7 +89,6 @@ impl Renderer {
     }
 
     fn render_item(&self, item: &Item, crate_data: &Crate) -> String {
-        println!("Rendering item: {}", item.name.as_deref().unwrap_or("?"));
         match &item.inner {
             ItemEnum::Module(_) => self.render_module(item, crate_data),
             ItemEnum::Function(_) => Self::render_function(item, false),
@@ -98,8 +96,47 @@ impl Renderer {
             ItemEnum::Struct(_) => self.render_struct(item, crate_data),
             ItemEnum::Enum(_) => Self::render_enum(item, crate_data),
             ItemEnum::Trait(_) => Self::render_trait(item, crate_data),
+            ItemEnum::Import(_) => self.render_import(item, crate_data),
             // Add other item types as needed
             _ => String::new(),
+        }
+    }
+
+    fn render_import(&self, item: &Item, crate_data: &Crate) -> String {
+        if let ItemEnum::Import(import) = &item.inner {
+            // Check if the imported item is present in the crate's index
+            if let Some(imported_item) = import.id.as_ref().and_then(|id| crate_data.index.get(id))
+            {
+                println!("Importing item: {:#?}", imported_item);
+                // If the item is not public, render it directly without the import declaration
+                if !matches!(imported_item.visibility, Visibility::Public) {
+                    return self.render_item(imported_item, crate_data);
+                }
+            }
+
+            // For public items, render the import declaration as before
+            let mut output = String::new();
+
+            // Add doc comment if present
+            if let Some(docs) = &item.docs {
+                for line in docs.lines() {
+                    output.push_str(&format!("/// {}\n", line));
+                }
+            }
+
+            output.push_str("pub use ");
+
+            if import.glob {
+                output.push_str(&format!("{}::*;\n", import.source));
+            } else if import.name != import.source.split("::").last().unwrap_or(&import.source) {
+                output.push_str(&format!("{} as {};\n", import.source, import.name));
+            } else {
+                output.push_str(&format!("{};\n", import.source));
+            }
+
+            output
+        } else {
+            String::new()
         }
     }
 
@@ -109,8 +146,6 @@ impl Renderer {
         if let ItemEnum::Impl(impl_) = &item.inner {
             let generics = Self::render_generics(&impl_.generics);
             let where_clause = Self::render_where_clause(&impl_.generics);
-
-            println!("Rendering impl: {:#?}", &impl_);
             let unsafe_prefix = if impl_.is_unsafe { "unsafe " } else { "" };
 
             let trait_part = if let Some(trait_) = &impl_.trait_ {
@@ -1966,6 +2001,38 @@ mod tests {
                 struct UnsafeStruct;
 
                 impl Foo for UnsafeStruct {}
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_imports() {
+        render_roundtrip(
+            r#"
+                use std::collections::HashMap;
+                pub use std::rc::Rc;
+                pub use std::sync::{Arc, Mutex};
+            "#,
+            r#"
+                pub use std::rc::Rc;
+                pub use std::sync::Arc;
+                pub use std::sync::Mutex;
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_imports_inline() {
+        render_roundtrip(
+            r#"
+                mod private {
+                    pub struct PrivateStruct;
+                }
+
+                pub use private::PrivateStruct;
+            "#,
+            r#"
+                struct PrivateStruct;
             "#,
         );
     }
