@@ -21,16 +21,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Raw { target } => match libruskel::parse_target(target) {
-            Ok((manifest_path, filter)) => match libruskel::generate_json(&manifest_path) {
-                Ok(json) => match libruskel::pretty_print_json(&json) {
-                    Ok(pretty_json) => println!("{}", pretty_json),
-                    Err(e) => eprintln!("Error while pretty-printing JSON: {}", e),
-                },
+        Commands::Raw { target } => {
+            let rs = libruskel::Ruskel::new(target)?;
+            match rs.pretty_raw_json() {
+                Ok(json) => println!("{}", json),
                 Err(e) => eprintln!("Error while generating JSON: {}", e),
-            },
-            Err(e) => eprintln!("Error while parsing target: {}", e),
-        },
+            }
+        }
     }
 
     Ok(())
