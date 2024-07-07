@@ -1,33 +1,49 @@
-use clap::{Parser, Subcommand};
+use clap::Parser;
+use libruskel::Renderer;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    #[command(subcommand)]
-    command: Commands,
+    /// Target to generate - a directory, file path, or a module name
+    #[arg(default_value = ".")]
+    target: String,
+
+    /// Output raw JSON instead of rendered Rust code
+    #[arg(long, default_value_t = false)]
+    raw: bool,
+
+    /// Render auto-implemented traits
+    #[arg(long, default_value_t = false)]
+    auto_impls: bool,
+
+    /// Render private items
+    #[arg(long, default_value_t = false)]
+    private: bool,
 }
 
-#[derive(Subcommand)]
-enum Commands {
-    /// Generate and print raw JSON output
-    Raw {
-        /// Target to generate - a directory or a module name
-        #[arg(value_name = "TARGET", default_value = ".")]
-        target: String,
-    },
-}
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() {
     let cli = Cli::parse();
 
-    match &cli.command {
-        Commands::Raw { target } => {
-            let rs = libruskel::Ruskel::new(target)?;
-            match rs.pretty_raw_json() {
-                Ok(json) => println!("{}", json),
-                Err(e) => eprintln!("Error while generating JSON: {}", e),
-            }
-        }
+    if let Err(e) = run(cli) {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
+fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let rs = libruskel::Ruskel::new(&cli.target)?;
+
+    if cli.raw {
+        let json = rs.pretty_raw_json()?;
+        println!("{}", json);
+    } else {
+        let renderer = Renderer::new()
+            .with_auto_impls(cli.auto_impls)
+            .with_private_items(cli.private);
+
+        let crate_data = rs.json()?;
+        let rendered = renderer.render(&crate_data)?;
+        println!("{}", rendered);
     }
 
     Ok(())

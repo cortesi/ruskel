@@ -13,6 +13,7 @@ mod render;
 
 pub use crate::error::{Result, RuskelError};
 pub use crate::filter::Filter;
+pub use crate::render::Renderer;
 
 fn generate_json<P: AsRef<Path>>(manifest_path: P) -> Result<Crate> {
     let json_path = rustdoc_json::Builder::default()
@@ -41,21 +42,24 @@ pub struct Ruskel {
 impl Ruskel {
     pub fn new(target: &str) -> Result<Self> {
         let target_path = PathBuf::from(target);
-        let manifest_path = Self::find_manifest(&target_path)?;
 
         if target_path.exists() {
+            let canonical_path = target_path.canonicalize()?;
+            let manifest_path = Self::find_manifest(&canonical_path)?;
             let workspace_root = Self::find_workspace_root(&manifest_path)?;
-            let filter = Filter::from_path(&target_path, &workspace_root)?;
+            let filter = Filter::from_path(&canonical_path, &workspace_root)?;
+
             Ok(Ruskel {
                 manifest_path,
                 workspace_root,
                 filter,
             })
         } else {
+            // Assume it's a module name if the path doesn't exist
             let workspace_root = Self::find_module(target)?;
-
             let filter = Filter::from_path(&workspace_root, &workspace_root)?;
-            let manifest_path = workspace_root.clone().join("Cargo.toml");
+            let manifest_path = workspace_root.join("Cargo.toml");
+
             Ok(Ruskel {
                 manifest_path,
                 workspace_root,
