@@ -137,7 +137,14 @@ impl Renderer {
         }
 
         let mut current_id = Some(&item.id);
+        let mut visited = std::collections::HashSet::new();
+
         while let Some(id) = current_id {
+            if !visited.insert(id) {
+                // We've already visited this ID, so we're in a cycle. Break the loop.
+                break;
+            }
+
             if let Some(current_item) = crate_data.index.get(id) {
                 if !matches!(current_item.visibility, Visibility::Public) {
                     return false;
