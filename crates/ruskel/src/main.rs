@@ -37,7 +37,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         let json = rs.pretty_raw_json()?;
         println!("{}", json);
     } else {
-        let renderer = Renderer::new()
+        let renderer = Renderer::default()
             .with_auto_impls(cli.auto_impls)
             .with_private_items(cli.private);
 

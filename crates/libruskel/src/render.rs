@@ -12,15 +12,28 @@ pub struct Renderer {
     formatter: RustFmt,
     render_auto_impls: bool,
     render_private_items: bool,
+    render_blanket_impls: bool,
+}
+
+impl Default for Renderer {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Renderer {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self {
             formatter: RustFmt::default(),
             render_auto_impls: false,
             render_private_items: false,
+            render_blanket_impls: false,
         }
+    }
+
+    pub fn with_blanket_impls(mut self, render_blanket_impls: bool) -> Self {
+        self.render_blanket_impls = render_blanket_impls;
+        self
     }
 
     pub fn with_auto_impls(mut self, render_auto_impls: bool) -> Self {
@@ -34,15 +47,18 @@ impl Renderer {
     }
 
     fn should_render_impl(&self, impl_: &Impl) -> bool {
-        if self.render_auto_impls {
-            true // Render all impls if render_auto_impls is true
-        } else {
-            if impl_.synthetic {
-                return false; // Never render synthetic impls when render_auto_impls is false
-            }
+        if impl_.synthetic && !self.render_auto_impls {
+            return false;
+        }
 
-            // List of standard traits that we don't want to render by default
-            const STANDARD_TRAITS: &[&str] = &[
+        let is_blanket = impl_.blanket_impl.is_some();
+        if is_blanket && !self.render_blanket_impls {
+            return false;
+        }
+
+        if !self.render_auto_impls {
+            // List of traits that we don't want to render by default
+            const FILTERED_TRAITS: &[&str] = &[
                 "Any",
                 "Send",
                 "Sync",
@@ -58,8 +74,6 @@ impl Renderer {
                 "AsRef",
                 "AsMut",
                 "Default",
-                "Clone",
-                "Copy",
                 "Debug",
                 "PartialEq",
                 "Eq",
@@ -70,20 +84,23 @@ impl Renderer {
                 "DerefMut",
                 "Drop",
                 "IntoIterator",
+                "CloneToUninit",
+                "ToOwned",
             ];
 
-            // Check if the impl is for a standard trait
             if let Some(trait_path) = &impl_.trait_ {
                 let trait_name = trait_path
                     .name
                     .split("::")
                     .last()
                     .unwrap_or(&trait_path.name);
-                !STANDARD_TRAITS.contains(&trait_name)
-            } else {
-                true // Always render inherent impls (impls without a trait)
+                if FILTERED_TRAITS.contains(&trait_name) && is_blanket {
+                    return false;
+                }
             }
         }
+
+        true
     }
 
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
@@ -102,12 +119,13 @@ impl Renderer {
 
         match &item.inner {
             ItemEnum::Module(_) => self.render_module(item, crate_data),
-            ItemEnum::Function(_) => Self::render_function(item, false),
-            ItemEnum::Constant { .. } => Self::render_constant(item),
             ItemEnum::Struct(_) => self.render_struct(item, crate_data),
             ItemEnum::Enum(_) => Self::render_enum(item, crate_data),
             ItemEnum::Trait(_) => Self::render_trait(item, crate_data),
             ItemEnum::Import(_) => self.render_import(item, crate_data),
+            ItemEnum::Function(_) => Self::render_function(item),
+            ItemEnum::Constant { .. } => Self::render_constant(item),
+
             // Add other item types as needed
             _ => String::new(),
         }
@@ -185,6 +203,10 @@ impl Renderer {
         let mut output = String::new();
 
         if let ItemEnum::Impl(impl_) = &item.inner {
+            if !self.should_render_impl(impl_) {
+                return String::new();
+            }
+
             let generics = Self::render_generics(&impl_.generics);
             let where_clause = Self::render_where_clause(&impl_.generics);
             let unsafe_prefix = if impl_.is_unsafe { "unsafe " } else { "" };
@@ -207,7 +229,13 @@ impl Renderer {
 
             for item_id in &impl_.items {
                 if let Some(item) = crate_data.index.get(item_id) {
-                    output.push_str(&Self::render_impl_item(item));
+                    let is_trait_impl = impl_.trait_.is_some();
+                    if is_trait_impl
+                        || self.render_private_items
+                        || matches!(item.visibility, Visibility::Public)
+                    {
+                        output.push_str(&self.render_impl_item(item));
+                    }
                 }
             }
 
@@ -217,9 +245,9 @@ impl Renderer {
         output
     }
 
-    fn render_impl_item(item: &Item) -> String {
+    fn render_impl_item(&self, item: &Item) -> String {
         match &item.inner {
-            ItemEnum::Function(_) => Self::render_function(item, false),
+            ItemEnum::Function(_) => Self::render_function(item),
             ItemEnum::Constant { .. } => Self::render_constant(item),
             ItemEnum::AssocType { .. } => Self::render_associated_type(item),
             _ => String::new(),
@@ -400,7 +428,7 @@ impl Renderer {
 
     fn render_trait_item(item: &Item) -> String {
         match &item.inner {
-            ItemEnum::Function(_) => Self::render_function(item, true),
+            ItemEnum::Function(_) => Self::render_function(item),
             ItemEnum::AssocConst { type_, default } => {
                 let default_str = default
                     .as_ref()
@@ -611,7 +639,7 @@ impl Renderer {
         output
     }
 
-    fn render_function(item: &Item, is_trait_method: bool) -> String {
+    fn render_function(item: &Item) -> String {
         let visibility = match &item.visibility {
             Visibility::Public => "pub ",
             _ => "",
@@ -664,15 +692,8 @@ impl Renderer {
                 where_clause
             ));
 
-            if is_trait_method {
-                if function.has_body {
-                    output.push_str(" {\n}\n");
-                } else {
-                    output.push_str(";\n");
-                }
-            } else {
-                output.push_str(" {\n}\n");
-            }
+            // Always include the method body, even for trait implementations
+            output.push_str(" {}\n");
         }
 
         output
@@ -1160,21 +1181,25 @@ mod tests {
 
     /// Idempotent rendering test
     fn render_roundtrip_idemp(source: &str) {
-        render(&Renderer::new(), source, source);
+        render(&Renderer::default(), source, source);
     }
 
     /// Idempotent rendering test with private items
     fn render_roundtrip_private_idemp(source: &str) {
-        render(&Renderer::new().with_private_items(true), source, source);
+        render(
+            &Renderer::default().with_private_items(true),
+            source,
+            source,
+        );
     }
 
     fn render_roundtrip(source: &str, expected_output: &str) {
-        render(&Renderer::new(), source, expected_output);
+        render(&Renderer::default(), source, expected_output);
     }
 
     fn render_roundtrip_private(source: &str, expected_output: &str) {
         render(
-            &Renderer::new().with_private_items(true),
+            &Renderer::default().with_private_items(true),
             source,
             expected_output,
         );
@@ -1954,7 +1979,7 @@ mod tests {
 
     #[test]
     fn test_render_simple_impl() {
-        render_roundtrip(
+        render_roundtrip_private(
             r#"
                 pub struct MyStruct;
 
@@ -2113,5 +2138,56 @@ mod tests {
         );
 
         render_roundtrip_private(input, input);
+    }
+
+    #[test]
+    fn test_render_blanket_impl() {
+        let source = r#"
+            trait MyTrait {
+                fn trait_method(&self);
+            }
+
+            impl<T: Clone> MyTrait for T {
+                fn trait_method(&self) {}
+            }
+
+            pub struct MyStruct;
+
+            impl Clone for MyStruct {
+                fn clone(&self) -> Self {
+                    MyStruct
+                }
+            }
+        "#;
+
+        // Test with blanket impls disabled
+        render_roundtrip(
+            source,
+            r#"
+            pub struct MyStruct;
+
+            impl Clone for MyStruct {
+                fn clone(&self) -> Self {}
+            }
+        "#,
+        );
+
+        // Test with blanket impls enabled
+        let renderer = Renderer::new().with_blanket_impls(true);
+        render(
+            &renderer,
+            source,
+            r#"
+            pub struct MyStruct;
+
+            impl Clone for MyStruct {
+                fn clone(&self) -> Self {}
+            }
+
+            impl MyTrait for MyStruct {
+                fn trait_method(&self) {}
+            }
+        "#,
+        );
     }
 }
