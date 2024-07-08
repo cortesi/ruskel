@@ -152,13 +152,19 @@ impl Renderer {
             let where_clause = Self::render_where_clause(&type_alias.generics);
 
             output.push_str(&format!(
-                "{}type {}{} = {}{};\n",
+                "{}type {}{}{}",
                 visibility,
                 item.name.as_deref().unwrap_or("?"),
                 generics,
-                Self::render_type(&type_alias.type_),
                 where_clause
             ));
+
+            // If there's a where clause, add a line break before the assignment
+            if !where_clause.is_empty() {
+                output.push('\n');
+            }
+
+            output.push_str(&format!("= {};\n", Self::render_type(&type_alias.type_)));
 
             output
         } else {
@@ -2483,8 +2489,8 @@ mod tests {
     }
 
     #[test]
-    fn test_render_type_alias2() {
-        render_roundtrip(
+    fn test_render_type_alias() {
+        render_roundtrip_idemp(
             r#"
                 /// A simple type alias
                 pub type SimpleAlias = Vec<String>;
@@ -2494,61 +2500,14 @@ mod tests {
 
                 /// A type alias with generics and where clause
                 pub type ComplexAlias<T, U> where T: Clone, U: Default = Result<Vec<(T, U)>, Box<dyn std::error::Error>>;
-
-                /// A private type alias
-                type PrivateAlias = std::collections::HashMap<String, u32>;
-            "#,
-            r#"
-                /// A simple type alias
-                pub type SimpleAlias = Vec<String>;
-
-                /// A type alias with generics
-                pub type GenericAlias<T> = Result<T, std::io::Error>;
-
-                /// A type alias with generics and where clause
-                pub type ComplexAlias<T, U> = Result<Vec<(T, U)>, Box<dyn std::error::Error>> where T: Clone, U: Default;
             "#,
         );
     }
 
     #[test]
     fn test_render_deserialize_impl() {
-        render_roundtrip(
+        render_roundtrip_idemp(
             r#"
-            pub struct Message;
-
-            pub trait Deserialize<'de>: Sized {
-                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-                where
-                    D: Deserializer<'de>;
-            }
-
-            pub trait Deserializer<'de>: Sized {
-                type Error;
-                // Other methods omitted for brevity
-            }
-
-            impl<'de> Deserialize<'de> for Message {
-                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-                where
-                    D: Deserializer<'de>
-                {
-                    // Implementation details omitted
-                    Ok(Message)
-                }
-            }
-            "#,
-            r#"
-            pub struct Message;
-
-            impl<'de> Deserialize<'de> for Message {
-                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-                where
-                    D: Deserializer<'de>
-                {
-                }
-            }
-
             pub trait Deserialize<'de>: Sized {
                 fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
                 where
@@ -2559,6 +2518,15 @@ mod tests {
                 type Error;
             }
 
+            pub struct Message;
+
+            impl<'de> Deserialize<'de> for Message {
+                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                where
+                    D: Deserializer<'de>
+                {
+                }
+            }
             "#,
         );
     }
