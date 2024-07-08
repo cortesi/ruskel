@@ -2545,4 +2545,38 @@ mod tests {
             "#,
         );
     }
+
+    #[test]
+    fn test_render_impl_with_complex_generic_bounds() {
+        render_roundtrip(
+            r#"
+            pub struct MessagesRequest;
+
+            impl MessagesRequest {
+                pub fn with_tool(self, tool: Tool) -> Self {
+                    self
+                }
+
+                pub fn with_model<impl Into<String>: Into<String>>(self, model: impl Into<String>) -> Self {
+                    self
+                }
+
+                pub fn with_temperature(self, temperature: f32) -> Self {
+                    self
+                }
+            }
+            "#,
+            r#"
+            pub struct MessagesRequest;
+
+            impl MessagesRequest {
+                pub fn with_tool(self, tool: Tool) -> Self {}
+
+                pub fn with_model<impl Into<String>: Into<String>>(self, model: impl Into<String>) -> Self {}
+
+                pub fn with_temperature(self, temperature: f32) -> Self {}
+            }
+            "#,
+        );
+    }
 }
