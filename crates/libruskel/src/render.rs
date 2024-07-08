@@ -132,11 +132,31 @@ impl Renderer {
             ItemEnum::Import(_) => self.render_import(item, crate_data),
             ItemEnum::Function(_) => Self::render_function(item, false),
             ItemEnum::Constant { .. } => Self::render_constant(item),
-            ItemEnum::TypeAlias(_) => Self::render_type_alias(item), // Add this line
-
-            // Add other item types as needed
+            ItemEnum::TypeAlias(_) => Self::render_type_alias(item),
+            ItemEnum::Macro(_) => self.render_macro(item),
             _ => String::new(),
         }
+    }
+
+    fn render_macro(&self, item: &Item) -> String {
+        let mut output = String::new();
+
+        // Add doc comment if present
+        if let Some(docs) = &item.docs {
+            for line in docs.lines() {
+                output.push_str(&format!("/// {}\n", line));
+            }
+        }
+
+        if let ItemEnum::Macro(macro_def) = &item.inner {
+            // Add #[macro_export] for public macros
+            if matches!(item.visibility, Visibility::Public) {
+                output.push_str("#[macro_export]\n");
+            }
+            output.push_str(&format!("{}\n", macro_def));
+        }
+
+        output
     }
 
     fn render_type_alias(item: &Item) -> String {
@@ -183,9 +203,7 @@ impl Renderer {
         if import.glob {
             // Handle glob imports
             if let Some(source_id) = &import.id {
-                println!("A {:?}", source_id);
                 if let Some(source_item) = crate_data.index.get(source_id) {
-                    println!("B");
                     if let ItemEnum::Module(module) = &source_item.inner {
                         let mut output = String::new();
                         for item_id in &module.items {
@@ -200,7 +218,6 @@ impl Renderer {
                 }
             }
             // If we can't resolve the glob import, fall back to rendering it as-is
-            println!("SKIP: {:?}", item);
             return format!("pub use {}::*;\n", import.source);
         }
 
@@ -687,10 +704,7 @@ impl Renderer {
                             continue;
                         }
                     }
-                    // Indent the rendered items
-                    for line in self.render_item(item, crate_data, false).lines() {
-                        output.push_str(&format!("    {}\n", line));
-                    }
+                    output.push_str(&self.render_item(item, crate_data, false))
                 }
             }
         }
@@ -2245,7 +2259,6 @@ mod tests {
         render_roundtrip(source, expected_output);
     }
 
-
     #[test]
     fn test_render_module_with_glob_imports() {
         let source = r#"
@@ -2275,6 +2288,77 @@ mod tests {
             pub struct PublicStruct2;
             pub struct PrivateStruct1;
             pub struct PrivateStruct2;
+        "#;
+
+        render_roundtrip(source, expected_output);
+    }
+
+    #[test]
+    fn test_render_macro() {
+        let source = r#"
+            /// A simple macro for creating a vector
+            #[macro_export]
+            macro_rules! myvec {
+                ( $( $x:expr ),* ) => {
+                    {
+                        let mut temp_vec = Vec::new();
+                        $(
+                            temp_vec.push($x);
+                        )*
+                        temp_vec
+                    }
+                };
+            }
+
+            // A private macro
+            macro_rules! private_macro {
+                ($x:expr) => {
+                    $x + 1
+                };
+            }
+        "#;
+
+        let expected_output = r#"
+            /// A simple macro for creating a vector
+            #[macro_export]
+            macro_rules! myvec {
+                ( $( $x:expr ),* ) => { ... };
+            }
+        "#;
+
+        render_roundtrip(source, expected_output);
+    }
+
+    #[test]
+    fn test_render_macro_in_module() {
+        let source = r#"
+            pub mod macros {
+                /// A public macro in a module
+                #[macro_export]
+                macro_rules! public_macro {
+                    ($x:expr) => {
+                        $x * 2
+                    };
+                }
+
+                // A private macro in a module
+                macro_rules! private_macro {
+                    ($x:expr) => {
+                        $x + 1
+                    };
+                }
+            }
+        "#;
+
+        // #[macro_export] pulls the macro to the top of the crate
+        let expected_output = r#"
+            pub mod macros {
+            }
+            /// A public macro in a module
+            #[macro_export]
+            macro_rules! public_macro {
+                ($x:expr) => { ... };
+            }
         "#;
 
         render_roundtrip(source, expected_output);
