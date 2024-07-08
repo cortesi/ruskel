@@ -903,12 +903,7 @@ impl Renderer {
             Type::Slice(ty) => format!("[{}]", Self::render_type(ty)),
             Type::Array { type_, len } => format!("[{}; {}]", Self::render_type(type_), len),
             Type::ImplTrait(bounds) => {
-                let bounds_str = bounds
-                    .iter()
-                    .map(Self::render_generic_bound)
-                    .collect::<Vec<_>>()
-                    .join(" + ");
-                format!("impl {}", bounds_str)
+                format!("impl {}", Self::render_generic_bounds(bounds))
             }
             Type::Infer => "_".to_string(),
             Type::RawPointer { mutable, type_ } => {
@@ -2548,34 +2543,9 @@ mod tests {
 
     #[test]
     fn test_render_impl_with_complex_generic_bounds() {
-        render_roundtrip(
+        render_roundtrip_idemp(
             r#"
-            pub struct MessagesRequest;
-
-            impl MessagesRequest {
-                pub fn with_tool(self, tool: Tool) -> Self {
-                    self
-                }
-
-                pub fn with_model<impl Into<String>: Into<String>>(self, model: impl Into<String>) -> Self {
-                    self
-                }
-
-                pub fn with_temperature(self, temperature: f32) -> Self {
-                    self
-                }
-            }
-            "#,
-            r#"
-            pub struct MessagesRequest;
-
-            impl MessagesRequest {
-                pub fn with_tool(self, tool: Tool) -> Self {}
-
-                pub fn with_model<impl Into<String>: Into<String>>(self, model: impl Into<String>) -> Self {}
-
-                pub fn with_temperature(self, temperature: f32) -> Self {}
-            }
+            pub fn a(v: impl Into<String>) {}
             "#,
         );
     }
