@@ -1290,13 +1290,7 @@ mod tests {
 
     #[test]
     fn test_render_public_function() {
-        render_roundtrip(
-            r#"
-                /// This is a documented function.
-                pub fn test_function() {
-                    // Function body
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// This is a documented function.
                 pub fn test_function() {}
@@ -1306,12 +1300,7 @@ mod tests {
 
     #[test]
     fn test_render_private_function() {
-        render_roundtrip_private(
-            r#"
-            fn private_function() {
-                // Function body
-            }
-            "#,
+        render_roundtrip_private_idemp(
             r#"
             fn private_function() {}
             "#,
@@ -1328,12 +1317,7 @@ mod tests {
 
     #[test]
     fn test_render_function_with_args_and_return() {
-        render_roundtrip(
-            r#"
-            pub fn complex_function(arg1: i32, arg2: String) -> bool {
-                // Function body
-            }
-            "#,
+        render_roundtrip_idemp(
             r#"
             pub fn complex_function(arg1: i32, arg2: String) -> bool {}
             "#,
@@ -1342,14 +1326,7 @@ mod tests {
 
     #[test]
     fn test_render_function_with_docs() {
-        render_roundtrip(
-            r#"
-            /// This is a documented function.
-            /// It has multiple lines of documentation.
-            pub fn documented_function() {
-                // Function body
-            }
-        "#,
+        render_roundtrip_idemp(
             r#"
             /// This is a documented function.
             /// It has multiple lines of documentation.
@@ -1388,12 +1365,7 @@ mod tests {
 
     #[test]
     fn test_render_function_pointer() {
-        render_roundtrip(
-            r#"
-                pub fn function_with_fn_pointer(f: fn(arg1: i32, arg2: String) -> bool) {
-                    // Function body
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 pub fn function_with_fn_pointer(f: fn(arg1: i32, arg2: String) -> bool) {
                 }
@@ -1403,12 +1375,7 @@ mod tests {
 
     #[test]
     fn test_render_function_with_generics() {
-        render_roundtrip(
-            r#"
-                pub fn generic_function<T, U>(t: T, u: U) -> T {
-                    // Function body
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 pub fn generic_function<T, U>(t: T, u: U) -> T {
                 }
@@ -1418,12 +1385,7 @@ mod tests {
 
     #[test]
     fn test_render_function_with_lifetimes() {
-        render_roundtrip(
-            r#"
-                pub fn lifetime_function<'a>(x: &'a str) -> &'a str {
-                    // Function body
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 pub fn lifetime_function<'a>(x: &'a str) -> &'a str {}
             "#,
@@ -1432,15 +1394,7 @@ mod tests {
 
     #[test]
     fn test_render_function_with_where_clause() {
-        render_roundtrip(
-            r#"
-                pub fn where_function<T>(t: T) -> T
-                where
-                    T: Clone,
-                {
-                    // Function body
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 pub fn where_function<T>(t: T) -> T
                 where
@@ -1453,17 +1407,7 @@ mod tests {
 
     #[test]
     fn test_render_function_with_complex_generics_and_where_clause() {
-        render_roundtrip(
-            r#"
-                pub fn complex_function<T, U, R>(t: T, u: U) -> R
-                where
-                    T: Clone,
-                    U: std::fmt::Debug,
-                    R: From<T>,
-                {
-                    // Function body
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 pub fn complex_function<T, U, R>(t: T, u: U) -> R
                 where
@@ -1478,17 +1422,9 @@ mod tests {
 
     #[test]
     fn test_render_function_with_hrtb() {
-        render_roundtrip(
+        render_roundtrip_idemp(
             r#"
                 pub fn hrtb_function<F>(f: F)
-                where
-                    for<'a> F: Fn(&'a str) -> bool,
-                {
-                    // Function body
-                }
-            "#,
-            r#"
-                pub fn hrtb_function<F>(f: F) 
                 where
                     for<'a> F: Fn(&'a str) -> bool,
                 {
@@ -1510,12 +1446,7 @@ mod tests {
                 pub const CONSTANT: u32 = 42;
             "#,
         );
-        render_roundtrip_private(
-            r#"
-                /// This is a documented constant.
-                pub const CONSTANT: u32 = 42;
-                const PRIVATE_CONSTANT: &str = "Hello, world!";
-            "#,
+        render_roundtrip_private_idemp(
             r#"
                 /// This is a documented constant.
                 pub const CONSTANT: u32 = 42;
@@ -1526,11 +1457,7 @@ mod tests {
 
     #[test]
     fn test_render_unit_struct() {
-        render_roundtrip(
-            r#"
-                /// A unit struct
-                pub struct UnitStruct;
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// A unit struct
                 pub struct UnitStruct;
@@ -1540,11 +1467,7 @@ mod tests {
 
     #[test]
     fn test_render_tuple_struct() {
-        render_roundtrip(
-            r#"
-                /// A tuple struct
-                pub struct TupleStruct(pub i32, String);
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// A tuple struct
                 pub struct TupleStruct(pub i32, String);
@@ -1554,14 +1477,7 @@ mod tests {
 
     #[test]
     fn test_render_plain_struct() {
-        render_roundtrip(
-            r#"
-                /// A plain struct
-                pub struct PlainStruct {
-                    pub field1: i32,
-                    field2: String,
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// A plain struct
                 pub struct PlainStruct {
@@ -1574,18 +1490,7 @@ mod tests {
 
     #[test]
     fn test_render_generic_struct() {
-        render_roundtrip(
-            r#"
-                /// A generic struct
-                pub struct GenericStruct<T, U>
-                where
-                    T: Clone,
-                    U: Default,
-                {
-                    field1: T,
-                    field2: U,
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// A generic struct
                 pub struct GenericStruct<T, U>
@@ -1602,13 +1507,7 @@ mod tests {
 
     #[test]
     fn test_render_struct_with_lifetime() {
-        render_roundtrip(
-            r#"
-                /// A struct with a lifetime
-                pub struct LifetimeStruct<'a> {
-                    field: &'a str,
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// A struct with a lifetime
                 pub struct LifetimeStruct<'a> {
@@ -1620,13 +1519,7 @@ mod tests {
 
     #[test]
     fn test_render_struct_with_generic() {
-        render_roundtrip(
-            r#"
-                /// A struct with a generic type
-                pub struct GenericStruct<T> {
-                    field: T,
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// A struct with a generic type
                 pub struct GenericStruct<T> {
@@ -1638,18 +1531,7 @@ mod tests {
 
     #[test]
     fn test_render_struct_with_multiple_generics_and_where_clause() {
-        render_roundtrip(
-            r#"
-                /// A struct with multiple generic types and a where clause
-                pub struct ComplexStruct<T, U>
-                where
-                    T: Clone,
-                    U: Default,
-                {
-                    field1: T,
-                    field2: U,
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// A struct with multiple generic types and a where clause
                 pub struct ComplexStruct<T, U>
@@ -1666,11 +1548,7 @@ mod tests {
 
     #[test]
     fn test_render_tuple_struct_with_generics() {
-        render_roundtrip(
-            r#"
-                /// A tuple struct with generic types
-                pub struct TupleStruct<T, U>(T, U);
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// A tuple struct with generic types
                 pub struct TupleStruct<T, U>(T, U);
@@ -1680,14 +1558,7 @@ mod tests {
 
     #[test]
     fn test_render_struct_with_lifetime_and_generic() {
-        render_roundtrip(
-            r#"
-                /// A struct with both lifetime and generic type
-                pub struct MixedStruct<'a, T> {
-                    reference: &'a str,
-                    value: T,
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// A struct with both lifetime and generic type
                 pub struct MixedStruct<'a, T> {
@@ -1700,13 +1571,7 @@ mod tests {
 
     #[test]
     fn test_render_simple_trait() {
-        render_roundtrip(
-            r#"
-                /// A simple trait
-                pub trait SimpleTrait {
-                    fn method(&self);
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// A simple trait
                 pub trait SimpleTrait {
@@ -1718,13 +1583,7 @@ mod tests {
 
     #[test]
     fn test_render_trait_with_generics() {
-        render_roundtrip(
-            r#"
-                /// A trait with generics
-                pub trait GenericTrait<T> {
-                    fn method(&self, value: T);
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// A trait with generics
                 pub trait GenericTrait<T> {
@@ -1736,16 +1595,7 @@ mod tests {
 
     #[test]
     fn test_render_trait_with_default_methods() {
-        render_roundtrip(
-            r#"
-                /// A trait with default methods
-                pub trait TraitWithDefault {
-                    fn method_with_default(&self) {
-                        // Default implementation
-                    }
-                    fn method_without_default(&self);
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// A trait with default methods
                 pub trait TraitWithDefault {
@@ -1758,13 +1608,7 @@ mod tests {
 
     #[test]
     fn test_render_unsafe_trait() {
-        render_roundtrip(
-            r#"
-                /// An unsafe trait
-                pub unsafe trait UnsafeTrait {
-                    unsafe fn unsafe_method(&self);
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// An unsafe trait
                 pub unsafe trait UnsafeTrait {
@@ -1776,13 +1620,7 @@ mod tests {
 
     #[test]
     fn test_render_trait_with_supertraits() {
-        render_roundtrip(
-            r#"
-                /// A trait with supertraits
-                pub trait SuperTrait: std::fmt::Debug + Clone {
-                    fn super_method(&self);
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// A trait with supertraits
                 pub trait SuperTrait: std::fmt::Debug + Clone {
@@ -1794,15 +1632,7 @@ mod tests {
 
     #[test]
     fn test_render_trait_with_self_methods() {
-        render_roundtrip(
-            r#"
-                pub trait TraitWithSelfMethods {
-                    fn method1(self);
-                    fn method2(&self);
-                    fn method3(&mut self);
-                    fn method4(self: Box<Self>);
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 pub trait TraitWithSelfMethods {
                     fn method1(self);
@@ -1816,39 +1646,22 @@ mod tests {
 
     #[test]
     fn test_render_trait_with_associated_types() {
-        render_roundtrip(
+        render_roundtrip_idemp(
             r#"
-            /// A trait with associated types
-            pub trait TraitWithAssocTypes {
-                type Item;
-                type Container<T>;
-                type WithBounds: Clone + 'static;
-                fn get_item(&self) -> Self::Item;
-            }
-        "#,
-            r#"
-            /// A trait with associated types
-            pub trait TraitWithAssocTypes {
-                type Item;
-                type Container<T>;
-                type WithBounds: Clone + 'static;
-                fn get_item(&self) -> Self::Item;
-            }
-        "#,
+                /// A trait with associated types
+                pub trait TraitWithAssocTypes {
+                    type Item;
+                    type Container<T>;
+                    type WithBounds: Clone + 'static;
+                    fn get_item(&self) -> Self::Item;
+                }
+            "#,
         );
     }
 
     #[test]
     fn test_render_simple_enum() {
-        render_roundtrip(
-            r#"
-                /// A simple enum
-                pub enum SimpleEnum {
-                    Variant1,
-                    Variant2,
-                    Variant3,
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// A simple enum
                 pub enum SimpleEnum {
@@ -1862,14 +1675,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_tuple_variants() {
-        render_roundtrip(
-            r#"
-                /// An enum with tuple variants
-                pub enum TupleEnum {
-                    Variant1(i32, String),
-                    Variant2(bool),
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// An enum with tuple variants
                 pub enum TupleEnum {
@@ -1882,19 +1688,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_struct_variants() {
-        render_roundtrip(
-            r#"
-                /// An enum with struct variants
-                pub enum StructEnum {
-                    Variant1 {
-                        field1: i32,
-                        field2: String,
-                    },
-                    Variant2 {
-                        field: bool,
-                    },
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// An enum with struct variants
                 pub enum StructEnum {
@@ -1912,17 +1706,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_mixed_variants() {
-        render_roundtrip(
-            r#"
-                /// An enum with mixed variant types
-                pub enum MixedEnum {
-                    Variant1,
-                    Variant2(i32, String),
-                    Variant3 {
-                        field: bool,
-                    },
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// An enum with mixed variant types
                 pub enum MixedEnum {
@@ -1938,15 +1722,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_discriminants() {
-        render_roundtrip(
-            r#"
-                /// An enum with discriminants
-                pub enum DiscriminantEnum {
-                    Variant1 = 1,
-                    Variant2 = 2,
-                    Variant3 = 4,
-                }
-            "#,
+        render_roundtrip_idemp(
             r#"
                 /// An enum with discriminants
                 pub enum DiscriminantEnum {
@@ -1960,129 +1736,77 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_generics() {
-        render_roundtrip(
+        render_roundtrip_idemp(
             r#"
-            /// An enum with generic types
-            pub enum GenericEnum<T, U> {
-                Variant1(T),
-                Variant2(U),
-                Variant3(T, U),
-            }
-        "#,
-            r#"
-            /// An enum with generic types
-            pub enum GenericEnum<T, U> {
-                Variant1(T),
-                Variant2(U),
-                Variant3(T, U),
-            }
-        "#,
+                /// An enum with generic types
+                pub enum GenericEnum<T, U> {
+                    Variant1(T),
+                    Variant2(U),
+                    Variant3(T, U),
+                }
+            "#,
         );
     }
 
     #[test]
     fn test_render_enum_with_lifetimes() {
-        render_roundtrip(
+        render_roundtrip_idemp(
             r#"
-            /// An enum with lifetimes
-            pub enum LifetimeEnum<'a, 'b> {
-                Variant1(&'a str),
-                Variant2(&'b str),
-                Variant3(&'a str, &'b str),
-            }
-        "#,
-            r#"
-            /// An enum with lifetimes
-            pub enum LifetimeEnum<'a, 'b> {
-                Variant1(&'a str),
-                Variant2(&'b str),
-                Variant3(&'a str, &'b str),
-            }
-        "#,
+                /// An enum with lifetimes
+                pub enum LifetimeEnum<'a, 'b> {
+                    Variant1(&'a str),
+                    Variant2(&'b str),
+                    Variant3(&'a str, &'b str),
+                }
+            "#,
         );
     }
 
     #[test]
     fn test_render_enum_with_generics_and_where_clause() {
-        render_roundtrip(
+        render_roundtrip_idemp(
             r#"
-            /// An enum with generics and a where clause
-            pub enum ComplexEnum<T, U>
-            where
-                T: Clone,
-                U: Default,
-            {
-                Variant1(T),
-                Variant2(U),
-                Variant3 {
-                    field1: T,
-                    field2: U,
-                },
-            }
-        "#,
-            r#"
-            /// An enum with generics and a where clause
-            pub enum ComplexEnum<T, U>
-            where
-                T: Clone,
-                U: Default,
-            {
-                Variant1(T),
-                Variant2(U),
-                Variant3 {
-                    field1: T,
-                    field2: U,
-                },
-            }
-        "#,
+                /// An enum with generics and a where clause
+                pub enum ComplexEnum<T, U>
+                where
+                    T: Clone,
+                    U: Default,
+                {
+                    Variant1(T),
+                    Variant2(U),
+                    Variant3 {
+                        field1: T,
+                        field2: U,
+                    },
+                }
+            "#,
         );
     }
 
     #[test]
     fn test_render_enum_with_lifetimes_and_generics() {
-        render_roundtrip(
+        render_roundtrip_idemp(
             r#"
-            /// An enum with lifetimes and generics
-            pub enum MixedEnum<'a, T: 'a> {
-                Variant1(&'a T),
-                Variant2(T),
-                Variant3(&'a [T]),
-            }
-        "#,
-            r#"
-            /// An enum with lifetimes and generics
-            pub enum MixedEnum<'a, T: 'a> {
-                Variant1(&'a T),
-                Variant2(T),
-                Variant3(&'a [T]),
-            }
-        "#,
+                /// An enum with lifetimes and generics
+                pub enum MixedEnum<'a, T: 'a> {
+                    Variant1(&'a T),
+                    Variant2(T),
+                    Variant3(&'a [T]),
+                }
+            "#,
         );
     }
 
     #[test]
     fn test_render_simple_impl() {
-        render_roundtrip_private(
+        render_roundtrip_private_idemp(
             r#"
                 pub struct MyStruct;
 
                 impl MyStruct {
-                    fn new() -> Self {
-                        MyStruct
-                    }
+                    fn new() -> Self { }
 
-                    fn mymethod(&self) {
-                        // Method body
-                    }
-                }
-            "#,
-            r#"
-                pub struct MyStruct;
-
-                impl MyStruct {
-                    fn new() -> Self {}
-
-                    fn mymethod(&self) {}
+                    fn mymethod(&self) { }
                 }
             "#,
         );
@@ -2090,7 +1814,7 @@ mod tests {
 
     #[test]
     fn test_render_impl_with_trait() {
-        render_roundtrip_private(
+        render_roundtrip_private_idemp(
             r#"
                 trait MyTrait {
                     fn trait_method(&self);
@@ -2099,20 +1823,7 @@ mod tests {
                 struct MyStruct;
 
                 impl MyTrait for MyStruct {
-                    fn trait_method(&self) {
-                        // Method body
-                    }
-                }
-            "#,
-            r#"
-                trait MyTrait {
-                    fn trait_method(&self);
-                }
-
-                struct MyStruct;
-
-                impl MyTrait for MyStruct {
-                    fn trait_method(&self) {}
+                    fn trait_method(&self) { }
                 }
             "#,
         );
@@ -2120,16 +1831,7 @@ mod tests {
 
     #[test]
     fn test_render_impl_with_generics() {
-        render_roundtrip_private(
-            r#"
-                struct GenericStruct<T>(T);
-
-                impl<T: Clone> GenericStruct<T> {
-                    fn get_value(&self) -> T {
-                        self.0.clone()
-                    }
-                }
-            "#,
+        render_roundtrip_private_idemp(
             r#"
                 struct GenericStruct<T>(T);
 
@@ -2142,18 +1844,7 @@ mod tests {
 
     #[test]
     fn test_render_impl_with_associated_types() {
-        render_roundtrip_private(
-            r#"
-                struct MyIterator<T>(Vec<T>);
-
-                impl<T> Iterator for MyIterator<T> {
-                    type Item = T;
-
-                    fn next(&mut self) -> Option<Self::Item> {
-                        self.0.pop()
-                    }
-                }
-            "#,
+        render_roundtrip_private_idemp(
             r#"
                 struct MyIterator<T>(Vec<T>);
 
@@ -2287,33 +1978,7 @@ mod tests {
 
     #[test]
     fn test_render_complex_generic_args() {
-        render_roundtrip(
-            r#"
-                use std::marker::PhantomData;
-
-                pub struct Complex<T, U> {
-                    data: Vec<T>,
-                    marker: PhantomData<U>,
-                }
-
-                impl<T, U> Complex<T, U> {
-                    pub fn new() -> Self {
-                        Complex {
-                            data: Vec::new(),
-                            marker: PhantomData,
-                        }
-                    }
-                }
-
-                impl<T: Clone, U> Clone for Complex<T, U> {
-                    fn clone(&self) -> Self {
-                        Complex {
-                            data: self.data.clone(),
-                            marker: PhantomData,
-                        }
-                    }
-                }
-                "#,
+        render_roundtrip_idemp(
             r#"
                 pub struct Complex<T, U> {
                     data: Vec<T>,
@@ -2321,66 +1986,34 @@ mod tests {
                 }
 
                 impl<T, U> Complex<T, U> {
-                    pub fn new() -> Self {}
+                    pub fn new() -> Self { }
                 }
 
-                impl<T: Clone, U> Clone for Complex<T, U>
-                {
-                    fn clone(&self) -> Self {}
+                impl<T: Clone, U> Clone for Complex<T, U> {
+                    fn clone(&self) -> Self { }
                 }
-                "#,
+            "#,
         );
     }
 
     #[test]
     fn test_render_dyn_trait() {
-        render_roundtrip(
+        render_roundtrip_idemp(
             r#"
                 pub trait MyTrait {
                     fn my_method(&self);
                 }
 
-                pub fn process_trait_object(obj: &dyn MyTrait) {
-                    obj.my_method();
-                }
+                pub fn process_trait_object(obj: &dyn MyTrait) { }
 
-                pub fn return_trait_object() -> Box<dyn MyTrait> {
-                    // Implementation
-                    Box::new(())
-                }
-                "#,
-            r#"
-                pub trait MyTrait {
-                    fn my_method(&self);
-                }
-
-                pub fn process_trait_object(obj: &dyn MyTrait) {}
-
-                pub fn return_trait_object() -> Box<dyn MyTrait> {}
-                "#,
+                pub fn return_trait_object() -> Box<dyn MyTrait> { }
+            "#,
         );
     }
 
     #[test]
     fn test_render_complex_where_clause() {
-        render_roundtrip(
-            r#"
-                pub trait MyTrait {
-                    type Associated;
-                }
-
-                pub struct MyStruct<T>(T);
-
-                impl<T> MyStruct<T>
-                where
-                    T: MyTrait,
-                    <T as MyTrait>::Associated: Clone,
-                {
-                    pub fn new(value: T) -> Self {
-                        MyStruct(value)
-                    }
-                }
-                "#,
+        render_roundtrip_idemp(
             r#"
                 pub trait MyTrait {
                     type Associated;
@@ -2395,13 +2028,13 @@ mod tests {
                 {
                     pub fn new(value: T) -> Self {}
                 }
-                "#,
+            "#,
         );
     }
 
     #[test]
     fn test_render_associated_type_bounds() {
-        render_roundtrip(
+        render_roundtrip_idemp(
             r#"
                 pub trait Container {
                     type Item;
@@ -2412,59 +2045,32 @@ mod tests {
                     type AdvancedItem: Clone + 'static;
                     fn get_advanced(&self) -> Option<&Self::AdvancedItem>;
                 }
-                "#,
-            r#"
-                pub trait Container {
-                    type Item;
-                    fn get(&self) -> Option<&Self::Item>;
-                }
-
-                pub trait AdvancedContainer: Container {
-                    type AdvancedItem: Clone + 'static;
-                    fn get_advanced(&self) -> Option<&Self::AdvancedItem>;
-                }
-                "#,
+            "#,
         );
     }
 
     #[test]
     fn test_render_complex_function_signature() {
-        render_roundtrip(
-            r#"
-                use std::future::Future;
-
-                pub async fn complex_function<T, U, F>(
-                    arg1: T,
-                    arg2: U,
-                    callback: F,
-                ) -> impl Future<Output = Result<T, U>>
-                where
-                    T: Clone + Send + 'static,
-                    U: std::fmt::Debug,
-                    F: Fn(T) -> U + Send + Sync + 'static,
-                {
-                    // Implementation
-                }
-                "#,
+        render_roundtrip_idemp(
             r#"
                 pub async fn complex_function<T, U, F>(
                     arg1: T,
                     arg2: U,
                     callback: F,
-                ) -> impl Future<Output = Result<T, U>>
+                ) -> impl std::future::Future<Output = Result<T, U>>
                 where
                     T: Clone + Send + 'static,
                     U: std::fmt::Debug,
                     F: Fn(T) -> U + Send + Sync + 'static,
                 {
                 }
-                "#,
+            "#,
         );
     }
 
     #[test]
     fn test_render_type_alias_with_bounds() {
-        render_roundtrip(
+        render_roundtrip_idemp(
             r#"
             pub trait Trait<T> {
                 fn as_ref(&self) -> &T;
@@ -2472,18 +2078,7 @@ mod tests {
 
             pub type Alias<T> = dyn Trait<T> + Send + 'static;
 
-            pub fn use_alias<T: 'static>(value: Box<Alias<T>>) -> &'static T {
-                value.as_ref()
-            }
-            "#,
-            r#"
-            pub trait Trait<T> {
-                fn as_ref(&self) -> &T;
-            }
-
-            pub type Alias<T> = dyn Trait<T> + Send + 'static;
-
-            pub fn use_alias<T: 'static>(value: Box<Alias<T>>) -> &'static T {}
+            pub fn use_alias<T: 'static>(value: Box<Alias<T>>) -> &'static T { }
             "#,
         );
     }
