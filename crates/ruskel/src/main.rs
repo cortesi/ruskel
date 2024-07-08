@@ -1,5 +1,6 @@
 use clap::Parser;
 use libruskel::Ruskel;
+use std::io::IsTerminal;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -32,9 +33,13 @@ struct Cli {
     #[arg(long, value_delimiter = ',')]
     features: Vec<String>,
 
-    /// Enable syntax highlighting for the output
+    /// Enable syntax highlighting
     #[arg(long, default_value_t = false)]
     highlight: bool,
+
+    /// Disable syntax highlighting
+    #[arg(long, default_value_t = false, conflicts_with = "highlight")]
+    no_highlight: bool,
 }
 
 fn main() {
@@ -47,11 +52,17 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    let should_highlight = if cli.no_highlight {
+        false
+    } else {
+        cli.highlight || std::io::stdout().is_terminal()
+    };
+
     let rs = Ruskel::new(&cli.target)?
         .with_no_default_features(cli.no_default_features)
         .with_all_features(cli.all_features)
         .with_features(cli.features)
-        .with_highlighting(cli.highlight);
+        .with_highlighting(should_highlight);
 
     if cli.raw {
         let json = rs.pretty_raw_json()?;

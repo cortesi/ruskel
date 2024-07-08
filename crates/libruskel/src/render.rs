@@ -251,9 +251,6 @@ impl Renderer {
     fn render_import(&self, item: &Item, crate_data: &Crate) -> String {
         // FIXME: For the moment, we don't support imports from external crates. We should consider
         // doing this.
-        println!("item: {:#?}", item);
-        println!("paths: {:#?}", crate_data.paths);
-
         let import = if let ItemEnum::Import(import) = &item.inner {
             import
         } else {
