@@ -1,9 +1,9 @@
 use rust_format::{Config, Formatter, RustFmt};
 use rustdoc_types::{
     Crate, FnDecl, FunctionPointer, GenericArg, GenericArgs, GenericBound, GenericParamDef,
-    GenericParamDefKind, Generics, Id, Impl, Import, Item, ItemEnum, Path, PolyTrait, StructKind,
-    Term, TraitBoundModifier, Type, TypeBinding, TypeBindingKind, VariantKind, Visibility,
-    WherePredicate,
+    GenericParamDefKind, Generics, Id, Impl, Import, Item, ItemEnum, MacroKind, Path, PolyTrait,
+    StructKind, Term, TraitBoundModifier, Type, TypeBinding, TypeBindingKind, VariantKind,
+    Visibility, WherePredicate,
 };
 
 use crate::error::Result;
@@ -134,8 +134,57 @@ impl Renderer {
             ItemEnum::Constant { .. } => Self::render_constant(item),
             ItemEnum::TypeAlias(_) => Self::render_type_alias(item),
             ItemEnum::Macro(_) => self.render_macro(item),
+            ItemEnum::ProcMacro(_) => self.render_proc_macro(item),
             _ => String::new(),
         }
+    }
+
+    fn render_proc_macro(&self, item: &Item) -> String {
+        let mut output = String::new();
+
+        // Add doc comment if present
+        if let Some(docs) = &item.docs {
+            for line in docs.lines() {
+                output.push_str(&format!("/// {}\n", line));
+            }
+        }
+        let fn_name = Self::render_name(&item.name);
+
+        if let ItemEnum::ProcMacro(proc_macro) = &item.inner {
+            match proc_macro.kind {
+                MacroKind::Derive => {
+                    if !proc_macro.helpers.is_empty() {
+                        output.push_str(&format!(
+                            "#[proc_macro_derive({}, attributes({}))]\n",
+                            fn_name,
+                            proc_macro.helpers.join(", ")
+                        ));
+                    } else {
+                        output.push_str(&format!("#[proc_macro_derive({})]\n", fn_name));
+                    }
+                }
+                MacroKind::Attr => {
+                    output.push_str("#[proc_macro_attribute]\n");
+                }
+                MacroKind::Bang => {
+                    output.push_str("#[proc_macro]\n");
+                }
+            }
+            let (args, return_type) = match proc_macro.kind {
+                MacroKind::Attr => (
+                    "attr: proc_macro::TokenStream, item: proc_macro::TokenStream",
+                    "proc_macro::TokenStream",
+                ),
+                _ => ("input: proc_macro::TokenStream", "proc_macro::TokenStream"),
+            };
+
+            output.push_str(&format!(
+                "pub fn {}({}) -> {} {{}}\n",
+                fn_name, args, return_type
+            ));
+        }
+
+        output
     }
 
     fn render_macro(&self, item: &Item) -> String {
@@ -1277,7 +1326,7 @@ mod tests {
         lines[1..lines.len() - 1].join("\n")
     }
 
-    fn render(renderer: &Renderer, source: &str, expected_output: &str) {
+    fn render(renderer: &Renderer, source: &str, expected_output: &str, is_proc_macro: bool) {
         // Create a temporary directory for our dummy crate
         let temp_dir = TempDir::new().unwrap();
         let crate_path = temp_dir.path().join("src");
@@ -1288,12 +1337,27 @@ mod tests {
         fs::write(&lib_rs_path, source).unwrap();
 
         // Create a dummy Cargo.toml
-        let cargo_toml_content = r#"
+        let cargo_toml_content = if is_proc_macro {
+            r#"
         [package]
         name = "dummy_crate"
         version = "0.1.0"
         edition = "2021"
-        "#;
+
+        [lib]
+        proc-macro = true
+
+        [dependencies]
+        proc-macro2 = "1.0"
+        "#
+        } else {
+            r#"
+        [package]
+        name = "dummy_crate"
+        version = "0.1.0"
+        edition = "2021"
+        "#
+        };
         fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml_content).unwrap();
 
         // Parse the crate using Ruskel
@@ -1306,6 +1370,7 @@ mod tests {
         ));
 
         let normalized_expected = normalize_whitespace(expected_output);
+        println!("Rendered:\n{}", normalized_rendered);
 
         let formatter = RustFmt::default();
         assert_eq!(
@@ -1316,7 +1381,7 @@ mod tests {
 
     /// Idempotent rendering test
     fn render_roundtrip_idemp(source: &str) {
-        render(&Renderer::default(), source, source);
+        render(&Renderer::default(), source, source, false);
     }
 
     /// Idempotent rendering test with private items
@@ -1325,11 +1390,12 @@ mod tests {
             &Renderer::default().with_private_items(true),
             source,
             source,
+            false,
         );
     }
 
     fn render_roundtrip(source: &str, expected_output: &str) {
-        render(&Renderer::default(), source, expected_output);
+        render(&Renderer::default(), source, expected_output, false);
     }
 
     fn render_roundtrip_private(source: &str, expected_output: &str) {
@@ -1337,7 +1403,12 @@ mod tests {
             &Renderer::default().with_private_items(true),
             source,
             expected_output,
+            false,
         );
+    }
+
+    fn render_procmacro_roundtrip(source: &str, expected_output: &str) {
+        render(&Renderer::default(), source, expected_output, true);
     }
 
     #[test]
@@ -2033,6 +2104,7 @@ mod tests {
                     fn clone(&self) -> Self {}
                 }
             "#,
+            false,
         );
     }
 
@@ -2362,5 +2434,78 @@ mod tests {
         "#;
 
         render_roundtrip(source, expected_output);
+    }
+
+    #[test]
+    fn test_render_proc_macro() {
+        let source = r#"
+            extern crate proc_macro;
+
+            use proc_macro::TokenStream;
+
+            /// Expands to the function `answer` that returns `42`.
+            #[proc_macro]
+            pub fn make_answer(_input: TokenStream) -> TokenStream {
+                "fn answer() -> u32 { 42 }".parse().unwrap()
+            }
+
+            /// Derives the HelloMacro trait for the input type.
+            #[proc_macro_derive(HelloMacro)]
+            pub fn hello_macro_derive(input: TokenStream) -> TokenStream {
+                // Implementation here
+                input
+            }
+
+            /// Attribute macro for routing.
+            #[proc_macro_attribute]
+            pub fn route(attr: TokenStream, item: TokenStream) -> TokenStream {
+                // Implementation here
+                item
+            }
+        "#;
+
+        let expected_output = r#"
+            /// Expands to the function `answer` that returns `42`.
+            #[proc_macro]
+            pub fn make_answer(input: proc_macro::TokenStream) -> proc_macro::TokenStream {}
+
+            /// Derives the HelloMacro trait for the input type.
+            #[proc_macro_derive(HelloMacro)]
+            pub fn HelloMacro(input: proc_macro::TokenStream) -> proc_macro::TokenStream {}
+
+            /// Attribute macro for routing.
+            #[proc_macro_attribute]
+            pub fn route(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {}
+        "#;
+
+        render_procmacro_roundtrip(source, expected_output);
+    }
+
+    #[test]
+    fn test_render_proc_macro_with_attributes() {
+        let source = r#"
+            extern crate proc_macro;
+            use proc_macro::TokenStream;
+
+            /// A derive macro for generating Debug implementations.
+            #[proc_macro_derive(MyDebug, attributes(debug_format))]
+            pub fn my_debug(input: TokenStream) -> TokenStream {}
+
+            /// An attribute macro for timing function execution.
+            #[proc_macro_attribute]
+            pub fn debug_format(attr: TokenStream, item: TokenStream) -> TokenStream {}
+        "#;
+
+        let expected_output = r#"
+            /// A derive macro for generating Debug implementations.
+            #[proc_macro_derive(MyDebug, attributes(debug_format))]
+            pub fn MyDebug(input: proc_macro::TokenStream) -> proc_macro::TokenStream {}
+
+            /// An attribute macro for timing function execution.
+            #[proc_macro_attribute]
+            pub fn debug_format(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {}
+        "#;
+
+        render_procmacro_roundtrip(source, expected_output);
     }
 }
