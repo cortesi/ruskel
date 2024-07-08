@@ -254,20 +254,29 @@ impl Renderer {
             let unsafe_prefix = if impl_.is_unsafe { "unsafe " } else { "" };
 
             let trait_part = if let Some(trait_) = &impl_.trait_ {
-                format!("{} for ", Self::render_path(trait_))
+                let trait_path = Self::render_path(trait_);
+                if !trait_path.is_empty() {
+                    format!("{} for ", trait_path)
+                } else {
+                    String::new()
+                }
             } else {
                 String::new()
             };
 
             output.push_str(&format!(
-                "{}impl{} {}{}{}{}",
+                "{}impl{} {}{}",
                 unsafe_prefix,
                 generics,
                 trait_part,
-                Self::render_type(&impl_.for_),
-                where_clause,
-                " {\n"
+                Self::render_type(&impl_.for_)
             ));
+
+            if !where_clause.is_empty() {
+                output.push_str(&format!("\n{}", where_clause));
+            }
+
+            output.push_str(" {\n");
 
             for item_id in &impl_.items {
                 if let Some(item) = crate_data.index.get(item_id) {
@@ -925,27 +934,21 @@ impl Renderer {
                 self_type,
                 trait_,
             } => {
-                match &**self_type {
-                    Type::Generic(s) if s == "Self" => {
-                        // This is the Self::AssocType case
-                        let args_str = Self::render_generic_args(args);
-                        format!("Self::{}{}", name, args_str)
-                    }
-                    _ => {
-                        // This is a <Type as Trait>::AssocType case
-                        let trait_part = trait_
-                            .as_ref()
-                            .map(|t| format!(" as {}", Self::render_path(t)))
-                            .unwrap_or_default();
-                        let args_str = Self::render_generic_args(args);
+                let self_type_str = Self::render_type(self_type);
+                let args_str = Self::render_generic_args(args);
+
+                if let Some(trait_) = trait_ {
+                    let trait_path = Self::render_path(trait_);
+                    if !trait_path.is_empty() {
                         format!(
-                            "<{}{}>::{}{}",
-                            Self::render_type(self_type),
-                            trait_part,
-                            name,
-                            args_str
+                            "<{} as {}>::{}{}",
+                            self_type_str, trait_path, name, args_str
                         )
+                    } else {
+                        format!("{}::{}{}", self_type_str, name, args_str)
                     }
+                } else {
+                    format!("{}::{}{}", self_type_str, name, args_str)
                 }
             }
 
@@ -2487,6 +2490,58 @@ mod tests {
 
                 /// A type alias with generics and where clause
                 pub type ComplexAlias<T, U> = Result<Vec<(T, U)>, Box<dyn std::error::Error>> where T: Clone, U: Default;
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_deserialize_impl() {
+        render_roundtrip(
+            r#"
+            pub struct Message;
+
+            pub trait Deserialize<'de>: Sized {
+                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                where
+                    D: Deserializer<'de>;
+            }
+
+            pub trait Deserializer<'de>: Sized {
+                type Error;
+                // Other methods omitted for brevity
+            }
+
+            impl<'de> Deserialize<'de> for Message {
+                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                where
+                    D: Deserializer<'de>
+                {
+                    // Implementation details omitted
+                    Ok(Message)
+                }
+            }
+            "#,
+            r#"
+            pub struct Message;
+
+            impl<'de> Deserialize<'de> for Message {
+                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                where
+                    D: Deserializer<'de>
+                {
+                }
+            }
+
+            pub trait Deserialize<'de>: Sized {
+                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                where
+                    D: Deserializer<'de>;
+            }
+
+            pub trait Deserializer<'de>: Sized {
+                type Error;
+            }
+
             "#,
         );
     }
