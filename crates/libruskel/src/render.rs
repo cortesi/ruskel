@@ -1,9 +1,9 @@
 use rust_format::{Formatter, RustFmt};
 use rustdoc_types::{
-    Crate, DynTrait, FnDecl, FunctionPointer, GenericArg, GenericArgs, GenericBound,
-    GenericParamDef, GenericParamDefKind, Generics, Id, Impl, Item, ItemEnum, Path, PolyTrait,
-    StructKind, Term, TraitBoundModifier, Type, TypeBinding, TypeBindingKind, VariantKind,
-    Visibility, WherePredicate,
+    Crate, FnDecl, FunctionPointer, GenericArg, GenericArgs, GenericBound, GenericParamDef,
+    GenericParamDefKind, Generics, Id, Impl, Item, ItemEnum, Path, PolyTrait, StructKind, Term,
+    TraitBoundModifier, Type, TypeBinding, TypeBindingKind, VariantKind, Visibility,
+    WherePredicate,
 };
 
 use crate::error::Result;
@@ -125,9 +125,44 @@ impl Renderer {
             ItemEnum::Import(_) => self.render_import(item, crate_data),
             ItemEnum::Function(_) => Self::render_function(item, false),
             ItemEnum::Constant { .. } => Self::render_constant(item),
+            ItemEnum::TypeAlias(_) => Self::render_type_alias(item), // Add this line
 
             // Add other item types as needed
             _ => String::new(),
+        }
+    }
+
+    fn render_type_alias(item: &Item) -> String {
+        if let ItemEnum::TypeAlias(type_alias) = &item.inner {
+            let mut output = String::new();
+
+            // Add doc comment if present
+            if let Some(docs) = &item.docs {
+                for line in docs.lines() {
+                    output.push_str(&format!("/// {}\n", line));
+                }
+            }
+
+            let visibility = match &item.visibility {
+                Visibility::Public => "pub ",
+                _ => "",
+            };
+
+            let generics = Self::render_generics(&type_alias.generics);
+            let where_clause = Self::render_where_clause(&type_alias.generics);
+
+            output.push_str(&format!(
+                "{}type {}{} = {}{};\n",
+                visibility,
+                item.name.as_deref().unwrap_or("?"),
+                generics,
+                Self::render_type(&type_alias.type_),
+                where_clause
+            ));
+
+            output
+        } else {
+            String::new()
         }
     }
 
@@ -257,6 +292,7 @@ impl Renderer {
             ItemEnum::Function(_) => Self::render_function(item, false),
             ItemEnum::Constant { .. } => Self::render_constant(item),
             ItemEnum::AssocType { .. } => Self::render_associated_type(item),
+            ItemEnum::TypeAlias(_) => Self::render_type_alias(item), // Add this line
             _ => String::new(),
         }
     }
@@ -858,12 +894,12 @@ impl Renderer {
             Type::Slice(ty) => format!("[{}]", Self::render_type(ty)),
             Type::Array { type_, len } => format!("[{}; {}]", Self::render_type(type_), len),
             Type::ImplTrait(bounds) => {
-                let bounds = bounds
+                let bounds_str = bounds
                     .iter()
                     .map(Self::render_generic_bound)
                     .collect::<Vec<_>>()
                     .join(" + ");
-                format!("impl {}", bounds)
+                format!("impl {}", bounds_str)
             }
             Type::Infer => "_".to_string(),
             Type::RawPointer { mutable, type_ } => {
@@ -946,21 +982,6 @@ impl Renderer {
         format!("{}{}", path.name.replace("$crate::", ""), args)
     }
 
-    fn render_dyn_trait(dyn_trait: &DynTrait) -> String {
-        let traits = dyn_trait
-            .traits
-            .iter()
-            .map(Self::render_poly_trait)
-            .collect::<Vec<_>>()
-            .join(" + ");
-        let lifetime = dyn_trait
-            .lifetime
-            .as_ref()
-            .map(|lt| format!(" + {}", lt))
-            .unwrap_or_default();
-        format!("dyn {}{}", traits, lifetime)
-    }
-
     fn render_function_pointer(f: &FunctionPointer) -> String {
         let args = Self::render_function_args(&f.decl);
         let return_type = Self::render_return_type(&f.decl);
@@ -987,7 +1008,9 @@ impl Renderer {
                         .map(Self::render_type_binding)
                         .collect::<Vec<_>>()
                         .join(", ");
-                    let all = if bindings.is_empty() {
+                    let all = if args.is_empty() {
+                        bindings
+                    } else if bindings.is_empty() {
                         args
                     } else {
                         format!("{}, {}", args, bindings)
@@ -1200,16 +1223,17 @@ mod tests {
         let crate_data = ruskel.json().unwrap();
 
         // Render the crate data
-        let rendered = renderer.render(&crate_data).unwrap();
+        let normalized_rendered = normalize_whitespace(&strip_module_declaration(
+            &renderer.render(&crate_data).unwrap(),
+        ));
 
-        // Strip the module declaration, normalize whitespace, and compare
-        let normalized_rendered = normalize_whitespace(&strip_module_declaration(&rendered));
+        let normalized_expected = normalize_whitespace(expected_output);
 
         let formatter = RustFmt::default();
-        let normalized_expected =
-            normalize_whitespace(&formatter.format_str(expected_output).unwrap());
-
-        assert_eq!(normalized_rendered, normalized_expected);
+        assert_eq!(
+            formatter.format_str(normalized_rendered).unwrap(),
+            formatter.format_str(normalized_expected).unwrap(),
+        );
     }
 
     /// Idempotent rendering test
@@ -2397,8 +2421,6 @@ mod tests {
                 }
                 "#,
             r#"
-                use std::future::Future;
-
                 pub async fn complex_function<T, U, F>(
                     arg1: T,
                     arg2: U,
@@ -2418,19 +2440,54 @@ mod tests {
     fn test_render_type_alias_with_bounds() {
         render_roundtrip(
             r#"
-                pub trait Trait {}
+            pub trait Trait<T> {
+                fn as_ref(&self) -> &T;
+            }
 
-                pub type Alias<T> = dyn Trait + Send + 'static;
+            pub type Alias<T> = dyn Trait<T> + Send + 'static;
 
-                pub fn use_alias(_: Box<Alias<i32>>) {}
-                "#,
+            pub fn use_alias<T: 'static>(value: Box<Alias<T>>) -> &'static T {
+                value.as_ref()
+            }
+            "#,
             r#"
-                pub trait Trait {}
+            pub trait Trait<T> {
+                fn as_ref(&self) -> &T;
+            }
 
-                pub type Alias<T> = dyn Trait + Send + 'static;
+            pub type Alias<T> = dyn Trait<T> + Send + 'static;
 
-                pub fn use_alias(_: Box<Alias<i32>>) {}
-                "#,
+            pub fn use_alias<T: 'static>(value: Box<Alias<T>>) -> &'static T {}
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_type_alias2() {
+        render_roundtrip(
+            r#"
+                /// A simple type alias
+                pub type SimpleAlias = Vec<String>;
+
+                /// A type alias with generics
+                pub type GenericAlias<T> = Result<T, std::io::Error>;
+
+                /// A type alias with generics and where clause
+                pub type ComplexAlias<T, U> where T: Clone, U: Default = Result<Vec<(T, U)>, Box<dyn std::error::Error>>;
+
+                /// A private type alias
+                type PrivateAlias = std::collections::HashMap<String, u32>;
+            "#,
+            r#"
+                /// A simple type alias
+                pub type SimpleAlias = Vec<String>;
+
+                /// A type alias with generics
+                pub type GenericAlias<T> = Result<T, std::io::Error>;
+
+                /// A type alias with generics and where clause
+                pub type ComplexAlias<T, U> = Result<Vec<(T, U)>, Box<dyn std::error::Error>> where T: Clone, U: Default;
+            "#,
         );
     }
 }
