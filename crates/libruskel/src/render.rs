@@ -131,7 +131,7 @@ impl Renderer {
         }
     }
 
-    fn would_render_item(&self, item: &Item, crate_data: &Crate) -> bool {
+    fn should_render_item(&self, item: &Item, crate_data: &Crate) -> bool {
         if self.render_private_items {
             return true;
         }
@@ -175,7 +175,7 @@ impl Renderer {
             if let Some(imported_item) = import.id.as_ref().and_then(|id| crate_data.index.get(id))
             {
                 // If the item would not be rendered normally, render it inline
-                if !self.would_render_item(imported_item, crate_data) {
+                if !self.should_render_item(imported_item, crate_data) {
                     return self.render_item(imported_item, crate_data);
                 }
             }
@@ -821,8 +821,29 @@ impl Renderer {
 
     fn render_type(ty: &Type) -> String {
         let rendered = match ty {
-            Type::ResolvedPath(path) => Self::render_path(path),
-            Type::DynTrait(dyn_trait) => Self::render_dyn_trait(dyn_trait),
+            Type::ResolvedPath(path) => {
+                let args = path
+                    .args
+                    .as_ref()
+                    .map(|args| Self::render_generic_args(args))
+                    .unwrap_or_default();
+                format!("{}{}", path.name.replace("$crate::", ""), args)
+            }
+            Type::DynTrait(dyn_trait) => {
+                let traits = dyn_trait
+                    .traits
+                    .iter()
+                    .map(Self::render_poly_trait)
+                    .collect::<Vec<_>>()
+                    .join(" + ");
+                let lifetime = dyn_trait
+                    .lifetime
+                    .as_ref()
+                    .map(|lt| format!(" + {}", lt))
+                    .unwrap_or_default();
+                format!("dyn {}{}", traits, lifetime)
+            }
+
             Type::Generic(s) => s.clone(),
             Type::Primitive(s) => s.clone(),
             Type::FunctionPointer(f) => Self::render_function_pointer(f),
@@ -895,6 +916,25 @@ impl Renderer {
             Type::Pat { .. } => "/* pattern */".to_string(), // This is a special case, might need more specific handling
         };
         rendered.replace("$crate::", "")
+    }
+
+    fn render_poly_trait(poly_trait: &PolyTrait) -> String {
+        let generic_params = if poly_trait.generic_params.is_empty() {
+            String::new()
+        } else {
+            let params = poly_trait
+                .generic_params
+                .iter()
+                .map(Self::render_generic_param_def)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("for<{}> ", params)
+        };
+        format!(
+            "{}{}",
+            generic_params,
+            Self::render_path(&poly_trait.trait_)
+        )
     }
 
     fn render_path(path: &Path) -> String {
@@ -979,6 +1019,13 @@ impl Renderer {
         }
     }
 
+    fn render_term(term: &Term) -> String {
+        match term {
+            Term::Type(ty) => Self::render_type(ty),
+            Term::Constant(c) => c.expr.clone(),
+        }
+    }
+
     fn render_type_binding(binding: &TypeBinding) -> String {
         let binding_kind = match &binding.binding {
             TypeBindingKind::Equality(term) => format!(" = {}", Self::render_term(term)),
@@ -992,13 +1039,6 @@ impl Renderer {
             }
         };
         format!("{}{}", binding.name, binding_kind)
-    }
-
-    fn render_term(term: &Term) -> String {
-        match term {
-            Term::Type(ty) => Self::render_type(ty),
-            Term::Constant(c) => c.expr.clone(),
-        }
     }
 
     fn render_generic_bound(bound: &GenericBound) -> String {
@@ -1078,25 +1118,6 @@ impl Renderer {
                 )
             }
         }
-    }
-
-    fn render_poly_trait(poly_trait: &PolyTrait) -> String {
-        let generic_params = if poly_trait.generic_params.is_empty() {
-            String::new()
-        } else {
-            let params = poly_trait
-                .generic_params
-                .iter()
-                .map(Self::render_generic_param_def)
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("for<{}> ", params)
-        };
-        format!(
-            "{}{}",
-            generic_params,
-            Self::render_path(&poly_trait.trait_)
-        )
     }
 }
 
@@ -2211,6 +2232,205 @@ mod tests {
                     fn clone(&self) -> Self {}
                 }
             "#,
+        );
+    }
+
+    #[test]
+    fn test_render_complex_generic_args() {
+        render_roundtrip(
+            r#"
+                use std::marker::PhantomData;
+
+                pub struct Complex<T, U> {
+                    data: Vec<T>,
+                    marker: PhantomData<U>,
+                }
+
+                impl<T, U> Complex<T, U> {
+                    pub fn new() -> Self {
+                        Complex {
+                            data: Vec::new(),
+                            marker: PhantomData,
+                        }
+                    }
+                }
+
+                impl<T: Clone, U> Clone for Complex<T, U> {
+                    fn clone(&self) -> Self {
+                        Complex {
+                            data: self.data.clone(),
+                            marker: PhantomData,
+                        }
+                    }
+                }
+                "#,
+            r#"
+                pub struct Complex<T, U> {
+                    data: Vec<T>,
+                    marker: std::marker::PhantomData<U>,
+                }
+
+                impl<T, U> Complex<T, U> {
+                    pub fn new() -> Self {}
+                }
+
+                impl<T: Clone, U> Clone for Complex<T, U>
+                {
+                    fn clone(&self) -> Self {}
+                }
+                "#,
+        );
+    }
+
+    #[test]
+    fn test_render_dyn_trait() {
+        render_roundtrip(
+            r#"
+                pub trait MyTrait {
+                    fn my_method(&self);
+                }
+
+                pub fn process_trait_object(obj: &dyn MyTrait) {
+                    obj.my_method();
+                }
+
+                pub fn return_trait_object() -> Box<dyn MyTrait> {
+                    // Implementation
+                    Box::new(())
+                }
+                "#,
+            r#"
+                pub trait MyTrait {
+                    fn my_method(&self);
+                }
+
+                pub fn process_trait_object(obj: &dyn MyTrait) {}
+
+                pub fn return_trait_object() -> Box<dyn MyTrait> {}
+                "#,
+        );
+    }
+
+    #[test]
+    fn test_render_complex_where_clause() {
+        render_roundtrip(
+            r#"
+                pub trait MyTrait {
+                    type Associated;
+                }
+
+                pub struct MyStruct<T>(T);
+
+                impl<T> MyStruct<T>
+                where
+                    T: MyTrait,
+                    <T as MyTrait>::Associated: Clone,
+                {
+                    pub fn new(value: T) -> Self {
+                        MyStruct(value)
+                    }
+                }
+                "#,
+            r#"
+                pub trait MyTrait {
+                    type Associated;
+                }
+
+                pub struct MyStruct<T>(T);
+
+                impl<T> MyStruct<T>
+                where
+                    T: MyTrait,
+                    <T as MyTrait>::Associated: Clone,
+                {
+                    pub fn new(value: T) -> Self {}
+                }
+                "#,
+        );
+    }
+
+    #[test]
+    fn test_render_associated_type_bounds() {
+        render_roundtrip(
+            r#"
+                pub trait Container {
+                    type Item;
+                    fn get(&self) -> Option<&Self::Item>;
+                }
+
+                pub trait AdvancedContainer: Container {
+                    type AdvancedItem: Clone + 'static;
+                    fn get_advanced(&self) -> Option<&Self::AdvancedItem>;
+                }
+                "#,
+            r#"
+                pub trait Container {
+                    type Item;
+                    fn get(&self) -> Option<&Self::Item>;
+                }
+
+                pub trait AdvancedContainer: Container {
+                    type AdvancedItem: Clone + 'static;
+                    fn get_advanced(&self) -> Option<&Self::AdvancedItem>;
+                }
+                "#,
+        );
+    }
+
+    #[test]
+    fn test_render_complex_function_signature() {
+        render_roundtrip(
+            r#"
+                use std::future::Future;
+
+                pub async fn complex_function<T, U, F>(
+                    arg1: T,
+                    arg2: U,
+                    callback: F,
+                ) -> impl Future<Output = Result<T, U>>
+                where
+                    T: Clone + Send + 'static,
+                    U: std::fmt::Debug,
+                    F: Fn(T) -> U + Send + Sync + 'static,
+                {
+                    // Implementation
+                }
+                "#,
+            r#"
+                use std::future::Future;
+
+                pub async fn complex_function<T, U, F>(
+                    arg1: T,
+                    arg2: U,
+                    callback: F,
+                ) -> impl Future<Output = Result<T, U>>
+                where
+                    T: Clone + Send + 'static,
+                    U: std::fmt::Debug,
+                    F: Fn(T) -> U + Send + Sync + 'static,
+                {
+                }
+                "#,
+        );
+    }
+
+    #[test]
+    fn test_render_type_alias_with_bounds() {
+        render_roundtrip(
+            r#"
+                pub trait Trait {}
+
+                pub type Alias<T> = dyn Trait + Send + 'static;
+
+                pub fn use_alias(_: Box<Alias<i32>>) {}
+                "#,
+            r#"
+                pub trait Trait {}
+
+                pub type Alias<T> = dyn Trait + Send + 'static;
+
+                pub fn use_alias(_: Box<Alias<i32>>) {}
+                "#,
         );
     }
 }
