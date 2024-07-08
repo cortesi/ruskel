@@ -106,7 +106,6 @@ impl Renderer {
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
         if let Some(root_item) = crate_data.index.get(&crate_data.root) {
             let unformatted = self.render_item(root_item, crate_data);
-            println!("{}", unformatted);
             Ok(self.formatter.format_str(&unformatted)?)
         } else {
             Ok(String::new())
@@ -814,7 +813,7 @@ impl Renderer {
     }
 
     fn render_type(ty: &Type) -> String {
-        match ty {
+        let rendered = match ty {
             Type::ResolvedPath(path) => Self::render_path(path),
             Type::DynTrait(dyn_trait) => Self::render_dyn_trait(dyn_trait),
             Type::Generic(s) => s.clone(),
@@ -887,7 +886,8 @@ impl Renderer {
             }
 
             Type::Pat { .. } => "/* pattern */".to_string(), // This is a special case, might need more specific handling
-        }
+        };
+        rendered.replace("$crate::", "")
     }
 
     fn render_path(path: &Path) -> String {
@@ -896,7 +896,7 @@ impl Renderer {
             .as_ref()
             .map(|args| Self::render_generic_args(args))
             .unwrap_or_default();
-        format!("{}{}", path.name, args)
+        format!("{}{}", path.name.replace("$crate::", ""), args)
     }
 
     fn render_dyn_trait(dyn_trait: &DynTrait) -> String {
