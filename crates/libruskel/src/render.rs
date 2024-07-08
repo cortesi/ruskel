@@ -716,6 +716,7 @@ impl Renderer {
             let generics = Self::render_generics(&function.generics);
             let args = Self::render_function_args(&function.decl);
             let return_type = Self::render_return_type(&function.decl);
+
             let where_clause = Self::render_where_clause(&function.generics);
 
             // Handle unsafe, const, and async keywords
@@ -892,7 +893,7 @@ impl Renderer {
         }
     }
 
-    fn render_type(ty: &Type) -> String {
+    fn render_type_inner(ty: &Type, nested: bool) -> String {
         let rendered = match ty {
             Type::ResolvedPath(path) => {
                 let args = path
@@ -914,29 +915,36 @@ impl Renderer {
                     .as_ref()
                     .map(|lt| format!(" + {}", lt))
                     .unwrap_or_default();
-                format!("dyn {}{}", traits, lifetime)
-            }
 
+                let inner = format!("dyn {}{}", traits, lifetime);
+                if nested && dyn_trait.lifetime.is_some() {
+                    format!("({})", inner)
+                } else {
+                    inner
+                }
+            }
             Type::Generic(s) => s.clone(),
             Type::Primitive(s) => s.clone(),
             Type::FunctionPointer(f) => Self::render_function_pointer(f),
             Type::Tuple(types) => {
                 let inner = types
                     .iter()
-                    .map(Self::render_type)
+                    .map(|ty| Self::render_type_inner(ty, true))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("({})", inner)
             }
-            Type::Slice(ty) => format!("[{}]", Self::render_type(ty)),
-            Type::Array { type_, len } => format!("[{}; {}]", Self::render_type(type_), len),
+            Type::Slice(ty) => format!("[{}]", Self::render_type_inner(ty, true)),
+            Type::Array { type_, len } => {
+                format!("[{}; {}]", Self::render_type_inner(type_, true), len)
+            }
             Type::ImplTrait(bounds) => {
                 format!("impl {}", Self::render_generic_bounds(bounds))
             }
             Type::Infer => "_".to_string(),
             Type::RawPointer { mutable, type_ } => {
                 let mutability = if *mutable { "mut" } else { "const" };
-                format!("*{} {}", mutability, Self::render_type(type_))
+                format!("*{} {}", mutability, Self::render_type_inner(type_, true))
             }
             Type::BorrowedRef {
                 lifetime,
@@ -948,16 +956,20 @@ impl Renderer {
                     .map(|lt| format!("{} ", lt))
                     .unwrap_or_default();
                 let mutability = if *mutable { "mut " } else { "" };
-                format!("&{}{}{}", lifetime, mutability, Self::render_type(type_))
+                format!(
+                    "&{}{}{}",
+                    lifetime,
+                    mutability,
+                    Self::render_type_inner(type_, true)
+                )
             }
-
             Type::QualifiedPath {
                 name,
                 args,
                 self_type,
                 trait_,
             } => {
-                let self_type_str = Self::render_type(self_type);
+                let self_type_str = Self::render_type_inner(self_type, true);
                 let args_str = Self::render_generic_args(args);
 
                 if let Some(trait_) = trait_ {
@@ -974,10 +986,13 @@ impl Renderer {
                     format!("{}::{}{}", self_type_str, name, args_str)
                 }
             }
-
-            Type::Pat { .. } => "/* pattern */".to_string(), // This is a special case, might need more specific handling
+            Type::Pat { .. } => "/* pattern */".to_string(),
         };
-        rendered.replace("$crate::", "")
+        rendered
+    }
+
+    fn render_type(ty: &Type) -> String {
+        Self::render_type_inner(ty, false)
     }
 
     fn render_poly_trait(poly_trait: &PolyTrait) -> String {
@@ -2131,6 +2146,24 @@ mod tests {
         render_roundtrip_idemp(
             r#"
             pub fn a(v: impl Into<String>) {}
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_parentheses_dyn_trait() {
+        render_roundtrip_idemp(
+            r#"
+                pub fn myfn() -> &'static (dyn std::any::Any + 'static) { }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_parentheses_dyn_trait_arg() {
+        render_roundtrip_idemp(
+            r#"
+                pub fn myfn(a: &dyn std::any::Any) { }
             "#,
         );
     }
