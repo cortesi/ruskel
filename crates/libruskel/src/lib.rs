@@ -1,13 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use cargo::core::Workspace;
-use cargo::ops;
-use cargo::util::context::GlobalContext;
-use syntect::easy::HighlightLines;
-use syntect::highlighting::ThemeSet;
-use syntect::parsing::SyntaxSet;
-use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
+use cargo::{core::Workspace, ops, util::context::GlobalContext};
+use syntect::{
+    easy::HighlightLines,
+    highlighting::ThemeSet,
+    parsing::SyntaxSet,
+    util::{as_24_bit_terminal_escaped, LinesWithEndings},
+};
 
 use rustdoc_types::Crate;
 
@@ -15,27 +15,24 @@ mod error;
 mod render;
 
 pub use crate::error::{Result, RuskelError};
-pub use crate::render::Renderer;
+use crate::render::Renderer;
 
 #[derive(Debug)]
 pub struct Ruskel {
     /// Path to the Cargo.toml file for the target crate.
-    pub manifest_path: PathBuf,
-
-    /// Root directory of the workspace containing the target crate.
-    pub workspace_root: PathBuf,
+    manifest_path: PathBuf,
 
     /// Whether to build without default features.
-    pub no_default_features: bool,
+    no_default_features: bool,
 
     /// Whether to build with all features.
-    pub all_features: bool,
+    all_features: bool,
 
     /// List of specific features to enable.
-    pub features: Vec<String>,
+    features: Vec<String>,
 
     /// Whether to apply syntax highlighting to the output.
-    pub highlight: bool,
+    highlight: bool,
 }
 
 impl Ruskel {
@@ -45,11 +42,9 @@ impl Ruskel {
         if target_path.exists() {
             let canonical_path = target_path.canonicalize()?;
             let manifest_path = Self::find_manifest(&canonical_path)?;
-            let workspace_root = Self::find_workspace_root(&manifest_path)?;
 
             Ok(Ruskel {
                 manifest_path,
-                workspace_root,
                 no_default_features: false,
                 all_features: false,
                 features: Vec::new(),
@@ -62,7 +57,6 @@ impl Ruskel {
 
             Ok(Ruskel {
                 manifest_path,
-                workspace_root,
                 no_default_features: false,
                 all_features: false,
                 features: Vec::new(),
@@ -122,7 +116,7 @@ impl Ruskel {
             .all_features(self.all_features)
             .features(&self.features)
             .build()
-            .map_err(|e| RuskelError::RustdocJsonError(e.to_string()))?;
+            .map_err(|e| RuskelError::Generate(e.to_string()))?;
         let json_content = fs::read_to_string(&json_path)?;
         let crate_data: Crate = serde_json::from_str(&json_content)?;
         Ok(crate_data)
@@ -144,18 +138,13 @@ impl Ruskel {
     }
 
     pub fn pretty_raw_json(&self) -> Result<String> {
-        serde_json::to_string_pretty(&self.json()?).map_err(RuskelError::JsonParseError)
-    }
-
-    fn find_workspace_root(manifest_path: &Path) -> Result<PathBuf> {
-        let config = GlobalContext::default()?;
-        let workspace = Workspace::new(manifest_path, &config)?;
-        Ok(workspace.root().to_path_buf())
+        Ok(serde_json::to_string_pretty(&self.json()?)?)
     }
 
     fn find_module(module_name: &str) -> Result<PathBuf> {
-        let config = GlobalContext::default()?;
-        let workspace = Workspace::new(&Path::new("Cargo.toml").canonicalize()?, &config)?;
+        let config = GlobalContext::default().map_err(|e| RuskelError::Cargo(e.to_string()))?;
+        let workspace = Workspace::new(&Path::new("Cargo.toml").canonicalize()?, &config)
+            .map_err(|e| RuskelError::Cargo(e.to_string()))?;
 
         for package in workspace.members() {
             if package.name().as_str() == module_name {
@@ -168,7 +157,8 @@ impl Ruskel {
             gctx: &config,
             targets: vec![],
         };
-        let (_, ps) = ops::fetch(&workspace, &options)?;
+        let (_, ps) =
+            ops::fetch(&workspace, &options).map_err(|e| RuskelError::Cargo(e.to_string()))?;
 
         for i in ps.packages() {
             if i.name().as_str() == module_name {
@@ -254,7 +244,6 @@ mod tests {
             target.manifest_path,
             temp_dir.path().join("member1").join("Cargo.toml")
         );
-        assert_path_eq!(target.workspace_root, temp_dir.path());
         Ok(())
     }
 
@@ -274,7 +263,6 @@ mod tests {
 
         let target = Ruskel::new(temp_dir.path().to_str().unwrap())?;
         assert_path_eq!(target.manifest_path, temp_dir.path().join("Cargo.toml"));
-        assert_path_eq!(target.workspace_root, temp_dir.path());
 
         Ok(())
     }
@@ -285,7 +273,6 @@ mod tests {
 
         let target = Ruskel::new(temp_dir.path().to_str().unwrap())?;
         assert_path_eq!(target.manifest_path, temp_dir.path().join("Cargo.toml"));
-        assert_path_eq!(target.workspace_root, temp_dir.path());
 
         Ok(())
     }
@@ -297,7 +284,6 @@ mod tests {
 
         let target = Ruskel::new(member1_dir.to_str().unwrap())?;
         assert_path_eq!(target.manifest_path, member1_dir.join("Cargo.toml"));
-        assert_path_eq!(target.workspace_root, temp_dir.path());
 
         Ok(())
     }

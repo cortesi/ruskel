@@ -240,7 +240,7 @@ impl Renderer {
                 output.push('\n');
             }
 
-            output.push_str(&format!("= {};\n", Self::render_type(&type_alias.type_)));
+            output.push_str(&format!("= {};\n\n", Self::render_type(&type_alias.type_)));
 
             output
         } else {
@@ -424,7 +424,7 @@ impl Renderer {
                 }
             }
 
-            output.push_str("}\n");
+            output.push_str("}\n\n");
         }
 
         output

@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -10,25 +9,37 @@ pub enum RuskelError {
     ModuleNotFound(String),
 
     #[error("Failed to read file: {0}")]
-    FileReadError(#[from] std::io::Error),
+    FileRead(#[from] std::io::Error),
 
-    #[error("Failed to parse JSON: {0}")]
-    JsonParseError(#[from] serde_json::Error),
-
-    #[error("Failed to generate rustdoc JSON: {0}")]
-    RustdocJsonError(String),
-
-    #[error("Invalid target path: {0}")]
-    InvalidTargetPath(PathBuf),
+    #[error("Failed to generate: {0}")]
+    Generate(String),
 
     #[error("Cargo error: {0}")]
-    CargoError(#[from] anyhow::Error),
+    Cargo(String),
 
     #[error("Formatting error: {0}")]
-    FormatError(#[from] rust_format::Error),
+    Format(String),
 
-    #[error("Syntect error: {0}")]
-    SyntectError(#[from] syntect::Error),
+    #[error("Highlighting error: {0}")]
+    Highlight(String),
+}
+
+impl From<syntect::Error> for RuskelError {
+    fn from(err: syntect::Error) -> Self {
+        RuskelError::Highlight(err.to_string())
+    }
+}
+
+impl From<serde_json::Error> for RuskelError {
+    fn from(err: serde_json::Error) -> Self {
+        RuskelError::Generate(err.to_string())
+    }
+}
+
+impl From<rust_format::Error> for RuskelError {
+    fn from(err: rust_format::Error) -> Self {
+        RuskelError::Format(err.to_string())
+    }
 }
 
 pub type Result<T> = std::result::Result<T, RuskelError>;

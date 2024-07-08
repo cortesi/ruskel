@@ -46,7 +46,7 @@ fn main() {
     let cli = Cli::parse();
 
     if let Err(e) = run(cli) {
-        eprintln!("Error: {}", e);
+        eprintln!("{}", e);
         std::process::exit(1);
     }
 }
