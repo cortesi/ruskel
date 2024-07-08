@@ -1,8 +1,8 @@
 use rust_format::{Config, Formatter, RustFmt};
 use rustdoc_types::{
     Crate, FnDecl, FunctionPointer, GenericArg, GenericArgs, GenericBound, GenericParamDef,
-    GenericParamDefKind, Generics, Id, Impl, Item, ItemEnum, Path, PolyTrait, StructKind, Term,
-    TraitBoundModifier, Type, TypeBinding, TypeBindingKind, VariantKind, Visibility,
+    GenericParamDefKind, Generics, Id, Impl, Import, Item, ItemEnum, Path, PolyTrait, StructKind,
+    Term, TraitBoundModifier, Type, TypeBinding, TypeBindingKind, VariantKind, Visibility,
     WherePredicate,
 };
 
@@ -52,7 +52,7 @@ impl Renderer {
         let mut output = String::new();
 
         if let Some(root_item) = crate_data.index.get(&crate_data.root) {
-            let unformatted = self.render_item(root_item, crate_data);
+            let unformatted = self.render_item(root_item, crate_data, false);
             output.push_str(&unformatted);
         }
 
@@ -116,8 +116,11 @@ impl Renderer {
         true
     }
 
-    fn render_item(&self, item: &Item, crate_data: &Crate) -> String {
-        if !self.render_private_items && !matches!(item.visibility, Visibility::Public) {
+    fn render_item(&self, item: &Item, crate_data: &Crate, force_private: bool) -> String {
+        if !force_private
+            && !self.render_private_items
+            && !matches!(item.visibility, Visibility::Public)
+        {
             return String::new(); // Don't render private items if not requested
         }
 
@@ -176,76 +179,9 @@ impl Renderer {
         }
     }
 
-    fn should_render_item(&self, item: &Item, crate_data: &Crate) -> bool {
-        if self.render_private_items {
-            return true;
-        }
-
-        let mut current_id = Some(&item.id);
-        let mut visited = std::collections::HashSet::new();
-
-        while let Some(id) = current_id {
-            if !visited.insert(id) {
-                // We've already visited this ID, so we're in a cycle. Break the loop.
-                break;
-            }
-
-            if let Some(current_item) = crate_data.index.get(id) {
-                if !matches!(current_item.visibility, Visibility::Public) {
-                    return false;
-                }
-                // Move to the parent module
-                current_id = crate_data.paths.get(id).and_then(|summary| {
-                    summary
-                        .path
-                        .get(summary.path.len().saturating_sub(2))
-                        .and_then(|parent_name| {
-                            crate_data
-                                .paths
-                                .iter()
-                                .find(|(_, s)| s.path.last() == Some(parent_name))
-                                .map(|(id, _)| id)
-                        })
-                });
-            } else {
-                return false;
-            }
-        }
-        true
-    }
-
     fn render_import(&self, item: &Item, crate_data: &Crate) -> String {
         if let ItemEnum::Import(import) = &item.inner {
-            // Check if the imported item is present in the crate's index
-            if let Some(imported_item) = import.id.as_ref().and_then(|id| crate_data.index.get(id))
-            {
-                // If the item would not be rendered normally, render it inline
-                if !self.should_render_item(imported_item, crate_data) {
-                    return self.render_item(imported_item, crate_data);
-                }
-            }
-
-            // For public items, render the import declaration as before
-            let mut output = String::new();
-
-            // Add doc comment if present
-            if let Some(docs) = &item.docs {
-                for line in docs.lines() {
-                    output.push_str(&format!("/// {}\n", line));
-                }
-            }
-
-            output.push_str("pub use ");
-
-            if import.glob {
-                output.push_str(&format!("{}::*;\n", import.source));
-            } else if import.name != import.source.split("::").last().unwrap_or(&import.source) {
-                output.push_str(&format!("{} as {};\n", import.source, import.name));
-            } else {
-                output.push_str(&format!("{};\n", import.source));
-            }
-
-            output
+            self.render_import_inline(item, import, crate_data)
         } else {
             String::new()
         }
@@ -696,8 +632,15 @@ impl Renderer {
         if let ItemEnum::Module(module) = &item.inner {
             for item_id in &module.items {
                 if let Some(item) = crate_data.index.get(item_id) {
+                    // Handle public imports differently
+                    if let ItemEnum::Import(import) = &item.inner {
+                        if matches!(item.visibility, Visibility::Public) {
+                            output.push_str(&self.render_import_inline(item, import, crate_data));
+                            continue;
+                        }
+                    }
                     // Indent the rendered items
-                    for line in self.render_item(item, crate_data).lines() {
+                    for line in self.render_item(item, crate_data, false).lines() {
                         output.push_str(&format!("    {}\n", line));
                     }
                 }
@@ -705,6 +648,34 @@ impl Renderer {
         }
 
         output.push_str("}\n\n");
+        output
+    }
+
+    fn render_import_inline(&self, item: &Item, import: &Import, crate_data: &Crate) -> String {
+        if let Some(imported_item) = import.id.as_ref().and_then(|id| crate_data.index.get(id)) {
+            return self.render_item(imported_item, crate_data, true);
+        }
+
+        let mut output = String::new();
+
+        // Add doc comment if present
+        if let Some(docs) = &item.docs {
+            for line in docs.lines() {
+                output.push_str(&format!("    /// {}\n", line));
+            }
+        }
+
+        if import.glob {
+            output.push_str(&format!("    pub use {}::*;\n", import.source));
+        } else if import.name != import.source.split("::").last().unwrap_or(&import.source) {
+            output.push_str(&format!(
+                "    pub use {} as {};\n",
+                import.source, import.name
+            ));
+        } else {
+            output.push_str(&format!("    pub use {};\n", import.source));
+        }
+
         output
     }
 
@@ -1957,8 +1928,16 @@ mod tests {
                 pub struct PrivateStruct;
             "#,
         );
+        render_roundtrip_private(
+            input,
+            r#"
+                mod private {
+                    pub struct PrivateStruct;
+                }
 
-        render_roundtrip_private(input, input);
+                pub struct PrivateStruct;
+            "#,
+        );
     }
 
     #[test]
@@ -2207,5 +2186,42 @@ mod tests {
                 pub fn r#try() { }
             "#,
         );
+    }
+
+    #[test]
+    fn test_render_module_with_inline_imports() {
+        let source = r#"
+            //! Module documentation
+            mod private_module {
+                pub struct PrivateStruct;
+            }
+
+            pub mod public_module {
+                //! Public module documentation
+                pub struct PublicStruct;
+
+                pub use super::private_module::PrivateStruct;
+                pub use std::collections::HashMap;
+            }
+
+            pub use self::public_module::PublicStruct;
+        "#;
+
+        let expected_output = r#"
+            //! Module documentation
+
+            pub mod public_module {
+                //! Public module documentation
+
+                pub struct PublicStruct;
+
+                pub struct PrivateStruct;
+                pub use std::collections::HashMap;
+            }
+
+            pub struct PublicStruct;
+        "#;
+
+        render_roundtrip(source, expected_output);
     }
 }
