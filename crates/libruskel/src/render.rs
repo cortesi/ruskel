@@ -154,7 +154,7 @@ impl Renderer {
             output.push_str(&format!(
                 "{}type {}{}{}",
                 visibility,
-                item.name.as_deref().unwrap_or("?"),
+                Self::render_name(&item.name),
                 generics,
                 where_clause
             ));
@@ -359,7 +359,7 @@ impl Renderer {
             output.push_str(&format!(
                 "{}enum {}{}{} {{\n",
                 visibility,
-                item.name.as_deref().unwrap_or("?"),
+                Self::render_name(&item.name),
                 generics,
                 where_clause
             ));
@@ -387,7 +387,7 @@ impl Renderer {
         }
 
         if let ItemEnum::Variant(variant) = &item.inner {
-            output.push_str(&format!("    {}", item.name.as_deref().unwrap_or("?")));
+            output.push_str(&format!("    {}", Self::render_name(&item.name),));
 
             match &variant.kind {
                 VariantKind::Plain => {}
@@ -466,7 +466,7 @@ impl Renderer {
                 "{}{}trait {}{}{}{} {{\n",
                 visibility,
                 unsafe_prefix,
-                item.name.as_deref().unwrap_or("?"),
+                Self::render_name(&item.name),
                 generics,
                 bounds,
                 where_clause
@@ -494,7 +494,7 @@ impl Renderer {
                     .unwrap_or_default();
                 format!(
                     "const {}: {}{};\n",
-                    item.name.as_deref().unwrap_or("?"),
+                    Self::render_name(&item.name),
                     Self::render_type(type_),
                     default_str
                 )
@@ -516,7 +516,7 @@ impl Renderer {
                     .unwrap_or_default();
                 format!(
                     "type {}{}{}{};\n",
-                    item.name.as_deref().unwrap_or("?"),
+                    Self::render_name(&item.name),
                     generics_str,
                     bounds_str,
                     default_str
@@ -558,7 +558,7 @@ impl Renderer {
                     output.push_str(&format!(
                         "{}struct {}{}{};\n",
                         visibility,
-                        item.name.as_deref().unwrap_or("?"),
+                        Self::render_name(&item.name),
                         generics,
                         where_clause
                     ));
@@ -588,7 +588,7 @@ impl Renderer {
                     output.push_str(&format!(
                         "{}struct {}{}({}){};\n",
                         visibility,
-                        item.name.as_deref().unwrap_or("?"),
+                        Self::render_name(&item.name),
                         generics,
                         fields_str,
                         where_clause
@@ -598,7 +598,7 @@ impl Renderer {
                     output.push_str(&format!(
                         "{}struct {}{}{} {{\n",
                         visibility,
-                        item.name.as_deref().unwrap_or("?"),
+                        Self::render_name(&item.name),
                         generics,
                         where_clause
                     ));
@@ -634,7 +634,7 @@ impl Renderer {
                 format!(
                     "{}{}: {},\n",
                     visibility,
-                    field_item.name.as_deref().unwrap_or("?"),
+                    Self::render_name(&field_item.name),
                     Self::render_type(ty)
                 )
             } else {
@@ -664,7 +664,7 @@ impl Renderer {
             output.push_str(&format!(
                 "{}const {}: {} = {};\n",
                 visibility,
-                item.name.as_deref().unwrap_or("?"),
+                Self::render_name(&item.name),
                 Self::render_type(type_),
                 const_.expr
             ));
@@ -679,11 +679,7 @@ impl Renderer {
             _ => "",
         };
 
-        let mut output = format!(
-            "{}mod {} {{\n",
-            visibility,
-            item.name.as_deref().unwrap_or("?")
-        );
+        let mut output = format!("{}mod {} {{\n", visibility, Self::render_name(&item.name));
 
         if let ItemEnum::Module(module) = &item.inner {
             for item_id in &module.items {
@@ -695,6 +691,27 @@ impl Renderer {
 
         output.push_str("}\n");
         output
+    }
+
+    fn render_name(name: &Option<String>) -> String {
+        const RESERVED_WORDS: &[&str] = &[
+            "abstract", "as", "become", "box", "break", "const", "continue", "crate", "do", "else",
+            "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in", "let", "loop",
+            "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref", "return",
+            "self", "Self", "static", "struct", "super", "trait", "true", "try", "type", "typeof",
+            "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
+        ];
+
+        name.as_deref().map_or_else(
+            || "?".to_string(),
+            |n| {
+                if RESERVED_WORDS.contains(&n) {
+                    format!("r#{}", n)
+                } else {
+                    n.to_string()
+                }
+            },
+        )
     }
 
     fn render_function(item: &Item, is_trait_method: bool) -> String {
@@ -740,7 +757,7 @@ impl Renderer {
                 "{}{}fn {}{}({}){}{}",
                 visibility,
                 prefix,
-                item.name.as_deref().unwrap_or("?"),
+                Self::render_name(&item.name),
                 generics,
                 args,
                 if return_type.is_empty() {
@@ -2164,6 +2181,15 @@ mod tests {
         render_roundtrip_idemp(
             r#"
                 pub fn myfn(a: &dyn std::any::Any) { }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_reserved_word() {
+        render_roundtrip_idemp(
+            r#"
+                pub fn r#try() { }
             "#,
         );
     }
