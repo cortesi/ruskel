@@ -106,6 +106,7 @@ impl Renderer {
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
         if let Some(root_item) = crate_data.index.get(&crate_data.root) {
             let unformatted = self.render_item(root_item, crate_data);
+            println!("{}", unformatted);
             Ok(self.formatter.format_str(&unformatted)?)
         } else {
             Ok(String::new())
@@ -123,7 +124,7 @@ impl Renderer {
             ItemEnum::Enum(_) => Self::render_enum(item, crate_data),
             ItemEnum::Trait(_) => Self::render_trait(item, crate_data),
             ItemEnum::Import(_) => self.render_import(item, crate_data),
-            ItemEnum::Function(_) => Self::render_function(item),
+            ItemEnum::Function(_) => Self::render_function(item, false),
             ItemEnum::Constant { .. } => Self::render_constant(item),
 
             // Add other item types as needed
@@ -247,7 +248,7 @@ impl Renderer {
 
     fn render_impl_item(&self, item: &Item) -> String {
         match &item.inner {
-            ItemEnum::Function(_) => Self::render_function(item),
+            ItemEnum::Function(_) => Self::render_function(item, false),
             ItemEnum::Constant { .. } => Self::render_constant(item),
             ItemEnum::AssocType { .. } => Self::render_associated_type(item),
             _ => String::new(),
@@ -428,7 +429,7 @@ impl Renderer {
 
     fn render_trait_item(item: &Item) -> String {
         match &item.inner {
-            ItemEnum::Function(_) => Self::render_function(item),
+            ItemEnum::Function(_) => Self::render_function(item, true),
             ItemEnum::AssocConst { type_, default } => {
                 let default_str = default
                     .as_ref()
@@ -639,7 +640,7 @@ impl Renderer {
         output
     }
 
-    fn render_function(item: &Item) -> String {
+    fn render_function(item: &Item, is_trait_method: bool) -> String {
         let visibility = match &item.visibility {
             Visibility::Public => "pub ",
             _ => "",
@@ -692,8 +693,12 @@ impl Renderer {
                 where_clause
             ));
 
-            // Always include the method body, even for trait implementations
-            output.push_str(" {}\n");
+            // Use semicolon for trait method declarations, empty body for implementations
+            if is_trait_method && !function.has_body {
+                output.push_str(";\n");
+            } else {
+                output.push_str(" {}\n");
+            }
         }
 
         output
@@ -2143,7 +2148,7 @@ mod tests {
     #[test]
     fn test_render_blanket_impl() {
         let source = r#"
-            trait MyTrait {
+            pub trait MyTrait {
                 fn trait_method(&self);
             }
 
@@ -2164,12 +2169,16 @@ mod tests {
         render_roundtrip(
             source,
             r#"
-            pub struct MyStruct;
+                pub trait MyTrait {
+                    fn trait_method(&self);
+                }
 
-            impl Clone for MyStruct {
-                fn clone(&self) -> Self {}
-            }
-        "#,
+                pub struct MyStruct;
+
+                impl Clone for MyStruct {
+                    fn clone(&self) -> Self {}
+                }
+            "#,
         );
 
         // Test with blanket impls enabled
@@ -2178,16 +2187,23 @@ mod tests {
             &renderer,
             source,
             r#"
-            pub struct MyStruct;
+                pub trait MyTrait {
+                    fn trait_method(&self);
+                }
 
-            impl Clone for MyStruct {
-                fn clone(&self) -> Self {}
-            }
+                pub struct MyStruct;
 
-            impl MyTrait for MyStruct {
-                fn trait_method(&self) {}
-            }
-        "#,
+                impl<T> MyTrait for MyStruct
+                where
+                    T: Clone,
+                {
+                    fn trait_method(&self) {}
+                }
+
+                impl Clone for MyStruct {
+                    fn clone(&self) -> Self {}
+                }
+            "#,
         );
     }
 }
