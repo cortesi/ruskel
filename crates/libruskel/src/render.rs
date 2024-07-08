@@ -179,6 +179,54 @@ impl Renderer {
         }
     }
 
+    fn render_import_inline(&self, item: &Item, import: &Import, crate_data: &Crate) -> String {
+        if import.glob {
+            // Handle glob imports
+            if let Some(source_id) = &import.id {
+                println!("A {:?}", source_id);
+                if let Some(source_item) = crate_data.index.get(source_id) {
+                    println!("B");
+                    if let ItemEnum::Module(module) = &source_item.inner {
+                        let mut output = String::new();
+                        for item_id in &module.items {
+                            if let Some(item) = crate_data.index.get(item_id) {
+                                if matches!(item.visibility, Visibility::Public) {
+                                    output.push_str(&self.render_item(item, crate_data, true));
+                                }
+                            }
+                        }
+                        return output;
+                    }
+                }
+            }
+            // If we can't resolve the glob import, fall back to rendering it as-is
+            println!("SKIP: {:?}", item);
+            return format!("pub use {}::*;\n", import.source);
+        }
+
+        // Existing code for handling direct imports
+        if let Some(imported_item) = import.id.as_ref().and_then(|id| crate_data.index.get(id)) {
+            return self.render_item(imported_item, crate_data, true);
+        }
+
+        let mut output = String::new();
+
+        // Add doc comment if present
+        if let Some(docs) = &item.docs {
+            for line in docs.lines() {
+                output.push_str(&format!("/// {}\n", line));
+            }
+        }
+
+        if import.name != import.source.split("::").last().unwrap_or(&import.source) {
+            output.push_str(&format!("pub use {} as {};\n", import.source, import.name));
+        } else {
+            output.push_str(&format!("pub use {};\n", import.source));
+        }
+
+        output
+    }
+
     fn render_import(&self, item: &Item, crate_data: &Crate) -> String {
         if let ItemEnum::Import(import) = &item.inner {
             self.render_import_inline(item, import, crate_data)
@@ -648,34 +696,6 @@ impl Renderer {
         }
 
         output.push_str("}\n\n");
-        output
-    }
-
-    fn render_import_inline(&self, item: &Item, import: &Import, crate_data: &Crate) -> String {
-        if let Some(imported_item) = import.id.as_ref().and_then(|id| crate_data.index.get(id)) {
-            return self.render_item(imported_item, crate_data, true);
-        }
-
-        let mut output = String::new();
-
-        // Add doc comment if present
-        if let Some(docs) = &item.docs {
-            for line in docs.lines() {
-                output.push_str(&format!("    /// {}\n", line));
-            }
-        }
-
-        if import.glob {
-            output.push_str(&format!("    pub use {}::*;\n", import.source));
-        } else if import.name != import.source.split("::").last().unwrap_or(&import.source) {
-            output.push_str(&format!(
-                "    pub use {} as {};\n",
-                import.source, import.name
-            ));
-        } else {
-            output.push_str(&format!("    pub use {};\n", import.source));
-        }
-
         output
     }
 
@@ -2220,6 +2240,41 @@ mod tests {
             }
 
             pub struct PublicStruct;
+        "#;
+
+        render_roundtrip(source, expected_output);
+    }
+
+
+    #[test]
+    fn test_render_module_with_glob_imports() {
+        let source = r#"
+            mod private_module {
+                pub struct PrivateStruct1;
+                pub struct PrivateStruct2;
+                struct NonPublicStruct;
+            }
+
+            pub mod public_module {
+                pub struct PublicStruct1;
+                pub struct PublicStruct2;
+                pub use super::private_module::*;
+            }
+
+            pub use self::public_module::*;
+        "#;
+
+        let expected_output = r#"
+            pub mod public_module {
+                pub struct PublicStruct1;
+                pub struct PublicStruct2;
+                pub struct PrivateStruct1;
+                pub struct PrivateStruct2;
+            }
+            pub struct PublicStruct1;
+            pub struct PublicStruct2;
+            pub struct PrivateStruct1;
+            pub struct PrivateStruct2;
         "#;
 
         render_roundtrip(source, expected_output);
