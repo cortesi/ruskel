@@ -48,6 +48,17 @@ impl Renderer {
         self
     }
 
+    pub fn render(&self, crate_data: &Crate) -> Result<String> {
+        let mut output = String::new();
+
+        if let Some(root_item) = crate_data.index.get(&crate_data.root) {
+            let unformatted = self.render_item(root_item, crate_data);
+            output.push_str(&unformatted);
+        }
+
+        Ok(self.formatter.format_str(&output)?)
+    }
+
     fn should_render_impl(&self, impl_: &Impl) -> bool {
         if impl_.synthetic && !self.render_auto_impls {
             return false;
@@ -103,15 +114,6 @@ impl Renderer {
         }
 
         true
-    }
-
-    pub fn render(&self, crate_data: &Crate) -> Result<String> {
-        if let Some(root_item) = crate_data.index.get(&crate_data.root) {
-            let unformatted = self.render_item(root_item, crate_data);
-            Ok(self.formatter.format_str(&unformatted)?)
-        } else {
-            Ok(String::new())
-        }
     }
 
     fn render_item(&self, item: &Item, crate_data: &Crate) -> String {
@@ -480,7 +482,7 @@ impl Renderer {
                 }
             }
 
-            output.push_str("}\n");
+            output.push_str("}\n\n");
         }
 
         output
@@ -683,10 +685,21 @@ impl Renderer {
 
         let mut output = format!("{}mod {} {{\n", visibility, Self::render_name(&item.name));
 
+        // Add module doc comment if present
+        if let Some(docs) = &item.docs {
+            for line in docs.lines() {
+                output.push_str(&format!("    //! {}\n", line));
+            }
+            output.push('\n');
+        }
+
         if let ItemEnum::Module(module) = &item.inner {
             for item_id in &module.items {
                 if let Some(item) = crate_data.index.get(item_id) {
-                    output.push_str(&self.render_item(item, crate_data));
+                    // Indent the rendered items
+                    for line in self.render_item(item, crate_data).lines() {
+                        output.push_str(&format!("    {}\n", line));
+                    }
                 }
             }
         }
