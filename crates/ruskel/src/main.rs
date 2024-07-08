@@ -19,6 +19,18 @@ struct Cli {
     /// Render private items
     #[arg(long, default_value_t = false)]
     private: bool,
+
+    /// Disable default features
+    #[arg(long, default_value_t = false)]
+    no_default_features: bool,
+
+    /// Enable all features
+    #[arg(long, default_value_t = false)]
+    all_features: bool,
+
+    /// Specify features to enable
+    #[arg(long, value_delimiter = ',')]
+    features: Vec<String>,
 }
 
 fn main() {
@@ -31,7 +43,10 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
-    let rs = libruskel::Ruskel::new(&cli.target)?;
+    let rs = libruskel::Ruskel::new(&cli.target)?
+        .with_no_default_features(cli.no_default_features)
+        .with_all_features(cli.all_features)
+        .with_features(cli.features);
 
     if cli.raw {
         let json = rs.pretty_raw_json()?;

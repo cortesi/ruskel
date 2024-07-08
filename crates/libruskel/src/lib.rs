@@ -15,18 +15,6 @@ pub use crate::error::{Result, RuskelError};
 pub use crate::filter::Filter;
 pub use crate::render::Renderer;
 
-fn generate_json<P: AsRef<Path>>(manifest_path: P) -> Result<Crate> {
-    let json_path = rustdoc_json::Builder::default()
-        .toolchain("nightly")
-        .manifest_path(manifest_path.as_ref())
-        .document_private_items(true)
-        .build()
-        .map_err(|e| RuskelError::RustdocJsonError(e.to_string()))?;
-    let json_content = fs::read_to_string(&json_path)?;
-    let crate_data: Crate = serde_json::from_str(&json_content)?;
-    Ok(crate_data)
-}
-
 #[derive(Debug)]
 pub struct Ruskel {
     /// Path to the Cargo.toml file for the target crate.
@@ -37,6 +25,15 @@ pub struct Ruskel {
 
     /// Filtering options for output.
     pub filter: Filter,
+
+    /// Whether to build without default features.
+    pub no_default_features: bool,
+
+    /// Whether to build with all features.
+    pub all_features: bool,
+
+    /// List of specific features to enable.
+    pub features: Vec<String>,
 }
 
 impl Ruskel {
@@ -53,6 +50,9 @@ impl Ruskel {
                 manifest_path,
                 workspace_root,
                 filter,
+                no_default_features: false,
+                all_features: false,
+                features: Vec::new(),
             })
         } else {
             // Assume it's a module name if the path doesn't exist
@@ -64,12 +64,46 @@ impl Ruskel {
                 manifest_path,
                 workspace_root,
                 filter,
+                no_default_features: false,
+                all_features: false,
+                features: Vec::new(),
             })
         }
     }
 
+    pub fn with_no_default_features(mut self, value: bool) -> Self {
+        self.no_default_features = value;
+        self
+    }
+
+    pub fn with_all_features(mut self, value: bool) -> Self {
+        self.all_features = value;
+        self
+    }
+
+    pub fn with_feature(mut self, feature: String) -> Self {
+        self.features.push(feature);
+        self
+    }
+
+    pub fn with_features(mut self, features: Vec<String>) -> Self {
+        self.features = features;
+        self
+    }
+
     pub fn json(&self) -> Result<Crate> {
-        generate_json(&self.manifest_path)
+        let json_path = rustdoc_json::Builder::default()
+            .toolchain("nightly")
+            .manifest_path(&self.manifest_path)
+            .document_private_items(true)
+            .no_default_features(self.no_default_features)
+            .all_features(self.all_features)
+            .features(&self.features)
+            .build()
+            .map_err(|e| RuskelError::RustdocJsonError(e.to_string()))?;
+        let json_content = fs::read_to_string(&json_path)?;
+        let crate_data: Crate = serde_json::from_str(&json_content)?;
+        Ok(crate_data)
     }
 
     pub fn pretty_raw_json(&self) -> Result<String> {
