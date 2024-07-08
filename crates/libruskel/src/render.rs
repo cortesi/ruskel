@@ -1,7 +1,7 @@
 use rust_format::{Config, Formatter, RustFmt};
 use rustdoc_types::{
     Crate, FnDecl, FunctionPointer, GenericArg, GenericArgs, GenericBound, GenericParamDef,
-    GenericParamDefKind, Generics, Id, Impl, Import, Item, ItemEnum, MacroKind, Path, PolyTrait,
+    GenericParamDefKind, Generics, Id, Impl, Item, ItemEnum, MacroKind, Path, PolyTrait,
     StructKind, Term, TraitBoundModifier, Type, TypeBinding, TypeBindingKind, VariantKind,
     Visibility, WherePredicate,
 };
@@ -248,7 +248,18 @@ impl Renderer {
         }
     }
 
-    fn render_import_inline(&self, item: &Item, import: &Import, crate_data: &Crate) -> String {
+    fn render_import(&self, item: &Item, crate_data: &Crate) -> String {
+        // FIXME: For the moment, we don't support imports from external crates. We should consider
+        // doing this.
+        println!("item: {:#?}", item);
+        println!("paths: {:#?}", crate_data.paths);
+
+        let import = if let ItemEnum::Import(import) = &item.inner {
+            import
+        } else {
+            return String::new();
+        };
+
         if import.glob {
             // Handle glob imports
             if let Some(source_id) = &import.id {
@@ -291,14 +302,6 @@ impl Renderer {
         }
 
         output
-    }
-
-    fn render_import(&self, item: &Item, crate_data: &Crate) -> String {
-        if let ItemEnum::Import(import) = &item.inner {
-            self.render_import_inline(item, import, crate_data)
-        } else {
-            String::new()
-        }
     }
 
     fn render_impl(&self, item: &Item, crate_data: &Crate) -> String {
@@ -716,7 +719,7 @@ impl Renderer {
 
         if let ItemEnum::Constant { type_, const_ } = &item.inner {
             output.push_str(&format!(
-                "{}const {}: {} = {};\n",
+                "{}const {}: {} = {};\n\n",
                 visibility,
                 Self::render_name(&item.name),
                 Self::render_type(type_),
@@ -747,9 +750,9 @@ impl Renderer {
             for item_id in &module.items {
                 if let Some(item) = crate_data.index.get(item_id) {
                     // Handle public imports differently
-                    if let ItemEnum::Import(import) = &item.inner {
+                    if let ItemEnum::Import(_) = &item.inner {
                         if matches!(item.visibility, Visibility::Public) {
-                            output.push_str(&self.render_import_inline(item, import, crate_data));
+                            output.push_str(&self.render_import(item, crate_data));
                             continue;
                         }
                     }
@@ -1370,7 +1373,6 @@ mod tests {
         ));
 
         let normalized_expected = normalize_whitespace(expected_output);
-        println!("Rendered:\n{}", normalized_rendered);
 
         let formatter = RustFmt::default();
         assert_eq!(
