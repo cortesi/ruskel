@@ -1392,12 +1392,12 @@ mod tests {
     }
 
     /// Idempotent rendering test
-    fn render_roundtrip_idemp(source: &str) {
+    fn rt_idemp(source: &str) {
         render(&Renderer::default(), source, source, false);
     }
 
     /// Idempotent rendering test with private items
-    fn render_roundtrip_private_idemp(source: &str) {
+    fn rt_priv_idemp(source: &str) {
         render(
             &Renderer::default().with_private_items(true),
             source,
@@ -1406,11 +1406,13 @@ mod tests {
         );
     }
 
-    fn render_roundtrip(source: &str, expected_output: &str) {
+    /// Render roundtrip
+    fn rt(source: &str, expected_output: &str) {
         render(&Renderer::default(), source, expected_output, false);
     }
 
-    fn render_roundtrip_private(source: &str, expected_output: &str) {
+    /// Render roundtrip with private items
+    fn rt_private(source: &str, expected_output: &str) {
         render(
             &Renderer::default().with_private_items(true),
             source,
@@ -1419,13 +1421,31 @@ mod tests {
         );
     }
 
-    fn render_procmacro_roundtrip(source: &str, expected_output: &str) {
+    fn rt_procmacro(source: &str, expected_output: &str) {
         render(&Renderer::default(), source, expected_output, true);
+    }
+
+    fn rt_idemp_multi(sources: &[&str]) {
+        for source in sources {
+            rt_idemp(source);
+        }
+    }
+
+    fn rt_priv_idemp_multi(sources: &[&str]) {
+        for source in sources {
+            rt_priv_idemp(source);
+        }
+    }
+
+    fn rt_multi(cases: &[(&str, &str)]) {
+        for (source, expected_output) in cases {
+            rt(source, expected_output);
+        }
     }
 
     #[test]
     fn test_render_public_function() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// This is a documented function.
                 pub fn test_function() {}
@@ -1435,12 +1455,12 @@ mod tests {
 
     #[test]
     fn test_render_private_function() {
-        render_roundtrip_private_idemp(
+        rt_priv_idemp(
             r#"
             fn private_function() {}
             "#,
         );
-        render_roundtrip(
+        rt(
             r#"
             fn private_function() {
                 // Function body
@@ -1452,7 +1472,7 @@ mod tests {
 
     #[test]
     fn test_render_function_with_args_and_return() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
             pub fn complex_function(arg1: i32, arg2: String) -> bool {}
             "#,
@@ -1461,7 +1481,7 @@ mod tests {
 
     #[test]
     fn test_render_function_with_docs() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
             /// This is a documented function.
             /// It has multiple lines of documentation.
@@ -1473,7 +1493,7 @@ mod tests {
 
     #[test]
     fn test_render_module() {
-        render_roundtrip_private_idemp(
+        rt_priv_idemp(
             r#"
                 mod test_module {
                     pub fn test_function() {
@@ -1490,7 +1510,7 @@ mod tests {
 
     #[test]
     fn test_render_complex_type() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 pub fn complex_type_function<'a>(arg: &'a mut [u8]) {
                 }
@@ -1500,7 +1520,7 @@ mod tests {
 
     #[test]
     fn test_render_function_pointer() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 pub fn function_with_fn_pointer(f: fn(arg1: i32, arg2: String) -> bool) {
                 }
@@ -1510,7 +1530,7 @@ mod tests {
 
     #[test]
     fn test_render_function_with_generics() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 pub fn generic_function<T, U>(t: T, u: U) -> T {
                 }
@@ -1520,7 +1540,7 @@ mod tests {
 
     #[test]
     fn test_render_function_with_lifetimes() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 pub fn lifetime_function<'a>(x: &'a str) -> &'a str {}
             "#,
@@ -1529,7 +1549,7 @@ mod tests {
 
     #[test]
     fn test_render_function_with_where_clause() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 pub fn where_function<T>(t: T) -> T
                 where
@@ -1542,7 +1562,7 @@ mod tests {
 
     #[test]
     fn test_render_function_with_complex_generics_and_where_clause() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 pub fn complex_function<T, U, R>(t: T, u: U) -> R
                 where
@@ -1557,7 +1577,7 @@ mod tests {
 
     #[test]
     fn test_render_function_with_hrtb() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 pub fn hrtb_function<F>(f: F)
                 where
@@ -1570,7 +1590,7 @@ mod tests {
 
     #[test]
     fn test_render_constant() {
-        render_roundtrip(
+        rt(
             r#"
                 /// This is a documented constant.
                 pub const CONSTANT: u32 = 42;
@@ -1581,7 +1601,7 @@ mod tests {
                 pub const CONSTANT: u32 = 42;
             "#,
         );
-        render_roundtrip_private_idemp(
+        rt_priv_idemp(
             r#"
                 /// This is a documented constant.
                 pub const CONSTANT: u32 = 42;
@@ -1592,7 +1612,7 @@ mod tests {
 
     #[test]
     fn test_render_unit_struct() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// A unit struct
                 pub struct UnitStruct;
@@ -1601,112 +1621,8 @@ mod tests {
     }
 
     #[test]
-    fn test_render_tuple_struct() {
-        render_roundtrip_private_idemp(
-            r#"
-                /// A tuple struct
-                pub struct TupleStruct(pub i32, String);
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_plain_struct() {
-        render_roundtrip_private_idemp(
-            r#"
-                /// A plain struct
-                pub struct PlainStruct {
-                    pub field1: i32,
-                    field2: String,
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_generic_struct() {
-        render_roundtrip_private_idemp(
-            r#"
-                /// A generic struct
-                pub struct GenericStruct<T, U>
-                where
-                    T: Clone,
-                    U: Default,
-                {
-                    field1: T,
-                    field2: U,
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_struct_with_lifetime() {
-        render_roundtrip_private_idemp(
-            r#"
-                /// A struct with a lifetime
-                pub struct LifetimeStruct<'a> {
-                    field: &'a str,
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_struct_with_generic() {
-        render_roundtrip_private_idemp(
-            r#"
-                /// A struct with a generic type
-                pub struct GenericStruct<T> {
-                    field: T,
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_struct_with_multiple_generics_and_where_clause() {
-        render_roundtrip_private_idemp(
-            r#"
-                /// A struct with multiple generic types and a where clause
-                pub struct ComplexStruct<T, U>
-                where
-                    T: Clone,
-                    U: Default,
-                {
-                    field1: T,
-                    field2: U,
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_tuple_struct_with_generics() {
-        render_roundtrip_private_idemp(
-            r#"
-                /// A tuple struct with generic types
-                pub struct TupleStruct<T, U>(T, U);
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_struct_with_lifetime_and_generic() {
-        render_roundtrip_private_idemp(
-            r#"
-                /// A struct with both lifetime and generic type
-                pub struct MixedStruct<'a, T> {
-                    reference: &'a str,
-                    value: T,
-                }
-            "#,
-        );
-    }
-
-    #[test]
     fn test_render_simple_trait() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// A simple trait
                 pub trait SimpleTrait {
@@ -1718,7 +1634,7 @@ mod tests {
 
     #[test]
     fn test_render_trait_with_generics() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// A trait with generics
                 pub trait GenericTrait<T> {
@@ -1730,7 +1646,7 @@ mod tests {
 
     #[test]
     fn test_render_trait_with_default_methods() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// A trait with default methods
                 pub trait TraitWithDefault {
@@ -1743,7 +1659,7 @@ mod tests {
 
     #[test]
     fn test_render_unsafe_trait() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// An unsafe trait
                 pub unsafe trait UnsafeTrait {
@@ -1755,7 +1671,7 @@ mod tests {
 
     #[test]
     fn test_render_trait_with_supertraits() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// A trait with supertraits
                 pub trait SuperTrait: std::fmt::Debug + Clone {
@@ -1767,7 +1683,7 @@ mod tests {
 
     #[test]
     fn test_render_trait_with_self_methods() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 pub trait TraitWithSelfMethods {
                     fn method1(self);
@@ -1781,7 +1697,7 @@ mod tests {
 
     #[test]
     fn test_render_trait_with_associated_types() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// A trait with associated types
                 pub trait TraitWithAssocTypes {
@@ -1796,7 +1712,7 @@ mod tests {
 
     #[test]
     fn test_render_simple_enum() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// A simple enum
                 pub enum SimpleEnum {
@@ -1810,7 +1726,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_tuple_variants() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// An enum with tuple variants
                 pub enum TupleEnum {
@@ -1823,7 +1739,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_struct_variants() {
-        render_roundtrip_private_idemp(
+        rt_priv_idemp(
             r#"
                 /// An enum with struct variants
                 pub enum StructEnum {
@@ -1841,7 +1757,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_mixed_variants() {
-        render_roundtrip_private_idemp(
+        rt_priv_idemp(
             r#"
                 /// An enum with mixed variant types
                 pub enum MixedEnum {
@@ -1857,7 +1773,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_discriminants() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// An enum with discriminants
                 pub enum DiscriminantEnum {
@@ -1871,7 +1787,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_generics() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// An enum with generic types
                 pub enum GenericEnum<T, U> {
@@ -1885,7 +1801,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_lifetimes() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// An enum with lifetimes
                 pub enum LifetimeEnum<'a, 'b> {
@@ -1899,7 +1815,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_generics_and_where_clause() {
-        render_roundtrip_private_idemp(
+        rt_priv_idemp(
             r#"
                 /// An enum with generics and a where clause
                 pub enum ComplexEnum<T, U>
@@ -1920,7 +1836,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_lifetimes_and_generics() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// An enum with lifetimes and generics
                 pub enum MixedEnum<'a, T: 'a> {
@@ -1934,7 +1850,7 @@ mod tests {
 
     #[test]
     fn test_render_simple_impl() {
-        render_roundtrip_private_idemp(
+        rt_priv_idemp(
             r#"
                 pub struct MyStruct;
 
@@ -1949,7 +1865,7 @@ mod tests {
 
     #[test]
     fn test_render_impl_with_trait() {
-        render_roundtrip_private_idemp(
+        rt_priv_idemp(
             r#"
                 trait MyTrait {
                     fn trait_method(&self);
@@ -1966,7 +1882,7 @@ mod tests {
 
     #[test]
     fn test_render_impl_with_generics() {
-        render_roundtrip_private_idemp(
+        rt_priv_idemp(
             r#"
                 struct GenericStruct<T>(T);
 
@@ -1979,7 +1895,7 @@ mod tests {
 
     #[test]
     fn test_render_impl_with_associated_types() {
-        render_roundtrip_private_idemp(
+        rt_priv_idemp(
             r#"
                 struct MyIterator<T>(Vec<T>);
 
@@ -1995,7 +1911,7 @@ mod tests {
     #[test]
     fn test_render_unsafe_impl() {
         // FIXME: This appears to be a bug in rustdoc - unsafe is not set on the unsafe impl block.
-        render_roundtrip_private(
+        rt_private(
             r#"
                 unsafe trait Foo {}
 
@@ -2015,7 +1931,7 @@ mod tests {
 
     #[test]
     fn test_render_imports() {
-        render_roundtrip(
+        rt(
             r#"
                 use std::collections::HashMap;
                 pub use std::rc::Rc;
@@ -2039,13 +1955,13 @@ mod tests {
                 pub use private::PrivateStruct;
             "#;
 
-        render_roundtrip(
+        rt(
             input,
             r#"
                 pub struct PrivateStruct;
             "#,
         );
-        render_roundtrip_private(
+        rt_private(
             input,
             r#"
                 mod private {
@@ -2078,7 +1994,7 @@ mod tests {
         "#;
 
         // Test with blanket impls disabled
-        render_roundtrip(
+        rt(
             source,
             r#"
                 pub trait MyTrait {
@@ -2122,7 +2038,7 @@ mod tests {
 
     #[test]
     fn test_render_complex_generic_args() {
-        render_roundtrip_private_idemp(
+        rt_priv_idemp(
             r#"
                 pub struct Complex<T, U> {
                     data: Vec<T>,
@@ -2142,7 +2058,7 @@ mod tests {
 
     #[test]
     fn test_render_dyn_trait() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 pub trait MyTrait {
                     fn my_method(&self);
@@ -2157,7 +2073,7 @@ mod tests {
 
     #[test]
     fn test_render_complex_where_clause() {
-        render_roundtrip_private_idemp(
+        rt_priv_idemp(
             r#"
                 pub trait MyTrait {
                     type Associated;
@@ -2178,7 +2094,7 @@ mod tests {
 
     #[test]
     fn test_render_associated_type_bounds() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 pub trait Container {
                     type Item;
@@ -2195,7 +2111,7 @@ mod tests {
 
     #[test]
     fn test_render_complex_function_signature() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 pub async fn complex_function<T, U, F>(
                     arg1: T,
@@ -2214,7 +2130,7 @@ mod tests {
 
     #[test]
     fn test_render_type_alias_with_bounds() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
             pub trait Trait<T> {
                 fn as_ref(&self) -> &T;
@@ -2229,7 +2145,7 @@ mod tests {
 
     #[test]
     fn test_render_type_alias() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 /// A simple type alias
                 pub type SimpleAlias = Vec<String>;
@@ -2245,7 +2161,7 @@ mod tests {
 
     #[test]
     fn test_render_deserialize_impl() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
             pub trait Deserialize<'de>: Sized {
                 fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -2272,7 +2188,7 @@ mod tests {
 
     #[test]
     fn test_render_impl_with_complex_generic_bounds() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
             pub fn a(v: impl Into<String>) {}
             "#,
@@ -2281,7 +2197,7 @@ mod tests {
 
     #[test]
     fn test_render_parentheses_dyn_trait() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 pub fn myfn() -> &'static (dyn std::any::Any + 'static) { }
             "#,
@@ -2290,7 +2206,7 @@ mod tests {
 
     #[test]
     fn test_render_parentheses_dyn_trait_arg() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 pub fn myfn(a: &dyn std::any::Any) { }
             "#,
@@ -2299,7 +2215,7 @@ mod tests {
 
     #[test]
     fn test_reserved_word() {
-        render_roundtrip_idemp(
+        rt_idemp(
             r#"
                 pub fn r#try() { }
             "#,
@@ -2340,7 +2256,7 @@ mod tests {
             pub struct PublicStruct;
         "#;
 
-        render_roundtrip(source, expected_output);
+        rt(source, expected_output);
     }
 
     #[test]
@@ -2374,7 +2290,7 @@ mod tests {
             pub struct PrivateStruct2;
         "#;
 
-        render_roundtrip(source, expected_output);
+        rt(source, expected_output);
     }
 
     #[test]
@@ -2410,7 +2326,7 @@ mod tests {
             }
         "#;
 
-        render_roundtrip(source, expected_output);
+        rt(source, expected_output);
     }
 
     #[test]
@@ -2445,7 +2361,7 @@ mod tests {
             }
         "#;
 
-        render_roundtrip(source, expected_output);
+        rt(source, expected_output);
     }
 
     #[test]
@@ -2490,7 +2406,7 @@ mod tests {
             pub fn route(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {}
         "#;
 
-        render_procmacro_roundtrip(source, expected_output);
+        rt_procmacro(source, expected_output);
     }
 
     #[test]
@@ -2518,92 +2434,159 @@ mod tests {
             pub fn debug_format(attr: proc_macro::TokenStream, item: proc_macro::TokenStream) -> proc_macro::TokenStream {}
         "#;
 
-        render_procmacro_roundtrip(source, expected_output);
+        rt_procmacro(source, expected_output);
     }
 
     #[test]
-    fn test_render_struct_with_private_fields() {
-        let source = r#"
-            pub struct PublicStruct {
-                pub public_field: i32,
-                private_field: String,
-            }
-        "#;
-
-        // Test with private items disabled
-        render_roundtrip(
-            source,
+    fn test_plain_struct() {
+        rt_priv_idemp_multi(&[
             r#"
-            pub struct PublicStruct {
-                pub public_field: i32,
-            }
+                pub struct EmptyStruct {}
             "#,
-        );
-
-        // Test with private items enabled
-        render_roundtrip_private(
-            source,
             r#"
-            pub struct PublicStruct {
-                pub public_field: i32,
-                private_field: String,
-            }
+                pub struct S {
+                    pub field1: i32,
+                    field2: String,
+                }
             "#,
-        );
+            r#"
+                /// A plain struct with generic types
+                pub struct S<T, U> {
+                    pub field1: T,
+                    field2: U,
+                }
+            "#,
+            r#"
+                pub struct S<T, U>
+                where
+                    T: Clone,
+                    U: Default,
+                {
+                    pub field1: T,
+                    field2: U,
+                }
+            "#,
+            r#"
+                /// A struct with a lifetime
+                pub struct S<'a> {
+                    field: &'a str,
+                }
+            "#,
+            r#"
+                /// A struct with both lifetime and generic type
+                pub struct S<'a, T> {
+                    reference: &'a str,
+                    value: T,
+                }
+            "#,
+        ]);
+
+        // Test for public struct with private fields
+        rt_multi(&[
+            (
+                r#"
+                    pub struct S {
+                        pub field1: i32,
+                        field2: String,
+                    }
+                "#,
+                r#"
+                    pub struct S {
+                        pub field1: i32,
+                    }
+                "#,
+            ),
+            (
+                r#"
+                    pub struct S<T, U> {
+                        pub field1: T,
+                        field2: U,
+                    }
+                "#,
+                r#"
+                    pub struct S<T, U> {
+                        pub field1: T,
+                    }
+                "#,
+            ),
+            (
+                r#"
+                    pub struct S<T, U>
+                    where
+                        T: Clone,
+                        U: Default,
+                    {
+                        pub field1: T,
+                        field2: U,
+                    }
+                "#,
+                r#"
+                    pub struct S<T, U>
+                    where
+                        T: Clone,
+                        U: Default,
+                    {
+                        pub field1: T,
+                    }
+                "#,
+            ),
+            (
+                r#"
+                    pub struct S {
+                        pub public_field: i32,
+                        private_field: String,
+                    }
+                "#,
+                r#"
+                    pub struct S {
+                        pub public_field: i32,
+                    }
+                "#,
+            ),
+            (
+                r#"
+                    pub struct S {
+                        private_field: String,
+                    }
+                "#,
+                r#"
+                    pub struct S {}
+                "#,
+            ),
+        ]);
     }
 
     #[test]
-    fn test_render_struct_all_private_fields() {
-        let source = r#"
-            pub struct AllPrivateStruct {
-                field1: i32,
-                field2: String,
-            }
-        "#;
-
-        // Test with private items disabled
-        render_roundtrip(
-            source,
+    fn test_tuple_struct() {
+        rt_priv_idemp_multi(&[
+            r#" pub struct S(pub i32, String); "#,
             r#"
-            pub struct AllPrivateStruct {
-            }
+                /// A tuple struct with generic types
+                pub struct S<T, U>(T, U);
             "#,
-        );
-
-        // Test with private items enabled
-        render_roundtrip_private(
-            source,
             r#"
-            pub struct AllPrivateStruct {
-                field1: i32,
-                field2: String,
-            }
+                pub struct S<T, U>(T, U);
             "#,
-        );
-    }
+        ]);
 
-    #[test]
-    fn test_render_tuple_struct_with_private_fields() {
-        let source = r#"
-            pub struct TupleStruct(pub i32, String);
-        "#;
-
-        render_roundtrip_private_idemp(source);
-        render_roundtrip(
-            source,
-            r#"
-            pub struct TupleStruct(pub i32, _);
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_empty_struct() {
-        let source = r#"
-            pub struct EmptyStruct {}
-        "#;
-
-        render_roundtrip_idemp(source);
-        render_roundtrip_private_idemp(source);
+        // Test for public struct with private fields
+        rt_multi(&[
+            (
+                r#"
+                    pub struct S(pub i32, String);
+                "#,
+                r#"
+                    pub struct S(pub i32, _);
+                "#,
+            ),
+            (
+                r#"
+                    pub struct S<T, U>(T, U);
+                "#,
+                r#"
+                    pub struct S<T, U>(_, _);
+                "#,
+            ),
+        ]);
     }
 }
