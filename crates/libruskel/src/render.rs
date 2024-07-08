@@ -127,7 +127,7 @@ impl Renderer {
         match &item.inner {
             ItemEnum::Module(_) => self.render_module(item, crate_data),
             ItemEnum::Struct(_) => self.render_struct(item, crate_data),
-            ItemEnum::Enum(_) => Self::render_enum(item, crate_data),
+            ItemEnum::Enum(_) => self.render_enum(item, crate_data),
             ItemEnum::Trait(_) => Self::render_trait(item, crate_data),
             ItemEnum::Import(_) => self.render_import(item, crate_data),
             ItemEnum::Function(_) => Self::render_function(item, false),
@@ -391,7 +391,7 @@ impl Renderer {
         }
     }
 
-    fn render_enum(item: &Item, crate_data: &Crate) -> String {
+    fn render_enum(&self, item: &Item, crate_data: &Crate) -> String {
         let visibility = match &item.visibility {
             Visibility::Public => "pub ",
             _ => "",
@@ -420,7 +420,7 @@ impl Renderer {
 
             for variant_id in &enum_.variants {
                 if let Some(variant_item) = crate_data.index.get(variant_id) {
-                    output.push_str(&Self::render_enum_variant(variant_item, crate_data));
+                    output.push_str(&self.render_enum_variant(variant_item, crate_data));
                 }
             }
 
@@ -430,7 +430,7 @@ impl Renderer {
         output
     }
 
-    fn render_enum_variant(item: &Item, crate_data: &Crate) -> String {
+    fn render_enum_variant(&self, item: &Item, crate_data: &Crate) -> String {
         let mut output = String::new();
 
         // Add doc comment if present
@@ -471,7 +471,7 @@ impl Renderer {
                         if let Some(_field_item) = crate_data.index.get(field) {
                             output.push_str(&format!(
                                 "        {}\n",
-                                Self::render_struct_field(crate_data, field)
+                                self.render_struct_field(crate_data, field)
                             ));
                         }
                     }
@@ -628,7 +628,14 @@ impl Renderer {
                                             Visibility::Public => "pub ",
                                             _ => "",
                                         };
-                                        format!("{}{}", visibility, Self::render_type(ty))
+
+                                        if !self.render_private_items
+                                            && !matches!(field_item.visibility, Visibility::Public)
+                                        {
+                                            "_".to_string()
+                                        } else {
+                                            format!("{}{}", visibility, Self::render_type(ty))
+                                        }
                                     } else {
                                         "".to_string()
                                     }
@@ -657,7 +664,7 @@ impl Renderer {
                         where_clause
                     ));
                     for field in fields {
-                        output.push_str(&Self::render_struct_field(crate_data, field));
+                        output.push_str(&self.render_struct_field(crate_data, field));
                     }
                     output.push_str("}\n\n");
                 }
@@ -678,24 +685,30 @@ impl Renderer {
         output
     }
 
-    fn render_struct_field(crate_data: &Crate, field_id: &Id) -> String {
+    fn render_struct_field(&self, crate_data: &Crate, field_id: &Id) -> String {
         if let Some(field_item) = crate_data.index.get(field_id) {
-            let visibility = match &field_item.visibility {
-                Visibility::Public => "pub ",
-                _ => "",
-            };
-            if let ItemEnum::StructField(ty) = &field_item.inner {
-                format!(
-                    "{}{}: {},\n",
-                    visibility,
-                    Self::render_name(&field_item.name),
-                    Self::render_type(ty)
-                )
+            // Only render the field if it's public or render_private_items is true
+            if matches!(field_item.visibility, Visibility::Public) || self.render_private_items {
+                let visibility = match &field_item.visibility {
+                    Visibility::Public => "pub ",
+                    _ => "",
+                };
+
+                if let ItemEnum::StructField(ty) = &field_item.inner {
+                    format!(
+                        "{}{}: {},\n",
+                        visibility,
+                        Self::render_name(&field_item.name),
+                        Self::render_type(ty)
+                    )
+                } else {
+                    "// Unknown field type\n".to_string()
+                }
             } else {
-                "// Unknown field type\n".to_string()
+                String::new() // Don't render private fields if render_private_items is false
             }
         } else {
-            "// Field not found\n".to_string()
+            String::new() // Field not found, return empty string
         }
     }
 
@@ -1589,7 +1602,7 @@ mod tests {
 
     #[test]
     fn test_render_tuple_struct() {
-        render_roundtrip_idemp(
+        render_roundtrip_private_idemp(
             r#"
                 /// A tuple struct
                 pub struct TupleStruct(pub i32, String);
@@ -1599,7 +1612,7 @@ mod tests {
 
     #[test]
     fn test_render_plain_struct() {
-        render_roundtrip_idemp(
+        render_roundtrip_private_idemp(
             r#"
                 /// A plain struct
                 pub struct PlainStruct {
@@ -1612,7 +1625,7 @@ mod tests {
 
     #[test]
     fn test_render_generic_struct() {
-        render_roundtrip_idemp(
+        render_roundtrip_private_idemp(
             r#"
                 /// A generic struct
                 pub struct GenericStruct<T, U>
@@ -1629,7 +1642,7 @@ mod tests {
 
     #[test]
     fn test_render_struct_with_lifetime() {
-        render_roundtrip_idemp(
+        render_roundtrip_private_idemp(
             r#"
                 /// A struct with a lifetime
                 pub struct LifetimeStruct<'a> {
@@ -1641,7 +1654,7 @@ mod tests {
 
     #[test]
     fn test_render_struct_with_generic() {
-        render_roundtrip_idemp(
+        render_roundtrip_private_idemp(
             r#"
                 /// A struct with a generic type
                 pub struct GenericStruct<T> {
@@ -1653,7 +1666,7 @@ mod tests {
 
     #[test]
     fn test_render_struct_with_multiple_generics_and_where_clause() {
-        render_roundtrip_idemp(
+        render_roundtrip_private_idemp(
             r#"
                 /// A struct with multiple generic types and a where clause
                 pub struct ComplexStruct<T, U>
@@ -1670,7 +1683,7 @@ mod tests {
 
     #[test]
     fn test_render_tuple_struct_with_generics() {
-        render_roundtrip_idemp(
+        render_roundtrip_private_idemp(
             r#"
                 /// A tuple struct with generic types
                 pub struct TupleStruct<T, U>(T, U);
@@ -1680,7 +1693,7 @@ mod tests {
 
     #[test]
     fn test_render_struct_with_lifetime_and_generic() {
-        render_roundtrip_idemp(
+        render_roundtrip_private_idemp(
             r#"
                 /// A struct with both lifetime and generic type
                 pub struct MixedStruct<'a, T> {
@@ -1810,7 +1823,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_struct_variants() {
-        render_roundtrip_idemp(
+        render_roundtrip_private_idemp(
             r#"
                 /// An enum with struct variants
                 pub enum StructEnum {
@@ -1828,7 +1841,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_mixed_variants() {
-        render_roundtrip_idemp(
+        render_roundtrip_private_idemp(
             r#"
                 /// An enum with mixed variant types
                 pub enum MixedEnum {
@@ -1886,7 +1899,7 @@ mod tests {
 
     #[test]
     fn test_render_enum_with_generics_and_where_clause() {
-        render_roundtrip_idemp(
+        render_roundtrip_private_idemp(
             r#"
                 /// An enum with generics and a where clause
                 pub enum ComplexEnum<T, U>
@@ -2109,7 +2122,7 @@ mod tests {
 
     #[test]
     fn test_render_complex_generic_args() {
-        render_roundtrip_idemp(
+        render_roundtrip_private_idemp(
             r#"
                 pub struct Complex<T, U> {
                     data: Vec<T>,
@@ -2144,7 +2157,7 @@ mod tests {
 
     #[test]
     fn test_render_complex_where_clause() {
-        render_roundtrip_idemp(
+        render_roundtrip_private_idemp(
             r#"
                 pub trait MyTrait {
                     type Associated;
@@ -2506,5 +2519,91 @@ mod tests {
         "#;
 
         render_procmacro_roundtrip(source, expected_output);
+    }
+
+    #[test]
+    fn test_render_struct_with_private_fields() {
+        let source = r#"
+            pub struct PublicStruct {
+                pub public_field: i32,
+                private_field: String,
+            }
+        "#;
+
+        // Test with private items disabled
+        render_roundtrip(
+            source,
+            r#"
+            pub struct PublicStruct {
+                pub public_field: i32,
+            }
+            "#,
+        );
+
+        // Test with private items enabled
+        render_roundtrip_private(
+            source,
+            r#"
+            pub struct PublicStruct {
+                pub public_field: i32,
+                private_field: String,
+            }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_struct_all_private_fields() {
+        let source = r#"
+            pub struct AllPrivateStruct {
+                field1: i32,
+                field2: String,
+            }
+        "#;
+
+        // Test with private items disabled
+        render_roundtrip(
+            source,
+            r#"
+            pub struct AllPrivateStruct {
+            }
+            "#,
+        );
+
+        // Test with private items enabled
+        render_roundtrip_private(
+            source,
+            r#"
+            pub struct AllPrivateStruct {
+                field1: i32,
+                field2: String,
+            }
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_tuple_struct_with_private_fields() {
+        let source = r#"
+            pub struct TupleStruct(pub i32, String);
+        "#;
+
+        render_roundtrip_private_idemp(source);
+        render_roundtrip(
+            source,
+            r#"
+            pub struct TupleStruct(pub i32, _);
+            "#,
+        );
+    }
+
+    #[test]
+    fn test_render_empty_struct() {
+        let source = r#"
+            pub struct EmptyStruct {}
+        "#;
+
+        render_roundtrip_idemp(source);
+        render_roundtrip_private_idemp(source);
     }
 }

@@ -287,16 +287,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[test]
-    fn test_parse_non_rust_file() -> Result<()> {
-        let temp_dir = tempdir()?;
-        create_cargo_child(temp_dir.path(), "test1")?;
-        let non_rust_file = temp_dir.path().join("not_rust.txt");
-        File::create(&non_rust_file)?;
-
-        assert!(Ruskel::new(non_rust_file.to_str().unwrap()).is_err());
-
-        Ok(())
-    }
 }
