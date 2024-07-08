@@ -1,4 +1,4 @@
-use rust_format::{Formatter, RustFmt};
+use rust_format::{Config, Formatter, RustFmt};
 use rustdoc_types::{
     Crate, FnDecl, FunctionPointer, GenericArg, GenericArgs, GenericBound, GenericParamDef,
     GenericParamDefKind, Generics, Id, Impl, Item, ItemEnum, Path, PolyTrait, StructKind, Term,
@@ -23,8 +23,10 @@ impl Default for Renderer {
 
 impl Renderer {
     fn new() -> Self {
+        let config = Config::new_str().option("brace_style", "PreferSameLine");
+
         Self {
-            formatter: RustFmt::default(),
+            formatter: RustFmt::from_config(config),
             render_auto_impls: false,
             render_private_items: false,
             render_blanket_impls: false,
@@ -296,7 +298,7 @@ impl Renderer {
                 }
             }
 
-            output.push_str("}\n");
+            output.push_str("}\n\n");
         }
 
         output
@@ -556,7 +558,7 @@ impl Renderer {
             match &struct_.kind {
                 StructKind::Unit => {
                     output.push_str(&format!(
-                        "{}struct {}{}{};\n",
+                        "{}struct {}{}{};\n\n",
                         visibility,
                         Self::render_name(&item.name),
                         generics,
@@ -586,7 +588,7 @@ impl Renderer {
                         .collect::<Vec<_>>()
                         .join(", ");
                     output.push_str(&format!(
-                        "{}struct {}{}({}){};\n",
+                        "{}struct {}{}({}){};\n\n",
                         visibility,
                         Self::render_name(&item.name),
                         generics,
@@ -605,7 +607,7 @@ impl Renderer {
                     for field in fields {
                         output.push_str(&Self::render_struct_field(crate_data, field));
                     }
-                    output.push_str("}\n");
+                    output.push_str("}\n\n");
                 }
             }
 
@@ -689,7 +691,7 @@ impl Renderer {
             }
         }
 
-        output.push_str("}\n");
+        output.push_str("}\n\n");
         output
     }
 
@@ -770,9 +772,9 @@ impl Renderer {
 
             // Use semicolon for trait method declarations, empty body for implementations
             if is_trait_method && !function.has_body {
-                output.push_str(";\n");
+                output.push_str(";\n\n");
             } else {
-                output.push_str(" {}\n");
+                output.push_str(" {}\n\n");
             }
         }
 

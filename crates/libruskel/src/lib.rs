@@ -12,11 +12,9 @@ use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
 use rustdoc_types::Crate;
 
 mod error;
-mod filter;
 mod render;
 
 pub use crate::error::{Result, RuskelError};
-pub use crate::filter::Filter;
 pub use crate::render::Renderer;
 
 #[derive(Debug)]
@@ -26,9 +24,6 @@ pub struct Ruskel {
 
     /// Root directory of the workspace containing the target crate.
     pub workspace_root: PathBuf,
-
-    /// Filtering options for output.
-    pub filter: Filter,
 
     /// Whether to build without default features.
     pub no_default_features: bool,
@@ -51,12 +46,10 @@ impl Ruskel {
             let canonical_path = target_path.canonicalize()?;
             let manifest_path = Self::find_manifest(&canonical_path)?;
             let workspace_root = Self::find_workspace_root(&manifest_path)?;
-            let filter = Filter::from_path(&canonical_path, &workspace_root)?;
 
             Ok(Ruskel {
                 manifest_path,
                 workspace_root,
-                filter,
                 no_default_features: false,
                 all_features: false,
                 features: Vec::new(),
@@ -65,13 +58,11 @@ impl Ruskel {
         } else {
             // Assume it's a module name if the path doesn't exist
             let workspace_root = Self::find_module(target)?;
-            let filter = Filter::from_path(&workspace_root, &workspace_root)?;
             let manifest_path = workspace_root.join("Cargo.toml");
 
             Ok(Ruskel {
                 manifest_path,
                 workspace_root,
-                filter,
                 no_default_features: false,
                 all_features: false,
                 features: Vec::new(),
@@ -153,8 +144,7 @@ impl Ruskel {
     }
 
     pub fn pretty_raw_json(&self) -> Result<String> {
-        let crate_data = self.filter.filter_crate(&self.json()?);
-        serde_json::to_string_pretty(&crate_data).map_err(RuskelError::JsonParseError)
+        serde_json::to_string_pretty(&self.json()?).map_err(RuskelError::JsonParseError)
     }
 
     fn find_workspace_root(manifest_path: &Path) -> Result<PathBuf> {
@@ -265,11 +255,6 @@ mod tests {
             temp_dir.path().join("member1").join("Cargo.toml")
         );
         assert_path_eq!(target.workspace_root, temp_dir.path());
-        assert_eq!(
-            target.filter,
-            Filter::File(PathBuf::from("member1/src/lib.rs"))
-        );
-
         Ok(())
     }
 
@@ -290,7 +275,6 @@ mod tests {
         let target = Ruskel::new(temp_dir.path().to_str().unwrap())?;
         assert_path_eq!(target.manifest_path, temp_dir.path().join("Cargo.toml"));
         assert_path_eq!(target.workspace_root, temp_dir.path());
-        assert_eq!(target.filter, Filter::None);
 
         Ok(())
     }
@@ -302,7 +286,6 @@ mod tests {
         let target = Ruskel::new(temp_dir.path().to_str().unwrap())?;
         assert_path_eq!(target.manifest_path, temp_dir.path().join("Cargo.toml"));
         assert_path_eq!(target.workspace_root, temp_dir.path());
-        assert_eq!(target.filter, Filter::None);
 
         Ok(())
     }
@@ -315,7 +298,6 @@ mod tests {
         let target = Ruskel::new(member1_dir.to_str().unwrap())?;
         assert_path_eq!(target.manifest_path, member1_dir.join("Cargo.toml"));
         assert_path_eq!(target.workspace_root, temp_dir.path());
-        assert_eq!(target.filter, Filter::None);
 
         Ok(())
     }
