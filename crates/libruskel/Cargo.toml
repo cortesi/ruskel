@@ -11,7 +11,7 @@ rust-format = "0.3.4"
 rustdoc-json = "0.9.1"
 rustdoc-types = "0.27.0"
 serde_json = "1.0.120"
-syntect = { version = "5.2.0", default-features = false, features = ["regex-onig"] }
+syntect = { version = "5.2.0", default-features = false, features = ["default-syntaxes", "default-themes", "parsing", "regex-onig"] }
 tempfile = "3.10.1"
 thiserror = "1.0.61"
 

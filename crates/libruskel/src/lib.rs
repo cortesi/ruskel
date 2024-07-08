@@ -4,6 +4,10 @@ use std::path::{Path, PathBuf};
 use cargo::core::Workspace;
 use cargo::ops;
 use cargo::util::context::GlobalContext;
+use syntect::easy::HighlightLines;
+use syntect::highlighting::ThemeSet;
+use syntect::parsing::SyntaxSet;
+use syntect::util::{as_24_bit_terminal_escaped, LinesWithEndings};
 
 use rustdoc_types::Crate;
 
@@ -34,6 +38,9 @@ pub struct Ruskel {
 
     /// List of specific features to enable.
     pub features: Vec<String>,
+
+    /// Whether to apply syntax highlighting to the output.
+    pub highlight: bool,
 }
 
 impl Ruskel {
@@ -53,6 +60,7 @@ impl Ruskel {
                 no_default_features: false,
                 all_features: false,
                 features: Vec::new(),
+                highlight: false,
             })
         } else {
             // Assume it's a module name if the path doesn't exist
@@ -67,8 +75,14 @@ impl Ruskel {
                 no_default_features: false,
                 all_features: false,
                 features: Vec::new(),
+                highlight: false,
             })
         }
+    }
+
+    pub fn with_highlighting(mut self, highlight: bool) -> Self {
+        self.highlight = highlight;
+        self
     }
 
     pub fn with_no_default_features(mut self, value: bool) -> Self {
@@ -91,6 +105,23 @@ impl Ruskel {
         self
     }
 
+    fn highlight_code(&self, code: &str) -> Result<String> {
+        let ss = SyntaxSet::load_defaults_newlines();
+        let ts = ThemeSet::load_defaults();
+
+        let syntax = ss.find_syntax_by_extension("rs").unwrap();
+        let mut h = HighlightLines::new(syntax, &ts.themes["Solarized (dark)"]);
+
+        let mut output = String::new();
+        for line in LinesWithEndings::from(code) {
+            let ranges: Vec<(syntect::highlighting::Style, &str)> = h.highlight_line(line, &ss)?;
+            let escaped = as_24_bit_terminal_escaped(&ranges[..], false);
+            output.push_str(&escaped);
+        }
+
+        Ok(output)
+    }
+
     pub fn json(&self) -> Result<Crate> {
         let json_path = rustdoc_json::Builder::default()
             .toolchain("nightly")
@@ -104,6 +135,21 @@ impl Ruskel {
         let json_content = fs::read_to_string(&json_path)?;
         let crate_data: Crate = serde_json::from_str(&json_content)?;
         Ok(crate_data)
+    }
+
+    pub fn render(&self, auto_impls: bool, private_items: bool) -> Result<String> {
+        let renderer = Renderer::default()
+            .with_auto_impls(auto_impls)
+            .with_private_items(private_items);
+
+        let crate_data = self.json()?;
+        let rendered = renderer.render(&crate_data)?;
+
+        if self.highlight {
+            self.highlight_code(&rendered)
+        } else {
+            Ok(rendered)
+        }
     }
 
     pub fn pretty_raw_json(&self) -> Result<String> {

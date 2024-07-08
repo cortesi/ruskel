@@ -1,5 +1,5 @@
 use clap::Parser;
-use libruskel::Renderer;
+use libruskel::Ruskel;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -31,6 +31,10 @@ struct Cli {
     /// Specify features to enable
     #[arg(long, value_delimiter = ',')]
     features: Vec<String>,
+
+    /// Enable syntax highlighting for the output
+    #[arg(long, default_value_t = false)]
+    highlight: bool,
 }
 
 fn main() {
@@ -43,21 +47,17 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
-    let rs = libruskel::Ruskel::new(&cli.target)?
+    let rs = Ruskel::new(&cli.target)?
         .with_no_default_features(cli.no_default_features)
         .with_all_features(cli.all_features)
-        .with_features(cli.features);
+        .with_features(cli.features)
+        .with_highlighting(cli.highlight);
 
     if cli.raw {
         let json = rs.pretty_raw_json()?;
         println!("{}", json);
     } else {
-        let renderer = Renderer::default()
-            .with_auto_impls(cli.auto_impls)
-            .with_private_items(cli.private);
-
-        let crate_data = rs.json()?;
-        let rendered = renderer.render(&crate_data)?;
+        let rendered = rs.render(cli.auto_impls, cli.private)?;
         println!("{}", rendered);
     }
 

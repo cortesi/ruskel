@@ -26,6 +26,9 @@ pub enum RuskelError {
 
     #[error("Formatting error: {0}")]
     FormatError(#[from] rust_format::Error),
+
+    #[error("Syntect error: {0}")]
+    SyntectError(#[from] syntect::Error),
 }
 
 pub type Result<T> = std::result::Result<T, RuskelError>;
