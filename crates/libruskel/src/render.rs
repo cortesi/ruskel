@@ -756,45 +756,60 @@ impl Renderer {
     }
 
     fn render_generics(generics: &Generics) -> String {
-        if generics.params.is_empty() {
+        let params: Vec<String> = generics
+            .params
+            .iter()
+            .filter_map(Self::render_generic_param_def)
+            .collect();
+
+        if params.is_empty() {
             String::new()
         } else {
-            let params: Vec<String> = generics
-                .params
-                .iter()
-                .map(Self::render_generic_param_def)
-                .collect();
             format!("<{}>", params.join(", "))
         }
     }
 
     fn render_where_clause(generics: &Generics) -> String {
-        if generics.where_predicates.is_empty() {
+        let predicates: Vec<String> = generics
+            .where_predicates
+            .iter()
+            .filter_map(Self::render_where_predicate)
+            .collect();
+
+        if predicates.is_empty() {
             String::new()
         } else {
-            let predicates: Vec<String> = generics
-                .where_predicates
-                .iter()
-                .map(Self::render_where_predicate)
-                .collect();
             format!(" where {}", predicates.join(", "))
         }
     }
 
-    fn render_where_predicate(pred: &WherePredicate) -> String {
+    fn render_where_predicate(pred: &WherePredicate) -> Option<String> {
         match pred {
             WherePredicate::BoundPredicate {
                 type_,
                 bounds,
                 generic_params,
             } => {
+                // Check if this is a synthetic type
+                if let Type::Generic(_name) = type_ {
+                    if generic_params.iter().any(|param| {
+                    matches!(&param.kind, GenericParamDefKind::Type { synthetic, .. } if *synthetic)
+                }) {
+                    return None;
+                }
+                }
+
                 let hrtb = if !generic_params.is_empty() {
                     let params = generic_params
                         .iter()
-                        .map(Self::render_generic_param_def)
+                        .filter_map(Self::render_generic_param_def)
                         .collect::<Vec<_>>()
                         .join(", ");
-                    format!("for<{}> ", params)
+                    if params.is_empty() {
+                        String::new()
+                    } else {
+                        format!("for<{}> ", params)
+                    }
                 } else {
                     String::new()
                 };
@@ -805,18 +820,25 @@ impl Renderer {
                     .collect::<Vec<_>>()
                     .join(" + ");
 
-                format!("{}{}: {}", hrtb, Self::render_type(type_), bounds_str)
+                Some(format!(
+                    "{}{}: {}",
+                    hrtb,
+                    Self::render_type(type_),
+                    bounds_str
+                ))
             }
             WherePredicate::LifetimePredicate { lifetime, outlives } => {
                 if outlives.is_empty() {
-                    lifetime.clone()
+                    Some(lifetime.clone())
                 } else {
-                    format!("{}: {}", lifetime, outlives.join(" + "))
+                    Some(format!("{}: {}", lifetime, outlives.join(" + ")))
                 }
             }
-            WherePredicate::EqPredicate { lhs, rhs } => {
-                format!("{} = {}", Self::render_type(lhs), Self::render_term(rhs))
-            }
+            WherePredicate::EqPredicate { lhs, rhs } => Some(format!(
+                "{} = {}",
+                Self::render_type(lhs),
+                Self::render_term(rhs)
+            )),
         }
     }
 
@@ -959,11 +981,16 @@ impl Renderer {
             let params = poly_trait
                 .generic_params
                 .iter()
-                .map(Self::render_generic_param_def)
-                .collect::<Vec<_>>()
-                .join(", ");
-            format!("for<{}> ", params)
+                .filter_map(Self::render_generic_param_def)
+                .collect::<Vec<_>>();
+
+            if params.is_empty() {
+                String::new()
+            } else {
+                format!("for<{}> ", params.join(", "))
+            }
         };
+
         format!(
             "{}{}",
             generic_params,
@@ -1074,28 +1101,17 @@ impl Renderer {
                     TraitBoundModifier::Maybe => "?",
                     TraitBoundModifier::MaybeConst => "~const",
                 };
-                let generic_params = if generic_params.is_empty() {
-                    String::new()
-                } else {
-                    let params = generic_params
-                        .iter()
-                        .map(Self::render_generic_param_def)
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    format!("for<{}> ", params)
+                let poly_trait = PolyTrait {
+                    trait_: trait_.clone(),
+                    generic_params: generic_params.clone(),
                 };
-                format!(
-                    "{}{}{}",
-                    modifier,
-                    generic_params,
-                    Self::render_path(trait_)
-                )
+                format!("{}{}", modifier, Self::render_poly_trait(&poly_trait))
             }
             GenericBound::Outlives(lifetime) => lifetime.clone(),
         }
     }
 
-    fn render_generic_param_def(param: &GenericParamDef) -> String {
+    fn render_generic_param_def(param: &GenericParamDef) -> Option<String> {
         match &param.kind {
             GenericParamDefKind::Lifetime { outlives } => {
                 let outlives = if outlives.is_empty() {
@@ -1103,40 +1119,46 @@ impl Renderer {
                 } else {
                     format!(": {}", outlives.join(" + "))
                 };
-                format!("{}{}", param.name, outlives)
+                Some(format!("{}{}", param.name, outlives))
             }
             GenericParamDefKind::Type {
-                bounds, default, ..
+                bounds,
+                default,
+                synthetic,
             } => {
-                let bounds = if bounds.is_empty() {
-                    String::new()
+                if *synthetic {
+                    None
                 } else {
-                    format!(
-                        ": {}",
-                        bounds
-                            .iter()
-                            .map(Self::render_generic_bound)
-                            .collect::<Vec<_>>()
-                            .join(" + ")
-                    )
-                };
-                let default = default
-                    .as_ref()
-                    .map(|ty| format!(" = {}", Self::render_type(ty)))
-                    .unwrap_or_default();
-                format!("{}{}{}", param.name, bounds, default)
+                    let bounds = if bounds.is_empty() {
+                        String::new()
+                    } else {
+                        format!(
+                            ": {}",
+                            bounds
+                                .iter()
+                                .map(Self::render_generic_bound)
+                                .collect::<Vec<_>>()
+                                .join(" + ")
+                        )
+                    };
+                    let default = default
+                        .as_ref()
+                        .map(|ty| format!(" = {}", Self::render_type(ty)))
+                        .unwrap_or_default();
+                    Some(format!("{}{}{}", param.name, bounds, default))
+                }
             }
             GenericParamDefKind::Const { type_, default } => {
                 let default = default
                     .as_ref()
                     .map(|expr| format!(" = {}", expr))
                     .unwrap_or_default();
-                format!(
+                Some(format!(
                     "const {}: {}{}",
                     param.name,
                     Self::render_type(type_),
                     default
-                )
+                ))
             }
         }
     }
