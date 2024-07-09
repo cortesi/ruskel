@@ -829,16 +829,16 @@ impl Renderer {
 
             let where_clause = Self::render_where_clause(&function.generics);
 
-            // Handle unsafe, const, and async keywords
+            // Handle const, async, and unsafe keywords in the correct order
             let mut prefixes = Vec::new();
             if function.header.const_ {
                 prefixes.push("const");
             }
-            if function.header.unsafe_ {
-                prefixes.push("unsafe");
-            }
             if function.header.async_ {
                 prefixes.push("async");
+            }
+            if function.header.unsafe_ {
+                prefixes.push("unsafe");
             }
             let prefix = if !prefixes.is_empty() {
                 format!("{} ", prefixes.join(" "))
@@ -1481,134 +1481,6 @@ mod tests {
     }
 
     #[test]
-    fn test_render_public_function() {
-        rt_idemp(
-            r#"
-                /// This is a documented function.
-                pub fn test_function() {}
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_private_function() {
-        rt_priv_idemp(
-            r#"
-            fn private_function() {}
-            "#,
-        );
-        rt(
-            r#"
-            fn private_function() {
-                // Function body
-            }
-            "#,
-            r#""#,
-        );
-    }
-
-    #[test]
-    fn test_render_function_with_args_and_return() {
-        rt_idemp(
-            r#"
-            pub fn complex_function(arg1: i32, arg2: String) -> bool {}
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_function_with_docs() {
-        rt_idemp(
-            r#"
-            /// This is a documented function.
-            /// It has multiple lines of documentation.
-            pub fn documented_function() {
-            }
-        "#,
-        );
-    }
-
-    #[test]
-    fn test_render_complex_type() {
-        rt_idemp(
-            r#"
-                pub fn complex_type_function<'a>(arg: &'a mut [u8]) {
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_function_pointer() {
-        rt_idemp(
-            r#"
-                pub fn function_with_fn_pointer(f: fn(arg1: i32, arg2: String) -> bool) {
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_function_with_generics() {
-        rt_idemp(
-            r#"
-                pub fn generic_function<T, U>(t: T, u: U) -> T {
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_function_with_lifetimes() {
-        rt_idemp(
-            r#"
-                pub fn lifetime_function<'a>(x: &'a str) -> &'a str {}
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_function_with_where_clause() {
-        rt_idemp(
-            r#"
-                pub fn where_function<T>(t: T) -> T
-                where
-                    T: Clone,
-                {
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_function_with_complex_generics_and_where_clause() {
-        rt_idemp(
-            r#"
-                pub fn complex_function<T, U, R>(t: T, u: U) -> R
-                where
-                    T: Clone,
-                    U: std::fmt::Debug,
-                    R: From<T>,
-                {
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_function_with_hrtb() {
-        rt_idemp(
-            r#"
-                pub fn hrtb_function<F>(f: F)
-                where
-                    for<'a> F: Fn(&'a str) -> bool,
-                {
-                }
-            "#,
-        );
-    }
-
-    #[test]
     fn test_render_constant() {
         rt(
             r#"
@@ -1675,78 +1547,6 @@ mod tests {
     }
 
     #[test]
-    fn test_render_dyn_trait() {
-        rt_idemp(
-            r#"
-                pub trait MyTrait {
-                    fn my_method(&self);
-                }
-
-                pub fn process_trait_object(obj: &dyn MyTrait) { }
-
-                pub fn return_trait_object() -> Box<dyn MyTrait> { }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_complex_where_clause() {
-        rt_priv_idemp(
-            r#"
-                pub trait MyTrait {
-                    type Associated;
-                }
-
-                pub struct MyStruct<T>(T);
-
-                impl<T> MyStruct<T>
-                where
-                    T: MyTrait,
-                    <T as MyTrait>::Associated: Clone,
-                {
-                    pub fn new(value: T) -> Self {}
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_associated_type_bounds() {
-        rt_idemp(
-            r#"
-                pub trait Container {
-                    type Item;
-                    fn get(&self) -> Option<&Self::Item>;
-                }
-
-                pub trait AdvancedContainer: Container {
-                    type AdvancedItem: Clone + 'static;
-                    fn get_advanced(&self) -> Option<&Self::AdvancedItem>;
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_complex_function_signature() {
-        rt_idemp(
-            r#"
-                pub async fn complex_function<T, U, F>(
-                    arg1: T,
-                    arg2: U,
-                    callback: F,
-                ) -> impl std::future::Future<Output = Result<T, U>>
-                where
-                    T: Clone + Send + 'static,
-                    U: std::fmt::Debug,
-                    F: Fn(T) -> U + Send + Sync + 'static,
-                {
-                }
-            "#,
-        );
-    }
-
-    #[test]
     fn test_render_type_alias_with_bounds() {
         rt_idemp(
             r#"
@@ -1778,110 +1578,12 @@ mod tests {
     }
 
     #[test]
-    fn test_render_impl_with_complex_generic_bounds() {
-        rt_idemp(
-            r#"
-            pub fn a(v: impl Into<String>) {}
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_parentheses_dyn_trait() {
-        rt_idemp(
-            r#"
-                pub fn myfn() -> &'static (dyn std::any::Any + 'static) { }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_parentheses_dyn_trait_arg() {
-        rt_idemp(
-            r#"
-                pub fn myfn(a: &dyn std::any::Any) { }
-            "#,
-        );
-    }
-
-    #[test]
     fn test_reserved_word() {
         rt_idemp(
             r#"
                 pub fn r#try() { }
             "#,
         );
-    }
-
-    #[test]
-    fn test_render_module_with_inline_imports() {
-        let source = r#"
-            //! Module documentation
-            mod private_module {
-                pub struct PrivateStruct;
-            }
-
-            pub mod public_module {
-                //! Public module documentation
-                pub struct PublicStruct;
-
-                pub use super::private_module::PrivateStruct;
-                pub use std::collections::HashMap;
-            }
-
-            pub use self::public_module::PublicStruct;
-        "#;
-
-        let expected_output = r#"
-            //! Module documentation
-
-            pub mod public_module {
-                //! Public module documentation
-
-                pub struct PublicStruct;
-
-                pub struct PrivateStruct;
-                pub use std::collections::HashMap;
-            }
-
-            pub struct PublicStruct;
-        "#;
-
-        rt(source, expected_output);
-    }
-
-    #[test]
-    fn test_render_module_with_glob_imports() {
-        let source = r#"
-            mod private_module {
-                pub struct PrivateStruct1;
-                pub struct PrivateStruct2;
-                struct NonPublicStruct;
-            }
-
-            pub mod public_module {
-                pub struct PublicStruct1;
-                pub struct PublicStruct2;
-                pub use super::private_module::*;
-            }
-
-            pub use self::public_module::*;
-        "#;
-
-        let expected_output = r#"
-            pub mod public_module {
-                pub struct PublicStruct1;
-                pub struct PublicStruct2;
-                pub struct PrivateStruct1;
-                pub struct PrivateStruct2;
-            }
-            pub struct PublicStruct1;
-            pub struct PublicStruct2;
-            pub struct PrivateStruct1;
-            pub struct PrivateStruct2;
-        "#;
-
-        rt(source, expected_output);
     }
 
     #[test]
@@ -2571,6 +2273,72 @@ mod tests {
                 "#
             }
             rt {
+                module_with_inline_imports: {
+                    input: r#"
+                        mod private_module {
+                            pub struct PrivateStruct1;
+                            pub struct PrivateStruct2;
+                            struct NonPublicStruct;
+                        }
+
+                        pub mod public_module {
+                            pub struct PublicStruct1;
+                            pub struct PublicStruct2;
+                            pub use super::private_module::PrivateStruct1;
+                            pub use super::private_module::PrivateStruct2;
+                        }
+
+                        pub use self::public_module::PublicStruct1;
+                        pub use self::public_module::PublicStruct2;
+                        pub use self::public_module::PrivateStruct1;
+                        pub use self::public_module::PrivateStruct2;
+                    "#,
+                    output: r#"
+                        pub mod public_module {
+                            pub struct PublicStruct1;
+                            pub struct PublicStruct2;
+                            pub struct PrivateStruct1;
+                            pub struct PrivateStruct2;
+                        }
+                        pub struct PublicStruct1;
+                        pub struct PublicStruct2;
+                        pub struct PrivateStruct1;
+                        pub struct PrivateStruct2;
+                    "#
+                }
+            }
+            rt {
+                module_with_glob_imports: {
+                    input: r#"
+                        mod private_module {
+                            pub struct PrivateStruct1;
+                            pub struct PrivateStruct2;
+                            struct NonPublicStruct;
+                        }
+
+                        pub mod public_module {
+                            pub struct PublicStruct1;
+                            pub struct PublicStruct2;
+                            pub use super::private_module::*;
+                        }
+
+                        pub use self::public_module::*;
+                    "#,
+                    output: r#"
+                        pub mod public_module {
+                            pub struct PublicStruct1;
+                            pub struct PublicStruct2;
+                            pub struct PrivateStruct1;
+                            pub struct PrivateStruct2;
+                        }
+                        pub struct PublicStruct1;
+                        pub struct PublicStruct2;
+                        pub struct PrivateStruct1;
+                        pub struct PrivateStruct2;
+                    "#
+                }
+            }
+            rt {
                 with_doc_comments_outer: {
                     input: r#"
                         /// This is a documented module, with outer comments
@@ -2680,6 +2448,80 @@ mod tests {
                     "#
                 }
             }
+            rt {
+                private_and_public_imports: {
+                    input: r#"
+                        pub mod import_visibility {
+                            use std::collections::HashMap;
+                            pub use std::vec::Vec;
+                            use std::fmt::Debug;
+                            pub use std::fmt::Display;
+
+                            pub fn public_vec() -> Vec<i32> {
+                                Vec::new()
+                            }
+
+                            fn private_hash_map() -> HashMap<String, i32> {
+                                HashMap::new()
+                            }
+                        }
+                    "#,
+                    output: r#"
+                        pub mod import_visibility {
+                            pub use std::vec::Vec;
+                            pub use std::fmt::Display;
+
+                            pub fn public_vec() -> Vec<i32> { }
+                        }
+                    "#
+                }
+            }
+            rt {
+                re_exports_with_glob: {
+                    input: r#"
+                        mod private {
+                            pub struct ReExported1;
+                            pub struct ReExported2;
+                        }
+
+                        pub mod public {
+                            pub use super::private::*;
+                            pub use std::collections::HashMap;
+                        }
+                    "#,
+                    output: r#"
+                        pub mod public {
+                            pub use std::collections::HashMap;
+                            pub struct ReExported1;
+                            pub struct ReExported2;
+                        }
+                    "#
+                }
+            }
+            rt {
+                nested_re_exports: {
+                    input: r#"
+                        mod level1 {
+                            pub mod level2 {
+                                pub struct DeepStruct;
+                            }
+                        }
+
+                        pub mod re_export {
+                            pub use super::level1::level2::*;
+                        }
+
+                        pub use re_export::DeepStruct;
+                    "#,
+                    output: r#"
+                        pub mod re_export {
+                            pub struct DeepStruct;
+                        }
+
+                        pub struct DeepStruct;
+                    "#
+                }
+            }
         }
     }
 
@@ -2757,6 +2599,22 @@ mod tests {
 
                     trait TraitWithAssocType {
                         type Item;
+                        fn get_item(&self) -> Self::Item;
+                    }
+                "#
+            }
+            idemp {
+                assoicated_type_bounds: r#"
+                    struct BoundedAssocTypeStruct;
+                    
+                    impl BoundedAssocType for BoundedAssocTypeStruct {
+                        type Item = i32;
+                        fn get_item(&self) -> Self::Item {
+                        }
+                    }
+
+                    trait BoundedAssocType {
+                        type Item: Clone + 'static;
                         fn get_item(&self) -> Self::Item;
                     }
                 "#
@@ -2932,6 +2790,174 @@ mod tests {
                         impl Clone for MyStruct {
                             fn clone(&self) -> Self {}
                         }
+                    "#
+                }
+            }
+        }
+    }
+
+    gen_tests! {
+        functions, {
+            idemp {
+                basic: r#"
+                    pub fn basic_function() {}
+                "#
+            }
+            idemp {
+                with_args: r#"
+                    pub fn function_with_args(x: i32, y: String) {}
+                "#
+            }
+            idemp {
+                with_return: r#"
+                    pub fn function_with_return() -> i32 {
+                    }
+                "#
+            }
+            idemp {
+                generic: r#"
+                    pub fn generic_function<T>(value: T) -> T {
+                    }
+                "#
+            }
+            idemp {
+                with_lifetime: r#"
+                    pub fn lifetime_function<'a>(x: &'a str) -> &'a str {
+                    }
+                "#
+            }
+            idemp {
+                with_where_clause: r#"
+                    pub fn where_function<T>(value: T) -> T
+                    where
+                        T: Clone,
+                    {
+                    }
+                "#
+            }
+            idemp {
+                async_function: r#"
+                    pub async fn async_function() {}
+                "#
+            }
+            idemp {
+                const_function: r#"
+                    pub const fn const_function() -> i32 {
+                    }
+                "#
+            }
+            idemp {
+                unsafe_function: r#"
+                    pub unsafe fn unsafe_function() {}
+                "#
+            }
+            idemp {
+                complex: r#"
+                    pub async unsafe fn complex_function<'a, T, U>(x: &'a T, y: U) -> Result<T, U>
+                    where
+                        T: Clone + Send + 'a,
+                        U: std::fmt::Debug,
+                    {
+                    }
+                "#
+            }
+            idemp {
+                function_pointer: r#"
+                    pub fn function_with_fn_pointer(f: fn(arg1: i32, arg2: String) -> bool) {
+                    }
+                "#
+            }
+            idemp {
+                hrtb: r#"
+                    pub fn hrtb_function<F>(f: F)
+                    where
+                        for<'a> F: Fn(&'a str) -> bool,
+                    {
+                    }
+                "#
+            }
+            idemp {
+                dyn_trait_arg: r#"
+                    pub fn function_with_dyn_trait(arg: &dyn std::fmt::Debug) {}
+                "#
+            }
+            idemp {
+                multiple_dyn_trait_args: r#"
+                    pub fn function_with_multiple_dyn_traits(
+                        arg1: &dyn std::fmt::Debug,
+                        arg2: Box<dyn std::fmt::Display>,
+                    ) {}
+                "#
+            }
+            idemp {
+                dyn_trait_with_lifetime: r#"
+                    pub fn function_with_dyn_trait_lifetime<'a>(arg: &'a dyn std::fmt::Debug) {}
+                "#
+            }
+            idemp {
+                dyn_trait_return: r#"
+                    pub fn function_returning_dyn_trait() -> Box<dyn std::fmt::Debug> { }
+                "#
+            }
+            idemp {
+                dyn_trait_parens: r#"
+                    pub fn myfn() -> &'static (dyn std::any::Any + 'static) { }
+                "#
+            }
+            idemp {
+                dyn_trait_with_associated_type: r#"
+                    pub trait Iterator {
+                        type Item;
+                        fn next(&mut self) -> Option<Self::Item>;
+                    }
+                    pub fn function_with_dyn_iterator(iter: &mut dyn Iterator<Item = i32>) {}
+                "#
+            }
+            rt {
+                private_function: {
+                    input: r#"
+                        fn private_function() {}
+                    "#,
+                    output: r#"
+                    "#
+                }
+            }
+            rt {
+                with_doc_comments: {
+                    input: r#"
+                        /// This is a documented function.
+                        /// It has multiple lines of documentation.
+                        pub fn documented_function() {}
+                    "#,
+                    output: r#"
+                        /// This is a documented function.
+                        /// It has multiple lines of documentation.
+                        pub fn documented_function() {}
+                    "#
+                }
+            }
+            rt {
+               with_attributes: {
+                    input: r#"
+                        #[inline]
+                        #[cold]
+                        pub fn function_with_attributes() {}
+                    "#,
+                    output: r#"
+                        pub fn function_with_attributes() {}
+                    "#
+                }
+            }
+            rt_custom {
+                render_private: {
+                    renderer: Renderer::default().with_private_items(true),
+                    input: r#"
+                        fn private_function() {}
+                        pub fn public_function() {}
+                    "#,
+                    output: r#"
+                        fn private_function() {}
+                        pub fn public_function() {}
                     "#
                 }
             }
