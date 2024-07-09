@@ -15,6 +15,27 @@ fn render_vis(item: &Item) -> String {
     }
 }
 
+fn render_name(item: &Item) -> String {
+    const RESERVED_WORDS: &[&str] = &[
+        "abstract", "as", "become", "box", "break", "const", "continue", "crate", "do", "else",
+        "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in", "let", "loop",
+        "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref", "return", "self",
+        "Self", "static", "struct", "super", "trait", "true", "try", "type", "typeof", "unsafe",
+        "unsized", "use", "virtual", "where", "while", "yield",
+    ];
+
+    item.name.as_deref().map_or_else(
+        || "?".to_string(),
+        |n| {
+            if RESERVED_WORDS.contains(&n) {
+                format!("r#{}", n)
+            } else {
+                n.to_string()
+            }
+        },
+    )
+}
+
 macro_rules! extract_item {
     ($item:expr, $variant:path) => {
         match &$item.inner {
@@ -174,7 +195,7 @@ impl Renderer {
                 output.push_str(&format!("/// {}\n", line));
             }
         }
-        let fn_name = Self::render_name(&item.name);
+        let fn_name = render_name(item);
 
         let proc_macro = extract_item!(item, ItemEnum::ProcMacro);
         match proc_macro.kind {
@@ -249,7 +270,7 @@ impl Renderer {
         output.push_str(&format!(
             "{}type {}{}{}",
             render_vis(item),
-            Self::render_name(&item.name),
+            render_name(item),
             generics,
             where_clause
         ));
@@ -386,12 +407,7 @@ impl Renderer {
             .as_ref()
             .map(|d| format!(" = {}", Self::render_type(d)))
             .unwrap_or_default();
-        format!(
-            "type {}{}{};\n",
-            item.name.as_deref().unwrap_or("?"),
-            bounds_str,
-            default_str
-        )
+        format!("type {}{}{};\n", render_name(item), bounds_str, default_str)
     }
 
     fn render_enum(&self, item: &Item, crate_data: &Crate) -> String {
@@ -412,7 +428,7 @@ impl Renderer {
         output.push_str(&format!(
             "{}enum {}{}{} {{\n",
             render_vis(item),
-            Self::render_name(&item.name),
+            render_name(item),
             generics,
             where_clause
         ));
@@ -440,7 +456,7 @@ impl Renderer {
 
         let variant = extract_item!(item, ItemEnum::Variant);
 
-        output.push_str(&format!("    {}", Self::render_name(&item.name),));
+        output.push_str(&format!("    {}", render_name(item),));
 
         match &variant.kind {
             VariantKind::Plain => {}
@@ -511,7 +527,7 @@ impl Renderer {
             "{}{}trait {}{}{}{} {{\n",
             render_vis(item),
             unsafe_prefix,
-            Self::render_name(&item.name),
+            render_name(item),
             generics,
             bounds,
             where_clause
@@ -538,7 +554,7 @@ impl Renderer {
                     .unwrap_or_default();
                 format!(
                     "const {}: {}{};\n",
-                    Self::render_name(&item.name),
+                    render_name(item),
                     Self::render_type(type_),
                     default_str
                 )
@@ -560,7 +576,7 @@ impl Renderer {
                     .unwrap_or_default();
                 format!(
                     "type {}{}{}{};\n",
-                    Self::render_name(&item.name),
+                    render_name(item),
                     generics_str,
                     bounds_str,
                     default_str
@@ -598,7 +614,7 @@ impl Renderer {
                 output.push_str(&format!(
                     "{}struct {}{}{};\n\n",
                     render_vis(item),
-                    Self::render_name(&item.name),
+                    render_name(item),
                     generics,
                     where_clause
                 ));
@@ -626,7 +642,7 @@ impl Renderer {
                 output.push_str(&format!(
                     "{}struct {}{}({}){};\n\n",
                     render_vis(item),
-                    Self::render_name(&item.name),
+                    render_name(item),
                     generics,
                     fields_str,
                     where_clause
@@ -636,7 +652,7 @@ impl Renderer {
                 output.push_str(&format!(
                     "{}struct {}{}{} {{\n",
                     render_vis(item),
-                    Self::render_name(&item.name),
+                    render_name(item),
                     generics,
                     where_clause
                 ));
@@ -667,7 +683,7 @@ impl Renderer {
                 format!(
                     "{}{}: {},\n",
                     render_vis(field_item),
-                    Self::render_name(&field_item.name),
+                    render_name(field_item),
                     Self::render_type(ty)
                 )
             } else {
@@ -692,7 +708,7 @@ impl Renderer {
         output.push_str(&format!(
             "{}const {}: {} = {};\n\n",
             render_vis(item),
-            Self::render_name(&item.name),
+            render_name(item),
             Self::render_type(type_),
             const_.expr
         ));
@@ -701,11 +717,7 @@ impl Renderer {
     }
 
     fn render_module(&self, item: &Item, crate_data: &Crate) -> String {
-        let mut output = format!(
-            "{}mod {} {{\n",
-            render_vis(item),
-            Self::render_name(&item.name)
-        );
+        let mut output = format!("{}mod {} {{\n", render_vis(item), render_name(item));
 
         // Add module doc comment if present
         if let Some(docs) = &item.docs {
@@ -732,27 +744,6 @@ impl Renderer {
 
         output.push_str("}\n\n");
         output
-    }
-
-    fn render_name(name: &Option<String>) -> String {
-        const RESERVED_WORDS: &[&str] = &[
-            "abstract", "as", "become", "box", "break", "const", "continue", "crate", "do", "else",
-            "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in", "let", "loop",
-            "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref", "return",
-            "self", "Self", "static", "struct", "super", "trait", "true", "try", "type", "typeof",
-            "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
-        ];
-
-        name.as_deref().map_or_else(
-            || "?".to_string(),
-            |n| {
-                if RESERVED_WORDS.contains(&n) {
-                    format!("r#{}", n)
-                } else {
-                    n.to_string()
-                }
-            },
-        )
     }
 
     fn render_function(&self, item: &Item, is_trait_method: bool) -> String {
@@ -794,7 +785,7 @@ impl Renderer {
             "{}{}fn {}{}({}){}{}",
             render_vis(item),
             prefix,
-            Self::render_name(&item.name),
+            render_name(item),
             generics,
             args,
             if return_type.is_empty() {
