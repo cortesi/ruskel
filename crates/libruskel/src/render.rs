@@ -8,6 +8,13 @@ use rustdoc_types::{
 
 use crate::error::Result;
 
+fn render_vis(item: &Item) -> String {
+    match &item.visibility {
+        Visibility::Public => "pub ".to_string(),
+        _ => String::new(),
+    }
+}
+
 pub struct Renderer {
     formatter: RustFmt,
     render_auto_impls: bool,
@@ -219,17 +226,12 @@ impl Renderer {
                 }
             }
 
-            let visibility = match &item.visibility {
-                Visibility::Public => "pub ",
-                _ => "",
-            };
-
             let generics = Self::render_generics(&type_alias.generics);
             let where_clause = Self::render_where_clause(&type_alias.generics);
 
             output.push_str(&format!(
                 "{}type {}{}{}",
-                visibility,
+                render_vis(item),
                 Self::render_name(&item.name),
                 generics,
                 where_clause
@@ -403,11 +405,6 @@ impl Renderer {
     }
 
     fn render_enum(&self, item: &Item, crate_data: &Crate) -> String {
-        let visibility = match &item.visibility {
-            Visibility::Public => "pub ",
-            _ => "",
-        };
-
         let mut output = String::new();
 
         // Add doc comment if present
@@ -423,7 +420,7 @@ impl Renderer {
 
             output.push_str(&format!(
                 "{}enum {}{}{} {{\n",
-                visibility,
+                render_vis(item),
                 Self::render_name(&item.name),
                 generics,
                 where_clause
@@ -501,11 +498,6 @@ impl Renderer {
     }
 
     fn render_trait(item: &Item, crate_data: &Crate) -> String {
-        let visibility = match &item.visibility {
-            Visibility::Public => "pub ",
-            _ => "",
-        };
-
         let mut output = String::new();
 
         // Add doc comment if present
@@ -529,7 +521,7 @@ impl Renderer {
 
             output.push_str(&format!(
                 "{}{}trait {}{}{}{} {{\n",
-                visibility,
+                render_vis(item),
                 unsafe_prefix,
                 Self::render_name(&item.name),
                 generics,
@@ -600,11 +592,6 @@ impl Renderer {
     }
 
     fn render_struct(&self, item: &Item, crate_data: &Crate) -> String {
-        let visibility = match &item.visibility {
-            Visibility::Public => "pub ",
-            _ => "",
-        };
-
         let mut output = String::new();
 
         // Add doc comment if present
@@ -622,7 +609,7 @@ impl Renderer {
                 StructKind::Unit => {
                     output.push_str(&format!(
                         "{}struct {}{}{};\n\n",
-                        visibility,
+                        render_vis(item),
                         Self::render_name(&item.name),
                         generics,
                         where_clause
@@ -659,7 +646,7 @@ impl Renderer {
                         .join(", ");
                     output.push_str(&format!(
                         "{}struct {}{}({}){};\n\n",
-                        visibility,
+                        render_vis(item),
                         Self::render_name(&item.name),
                         generics,
                         fields_str,
@@ -669,7 +656,7 @@ impl Renderer {
                 StructKind::Plain { fields, .. } => {
                     output.push_str(&format!(
                         "{}struct {}{}{} {{\n",
-                        visibility,
+                        render_vis(item),
                         Self::render_name(&item.name),
                         generics,
                         where_clause
@@ -700,15 +687,10 @@ impl Renderer {
         if let Some(field_item) = crate_data.index.get(field_id) {
             // Only render the field if it's public or render_private_items is true
             if matches!(field_item.visibility, Visibility::Public) || self.render_private_items {
-                let visibility = match &field_item.visibility {
-                    Visibility::Public => "pub ",
-                    _ => "",
-                };
-
                 if let ItemEnum::StructField(ty) = &field_item.inner {
                     format!(
                         "{}{}: {},\n",
-                        visibility,
+                        render_vis(field_item),
                         Self::render_name(&field_item.name),
                         Self::render_type(ty)
                     )
@@ -724,11 +706,6 @@ impl Renderer {
     }
 
     fn render_constant(item: &Item) -> String {
-        let visibility = match &item.visibility {
-            Visibility::Public => "pub ",
-            _ => "",
-        };
-
         let mut output = String::new();
 
         // Add doc comment if present
@@ -741,7 +718,7 @@ impl Renderer {
         if let ItemEnum::Constant { type_, const_ } = &item.inner {
             output.push_str(&format!(
                 "{}const {}: {} = {};\n\n",
-                visibility,
+                render_vis(item),
                 Self::render_name(&item.name),
                 Self::render_type(type_),
                 const_.expr
@@ -752,12 +729,11 @@ impl Renderer {
     }
 
     fn render_module(&self, item: &Item, crate_data: &Crate) -> String {
-        let visibility = match &item.visibility {
-            Visibility::Public => "pub ",
-            _ => "",
-        };
-
-        let mut output = format!("{}mod {} {{\n", visibility, Self::render_name(&item.name));
+        let mut output = format!(
+            "{}mod {} {{\n",
+            render_vis(item),
+            Self::render_name(&item.name)
+        );
 
         // Add module doc comment if present
         if let Some(docs) = &item.docs {
@@ -808,11 +784,6 @@ impl Renderer {
     }
 
     fn render_function(item: &Item, is_trait_method: bool) -> String {
-        let visibility = match &item.visibility {
-            Visibility::Public => "pub ",
-            _ => "",
-        };
-
         let mut output = String::new();
 
         // Add doc comment if present
@@ -848,7 +819,7 @@ impl Renderer {
 
             output.push_str(&format!(
                 "{}{}fn {}{}({}){}{}",
-                visibility,
+                render_vis(item),
                 prefix,
                 Self::render_name(&item.name),
                 generics,
@@ -2576,7 +2547,7 @@ mod tests {
             }
             idemp {
                 impl_for_generic_trait: r#"
-                    trait GenericTrait<T> {
+                    pub trait GenericTrait<T> {
                         fn generic_method(&self, value: T);
                     }
                     
