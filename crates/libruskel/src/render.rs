@@ -309,6 +309,17 @@ impl Renderer {
                 return String::new();
             }
 
+            // Check if the trait is private and skip if render_private_items is false
+            if let Some(trait_) = &impl_.trait_ {
+                if let Some(trait_item) = crate_data.index.get(&trait_.id) {
+                    if !matches!(trait_item.visibility, Visibility::Public)
+                        && !self.render_private_items
+                    {
+                        return String::new();
+                    }
+                }
+            }
+
             let generics = Self::render_generics(&impl_.generics);
             let where_clause = Self::render_where_clause(&impl_.generics);
             let unsafe_prefix = if impl_.is_unsafe { "unsafe " } else { "" };
@@ -1433,6 +1444,13 @@ mod tests {
                     output: $rt_output:expr
                 }
             })*
+            $(rt_custom {
+                $rt_custom_name:ident: {
+                    renderer: $renderer:expr,
+                    input: $rt_custom_input:expr,
+                    output: $rt_custom_output:expr
+                }
+            })*
         }) => {
             mod $prefix {
                 use super::*;
@@ -1448,6 +1466,14 @@ mod tests {
                     #[test]
                     fn $rt_name() {
                         rt($rt_input, $rt_output);
+                    }
+                )*
+
+                $(
+                    #[test]
+                    fn $rt_custom_name() {
+                        let custom_renderer = $renderer;
+                        render(&custom_renderer, $rt_custom_input, $rt_custom_output, false);
                     }
                 )*
             }
@@ -1645,69 +1671,6 @@ mod tests {
 
                 pub struct PrivateStruct;
             "#,
-        );
-    }
-
-    #[test]
-    fn test_render_blanket_impl() {
-        let source = r#"
-            pub trait MyTrait {
-                fn trait_method(&self);
-            }
-
-            impl<T: Clone> MyTrait for T {
-                fn trait_method(&self) {}
-            }
-
-            pub struct MyStruct;
-
-            impl Clone for MyStruct {
-                fn clone(&self) -> Self {
-                    MyStruct
-                }
-            }
-        "#;
-
-        // Test with blanket impls disabled
-        rt(
-            source,
-            r#"
-                pub trait MyTrait {
-                    fn trait_method(&self);
-                }
-
-                pub struct MyStruct;
-
-                impl Clone for MyStruct {
-                    fn clone(&self) -> Self {}
-                }
-            "#,
-        );
-
-        // Test with blanket impls enabled
-        let renderer = Renderer::new().with_blanket_impls(true);
-        render(
-            &renderer,
-            source,
-            r#"
-                pub trait MyTrait {
-                    fn trait_method(&self);
-                }
-
-                pub struct MyStruct;
-
-                impl<T> MyTrait for MyStruct
-                where
-                    T: Clone,
-                {
-                    fn trait_method(&self) {}
-                }
-
-                impl Clone for MyStruct {
-                    fn clone(&self) -> Self {}
-                }
-            "#,
-            false,
         );
     }
 
@@ -2915,7 +2878,7 @@ mod tests {
                 }
             }
             rt {
-                blanket_impl: {
+                blanket_impl_disabled: {
                     input: r#"
                         pub trait SomeTrait {
                             fn trait_method(&self);
@@ -2928,6 +2891,46 @@ mod tests {
                     output: r#"
                         pub trait SomeTrait {
                             fn trait_method(&self);
+                        }
+                    "#
+                }
+            }
+            rt_custom {
+                blanket_impl_enabled: {
+                    renderer: Renderer::default().with_blanket_impls(true),
+                    input: r#"
+                        pub trait MyTrait {
+                            fn trait_method(&self);
+                        }
+
+                        impl<T: Clone> MyTrait for T {
+                            fn trait_method(&self) {}
+                        }
+
+                        pub struct MyStruct;
+
+                        impl Clone for MyStruct {
+                            fn clone(&self) -> Self {
+                                MyStruct
+                            }
+                        }
+                    "#,
+                    output: r#"
+                        pub trait MyTrait {
+                            fn trait_method(&self);
+                        }
+
+                        pub struct MyStruct;
+
+                        impl<T> MyTrait for MyStruct
+                        where
+                            T: Clone,
+                        {
+                            fn trait_method(&self) {}
+                        }
+
+                        impl Clone for MyStruct {
+                            fn clone(&self) -> Self {}
                         }
                     "#
                 }
