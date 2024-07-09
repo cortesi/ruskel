@@ -1,6 +1,5 @@
-
 [workspace.package]
-version = "0.0.2"
+version = "0.0.3"
 edition = "2021"
 authors = ["Aldo Cortesi <aldo@corte.si>"]
 description = "Generates skeletonized outlines of Rust crates"
@@ -11,3 +10,6 @@ readme = "README.md"
 [workspace]
 resolver = "2"
 members = ["crates/*"]
+
+[workspace.dependencies]
+libruskel = { version = "0.0.3", path = "crates/libruskel" }
