@@ -1,7 +1,7 @@
 # Ruskel
 
-[![Crates.io](https://img.shields.io/crates/v/ruskel.svg)](https://crates.io/crates/ruskel)
-[![Documentation](https://docs.rs/ruskel/badge.svg)](https://docs.rs/ruskel)
+[![Crates.io](https://img.shields.io/crates/v/libruskel.svg)](https://crates.io/crates/libruskel)
+[![Documentation](https://docs.rs/libruskel/badge.svg)](https://docs.rs/libruskel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Ruskel is a tool for generating skeletonized versions of Rust crates. It
