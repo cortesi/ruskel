@@ -8,6 +8,16 @@ use rustdoc_types::{
 
 use crate::error::Result;
 
+fn docs(item: &Item) -> String {
+    let mut output = String::new();
+    if let Some(docs) = &item.docs {
+        for line in docs.lines() {
+            output.push_str(&format!("/// {}\n", line));
+        }
+    }
+    output
+}
+
 fn render_vis(item: &Item) -> String {
     match &item.visibility {
         Visibility::Public => "pub ".to_string(),
@@ -187,14 +197,8 @@ impl Renderer {
     }
 
     fn render_proc_macro(&self, item: &Item) -> String {
-        let mut output = String::new();
+        let mut output = docs(item);
 
-        // Add doc comment if present
-        if let Some(docs) = &item.docs {
-            for line in docs.lines() {
-                output.push_str(&format!("/// {}\n", line));
-            }
-        }
         let fn_name = render_name(item);
 
         let proc_macro = extract_item!(item, ItemEnum::ProcMacro);
@@ -234,14 +238,7 @@ impl Renderer {
     }
 
     fn render_macro(&self, item: &Item) -> String {
-        let mut output = String::new();
-
-        // Add doc comment if present
-        if let Some(docs) = &item.docs {
-            for line in docs.lines() {
-                output.push_str(&format!("/// {}\n", line));
-            }
-        }
+        let mut output = docs(item);
 
         let macro_def = extract_item!(item, ItemEnum::Macro);
         // Add #[macro_export] for public macros
@@ -255,14 +252,7 @@ impl Renderer {
 
     fn render_type_alias(&self, item: &Item) -> String {
         let type_alias = extract_item!(item, ItemEnum::TypeAlias);
-        let mut output = String::new();
-
-        // Add doc comment if present
-        if let Some(docs) = &item.docs {
-            for line in docs.lines() {
-                output.push_str(&format!("/// {}\n", line));
-            }
-        }
+        let mut output = docs(item);
 
         let generics = Self::render_generics(&type_alias.generics);
         let where_clause = Self::render_where_clause(&type_alias.generics);
@@ -308,15 +298,7 @@ impl Renderer {
             return self.render_item(imported_item, crate_data, true);
         }
 
-        let mut output = String::new();
-
-        // Add doc comment if present
-        if let Some(docs) = &item.docs {
-            for line in docs.lines() {
-                output.push_str(&format!("/// {}\n", line));
-            }
-        }
-
+        let mut output = docs(item);
         if import.name != import.source.split("::").last().unwrap_or(&import.source) {
             output.push_str(&format!("pub use {} as {};\n", import.source, import.name));
         } else {
@@ -411,14 +393,7 @@ impl Renderer {
     }
 
     fn render_enum(&self, item: &Item, crate_data: &Crate) -> String {
-        let mut output = String::new();
-
-        // Add doc comment if present
-        if let Some(docs) = &item.docs {
-            for line in docs.lines() {
-                output.push_str(&format!("/// {}\n", line));
-            }
-        }
+        let mut output = docs(item);
 
         let enum_ = extract_item!(item, ItemEnum::Enum);
 
@@ -445,14 +420,7 @@ impl Renderer {
     }
 
     fn render_enum_variant(&self, item: &Item, crate_data: &Crate) -> String {
-        let mut output = String::new();
-
-        // Add doc comment if present
-        if let Some(docs) = &item.docs {
-            for line in docs.lines() {
-                output.push_str(&format!("    /// {}\n", line));
-            }
-        }
+        let mut output = docs(item);
 
         let variant = extract_item!(item, ItemEnum::Variant);
 
@@ -501,14 +469,7 @@ impl Renderer {
     }
 
     fn render_trait(&self, item: &Item, crate_data: &Crate) -> String {
-        let mut output = String::new();
-
-        // Add doc comment if present
-        if let Some(docs) = &item.docs {
-            for line in docs.lines() {
-                output.push_str(&format!("/// {}\n", line));
-            }
-        }
+        let mut output = docs(item);
 
         let trait_ = extract_item!(item, ItemEnum::Trait);
 
@@ -595,14 +556,7 @@ impl Renderer {
     }
 
     fn render_struct(&self, item: &Item, crate_data: &Crate) -> String {
-        let mut output = String::new();
-
-        // Add doc comment if present
-        if let Some(docs) = &item.docs {
-            for line in docs.lines() {
-                output.push_str(&format!("/// {}\n", line));
-            }
-        }
+        let mut output = docs(item);
 
         let struct_ = extract_item!(item, ItemEnum::Struct);
 
@@ -695,14 +649,7 @@ impl Renderer {
     }
 
     fn render_constant(&self, item: &Item) -> String {
-        let mut output = String::new();
-
-        // Add doc comment if present
-        if let Some(docs) = &item.docs {
-            for line in docs.lines() {
-                output.push_str(&format!("/// {}\n", line));
-            }
-        }
+        let mut output = docs(item);
 
         let (type_, const_) = extract_item!(item, ItemEnum::Constant { type_, const_ });
         output.push_str(&format!(
@@ -718,7 +665,6 @@ impl Renderer {
 
     fn render_module(&self, item: &Item, crate_data: &Crate) -> String {
         let mut output = format!("{}mod {} {{\n", render_vis(item), render_name(item));
-
         // Add module doc comment if present
         if let Some(docs) = &item.docs {
             for line in docs.lines() {
@@ -747,22 +693,12 @@ impl Renderer {
     }
 
     fn render_function(&self, item: &Item, is_trait_method: bool) -> String {
-        let mut output = String::new();
-
-        // Add doc comment if present
-        if let Some(docs) = &item.docs {
-            for line in docs.lines() {
-                output.push_str(&format!("/// {}\n", line));
-            }
-        }
-
+        let mut output = docs(item);
         let function = extract_item!(item, ItemEnum::Function);
 
         let generics = Self::render_generics(&function.generics);
         let args = Self::render_function_args(&function.decl);
         let return_type = Self::render_return_type(&function.decl);
-
-        let where_clause = Self::render_where_clause(&function.generics);
 
         // Handle const, async, and unsafe keywords in the correct order
         let mut prefixes = Vec::new();
@@ -775,16 +711,11 @@ impl Renderer {
         if function.header.unsafe_ {
             prefixes.push("unsafe");
         }
-        let prefix = if !prefixes.is_empty() {
-            format!("{} ", prefixes.join(" "))
-        } else {
-            String::new()
-        };
 
         output.push_str(&format!(
-            "{}{}fn {}{}({}){}{}",
+            "{} {} fn {}{}({}){}{}",
             render_vis(item),
-            prefix,
+            prefixes.join(" "),
             render_name(item),
             generics,
             args,
@@ -793,7 +724,7 @@ impl Renderer {
             } else {
                 format!(" -> {}", return_type)
             },
-            where_clause
+            Self::render_where_clause(&function.generics)
         ));
 
         // Use semicolon for trait method declarations, empty body for implementations
