@@ -23,8 +23,13 @@ pub struct Renderer {
     render_auto_impls: bool,
     render_private_items: bool,
     render_blanket_impls: bool,
-    filter_matched: bool,
     filter: String,
+}
+
+struct RenderState<'a, 'b> {
+    config: &'a Renderer,
+    crate_data: &'b Crate,
+    filter_matched: bool,
 }
 
 impl Default for Renderer {
@@ -34,16 +39,14 @@ impl Default for Renderer {
 }
 
 impl Renderer {
-    fn new() -> Self {
+    pub fn new() -> Self {
         let config = Config::new_str().option("brace_style", "PreferSameLine");
-
         Self {
             formatter: RustFmt::from_config(config),
             render_auto_impls: false,
             render_private_items: false,
             render_blanket_impls: false,
             filter: String::new(),
-            filter_matched: false,
         }
     }
 
@@ -67,37 +70,43 @@ impl Renderer {
         self
     }
 
-    pub fn render(&mut self, crate_data: &Crate) -> Result<String> {
-        // The root item is always a module
-        let output = self.render_item(
-            "",
-            must_get(crate_data, &crate_data.root),
+    pub fn render(&self, crate_data: &Crate) -> Result<String> {
+        let mut state = RenderState {
+            config: self,
+            filter_matched: false,
             crate_data,
-            false,
-        );
+        };
+        state.render()
+    }
+}
 
-        if !self.filter.is_empty() && !self.filter_matched {
-            return Err(RuskelError::FilterNotMatched(self.filter.clone()));
+impl<'a, 'b> RenderState<'a, 'b> {
+    pub fn render(&mut self) -> Result<String> {
+        // The root item is always a module
+        let output = self.render_item("", must_get(self.crate_data, &self.crate_data.root), false);
+
+        if !self.config.filter.is_empty() && !self.filter_matched {
+            return Err(RuskelError::FilterNotMatched(self.config.filter.clone()));
         }
 
-        Ok(self.formatter.format_str(&output)?)
+        Ok(self.config.formatter.format_str(&output)?)
     }
 
     fn is_visible(&self, item: &Item) -> bool {
-        self.render_private_items || matches!(item.visibility, Visibility::Public)
+        self.config.render_private_items || matches!(item.visibility, Visibility::Public)
     }
 
     fn should_render_impl(&self, impl_: &Impl) -> bool {
-        if impl_.synthetic && !self.render_auto_impls {
+        if impl_.synthetic && !self.config.render_auto_impls {
             return false;
         }
 
         let is_blanket = impl_.blanket_impl.is_some();
-        if is_blanket && !self.render_blanket_impls {
+        if is_blanket && !self.config.render_blanket_impls {
             return false;
         }
 
-        if !self.render_auto_impls {
+        if !self.config.render_auto_impls {
             // List of traits that we don't want to render by default
             const FILTERED_TRAITS: &[&str] = &[
                 "Any",
@@ -145,7 +154,7 @@ impl Renderer {
     }
 
     fn should_filter(&mut self, module_path: &str, item: &Item) -> bool {
-        if self.filter.is_empty() {
+        if self.config.filter.is_empty() {
             return false;
         }
         match self.filter_match(module_path, item) {
@@ -165,10 +174,10 @@ impl Renderer {
             format!("{}::{}", module_path, render_name(item))
         };
 
-        let filter_components: Vec<&str> = self.filter.split("::").collect();
+        let filter_components: Vec<&str> = self.config.filter.split("::").collect();
         let item_components: Vec<&str> = item_path.split("::").collect();
 
-        if item_path == self.filter {
+        if item_path == self.config.filter {
             FilterMatch::Hit
         } else if filter_components.starts_with(&item_components) {
             FilterMatch::Prefix
@@ -180,7 +189,7 @@ impl Renderer {
     }
 
     fn should_module_doc(&self, module_path: &str, item: &Item) -> bool {
-        if self.filter.is_empty() {
+        if self.config.filter.is_empty() {
             return true;
         }
         matches!(
@@ -189,23 +198,17 @@ impl Renderer {
         )
     }
 
-    fn render_item(
-        &mut self,
-        module_path: &str,
-        item: &Item,
-        crate_data: &Crate,
-        force_private: bool,
-    ) -> String {
+    fn render_item(&mut self, module_path: &str, item: &Item, force_private: bool) -> String {
         if self.should_filter(module_path, item) {
             return String::new();
         }
 
         let output = match &item.inner {
-            ItemEnum::Module(_) => self.render_module(module_path, item, crate_data),
-            ItemEnum::Struct(_) => self.render_struct(item, crate_data),
-            ItemEnum::Enum(_) => self.render_enum(item, crate_data),
-            ItemEnum::Trait(_) => self.render_trait(item, crate_data),
-            ItemEnum::Import(_) => self.render_import(module_path, item, crate_data),
+            ItemEnum::Module(_) => self.render_module(module_path, item),
+            ItemEnum::Struct(_) => self.render_struct(item),
+            ItemEnum::Enum(_) => self.render_enum(item),
+            ItemEnum::Trait(_) => self.render_trait(item),
+            ItemEnum::Import(_) => self.render_import(module_path, item),
             ItemEnum::Function(_) => self.render_function(item, false),
             ItemEnum::Constant { .. } => self.render_constant(item),
             ItemEnum::TypeAlias(_) => self.render_type_alias(item),
@@ -290,23 +293,18 @@ impl Renderer {
         output
     }
 
-    fn render_import(&mut self, module_path: &str, item: &Item, crate_data: &Crate) -> String {
+    fn render_import(&mut self, module_path: &str, item: &Item) -> String {
         let import = extract_item!(item, ItemEnum::Import);
 
         if import.glob {
             if let Some(source_id) = &import.id {
-                if let Some(source_item) = crate_data.index.get(source_id) {
+                if let Some(source_item) = self.crate_data.index.get(source_id) {
                     let module = extract_item!(source_item, ItemEnum::Module);
                     let mut output = String::new();
                     for item_id in &module.items {
-                        if let Some(item) = crate_data.index.get(item_id) {
+                        if let Some(item) = self.crate_data.index.get(item_id) {
                             if self.is_visible(item) {
-                                output.push_str(&self.render_item(
-                                    module_path,
-                                    item,
-                                    crate_data,
-                                    true,
-                                ));
+                                output.push_str(&self.render_item(module_path, item, true));
                             }
                         }
                     }
@@ -317,8 +315,12 @@ impl Renderer {
             return format!("pub use {}::*;\n", import.source);
         }
 
-        if let Some(imported_item) = import.id.as_ref().and_then(|id| crate_data.index.get(id)) {
-            return self.render_item(module_path, imported_item, crate_data, true);
+        if let Some(imported_item) = import
+            .id
+            .as_ref()
+            .and_then(|id| self.crate_data.index.get(id))
+        {
+            return self.render_item(module_path, imported_item, true);
         }
 
         let mut output = docs(item);
@@ -331,7 +333,7 @@ impl Renderer {
         output
     }
 
-    fn render_impl(&self, item: &Item, crate_data: &Crate) -> String {
+    fn render_impl(&self, item: &Item) -> String {
         let mut output = docs(item);
         let impl_ = extract_item!(item, ItemEnum::Impl);
 
@@ -340,7 +342,7 @@ impl Renderer {
         }
 
         if let Some(trait_) = &impl_.trait_ {
-            if let Some(trait_item) = crate_data.index.get(&trait_.id) {
+            if let Some(trait_item) = self.crate_data.index.get(&trait_.id) {
                 if !self.is_visible(trait_item) {
                     return String::new();
                 }
@@ -375,7 +377,7 @@ impl Renderer {
         output.push_str(" {\n");
 
         for item_id in &impl_.items {
-            if let Some(item) = crate_data.index.get(item_id) {
+            if let Some(item) = self.crate_data.index.get(item_id) {
                 let is_trait_impl = impl_.trait_.is_some();
                 if is_trait_impl || self.is_visible(item) {
                     output.push_str(&self.render_impl_item(item));
@@ -398,7 +400,7 @@ impl Renderer {
         }
     }
 
-    fn render_enum(&self, item: &Item, crate_data: &Crate) -> String {
+    fn render_enum(&self, item: &Item) -> String {
         let mut output = docs(item);
 
         let enum_ = extract_item!(item, ItemEnum::Enum);
@@ -415,8 +417,8 @@ impl Renderer {
         ));
 
         for variant_id in &enum_.variants {
-            let variant_item = must_get(crate_data, variant_id);
-            output.push_str(&self.render_enum_variant(variant_item, crate_data));
+            let variant_item = must_get(self.crate_data, variant_id);
+            output.push_str(&self.render_enum_variant(variant_item));
         }
 
         output.push_str("}\n\n");
@@ -424,7 +426,7 @@ impl Renderer {
         output
     }
 
-    fn render_enum_variant(&self, item: &Item, crate_data: &Crate) -> String {
+    fn render_enum_variant(&self, item: &Item) -> String {
         let mut output = docs(item);
 
         let variant = extract_item!(item, ItemEnum::Variant);
@@ -438,7 +440,7 @@ impl Renderer {
                     .iter()
                     .filter_map(|field| {
                         field.as_ref().map(|id| {
-                            let field_item = must_get(crate_data, id);
+                            let field_item = must_get(self.crate_data, id);
                             let ty = extract_item!(field_item, ItemEnum::StructField);
                             render_type(ty)
                         })
@@ -450,7 +452,7 @@ impl Renderer {
             VariantKind::Struct { fields, .. } => {
                 output.push_str(" {\n");
                 for field in fields {
-                    output.push_str(&self.render_struct_field(crate_data, field, true));
+                    output.push_str(&self.render_struct_field(field, true));
                 }
                 output.push_str("    }");
             }
@@ -465,7 +467,7 @@ impl Renderer {
         output
     }
 
-    fn render_trait(&self, item: &Item, crate_data: &Crate) -> String {
+    fn render_trait(&self, item: &Item) -> String {
         let mut output = docs(item);
 
         let trait_ = extract_item!(item, ItemEnum::Trait);
@@ -492,7 +494,7 @@ impl Renderer {
         ));
 
         for item_id in &trait_.items {
-            let item = must_get(crate_data, item_id);
+            let item = must_get(self.crate_data, item_id);
             output.push_str(&self.render_trait_item(item));
         }
 
@@ -543,7 +545,7 @@ impl Renderer {
         }
     }
 
-    fn render_struct(&self, item: &Item, crate_data: &Crate) -> String {
+    fn render_struct(&self, item: &Item) -> String {
         let mut output = docs(item);
 
         let struct_ = extract_item!(item, ItemEnum::Struct);
@@ -566,7 +568,7 @@ impl Renderer {
                     .iter()
                     .filter_map(|field| {
                         field.as_ref().map(|id| {
-                            let field_item = must_get(crate_data, id);
+                            let field_item = must_get(self.crate_data, id);
                             let ty = extract_item!(field_item, ItemEnum::StructField);
                             if !self.is_visible(field_item) {
                                 "_".to_string()
@@ -596,7 +598,7 @@ impl Renderer {
                     where_clause
                 ));
                 for field in fields {
-                    output.push_str(&self.render_struct_field(crate_data, field, false));
+                    output.push_str(&self.render_struct_field(field, false));
                 }
                 output.push_str("}\n\n");
             }
@@ -604,18 +606,18 @@ impl Renderer {
 
         // Render impl blocks
         for impl_id in &struct_.impls {
-            let impl_item = must_get(crate_data, impl_id);
+            let impl_item = must_get(self.crate_data, impl_id);
             let impl_ = extract_item!(impl_item, ItemEnum::Impl);
             if self.should_render_impl(impl_) {
-                output.push_str(&self.render_impl(impl_item, crate_data));
+                output.push_str(&self.render_impl(impl_item));
             }
         }
 
         output
     }
 
-    fn render_struct_field(&self, crate_data: &Crate, field_id: &Id, force: bool) -> String {
-        let field_item = must_get(crate_data, field_id);
+    fn render_struct_field(&self, field_id: &Id, force: bool) -> String {
+        let field_item = must_get(self.crate_data, field_id);
         if force || self.is_visible(field_item) {
             let ty = extract_item!(field_item, ItemEnum::StructField);
             format!(
@@ -644,7 +646,7 @@ impl Renderer {
         output
     }
 
-    fn render_module(&mut self, module_path: &str, item: &Item, crate_data: &Crate) -> String {
+    fn render_module(&mut self, module_path: &str, item: &Item) -> String {
         let module_path = if module_path.is_empty() {
             render_name(item).to_string()
         } else {
@@ -664,8 +666,8 @@ impl Renderer {
         let module = extract_item!(item, ItemEnum::Module);
 
         for item_id in &module.items {
-            let item = must_get(crate_data, item_id);
-            output.push_str(&self.render_item(&module_path, item, crate_data, false));
+            let item = must_get(self.crate_data, item_id);
+            output.push_str(&self.render_item(&module_path, item, false));
         }
 
         output.push_str("}\n\n");

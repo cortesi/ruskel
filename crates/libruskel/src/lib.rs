@@ -183,7 +183,7 @@ impl Ruskel {
 
     /// Generates a skeletonized version of the crate as a string of Rust code.
     pub fn render(&self, auto_impls: bool, private_items: bool) -> Result<String> {
-        let mut renderer = Renderer::default()
+        let renderer = Renderer::default()
             .with_filter(&self.filter)
             .with_auto_impls(auto_impls)
             .with_private_items(private_items);

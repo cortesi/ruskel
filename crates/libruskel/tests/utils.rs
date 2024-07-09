@@ -55,7 +55,7 @@ fn strip_module_declaration(s: &str) -> String {
     lines[1..lines.len() - 1].join("\n")
 }
 
-pub fn render(mut renderer: Renderer, source: &str, expected_output: &str, is_proc_macro: bool) {
+pub fn render(renderer: Renderer, source: &str, expected_output: &str, is_proc_macro: bool) {
     // Create a temporary directory for our dummy crate
     let temp_dir = TempDir::new().unwrap();
     let crate_path = temp_dir.path().join("src");
@@ -138,7 +138,7 @@ pub fn rt_procmacro(source: &str, expected_output: &str) {
     render(Renderer::default(), source, expected_output, true);
 }
 
-pub fn render_err(mut renderer: Renderer, source: &str, expected_error: &str) {
+pub fn render_err(renderer: Renderer, source: &str, expected_error: &str) {
     // Create a temporary directory for our dummy crate
     let temp_dir = TempDir::new().unwrap();
     let crate_path = temp_dir.path().join("src");
