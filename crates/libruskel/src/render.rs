@@ -254,15 +254,12 @@ impl Renderer {
         let type_alias = extract_item!(item, ItemEnum::TypeAlias);
         let mut output = docs(item);
 
-        let generics = Self::render_generics(&type_alias.generics);
-        let where_clause = Self::render_where_clause(&type_alias.generics);
-
         output.push_str(&format!(
             "{}type {}{}{}",
             render_vis(item),
             render_name(item),
-            generics,
-            where_clause
+            Self::render_generics(&type_alias.generics),
+            Self::render_where_clause(&type_alias.generics),
         ));
 
         output.push_str(&format!("= {};\n\n", Self::render_type(&type_alias.type_)));
@@ -274,7 +271,6 @@ impl Renderer {
         let import = extract_item!(item, ItemEnum::Import);
 
         if import.glob {
-            // Handle glob imports
             if let Some(source_id) = &import.id {
                 if let Some(source_item) = crate_data.index.get(source_id) {
                     let module = extract_item!(source_item, ItemEnum::Module);
@@ -293,7 +289,6 @@ impl Renderer {
             return format!("pub use {}::*;\n", import.source);
         }
 
-        // Existing code for handling direct imports
         if let Some(imported_item) = import.id.as_ref().and_then(|id| crate_data.index.get(id)) {
             return self.render_item(imported_item, crate_data, true);
         }
@@ -309,9 +304,9 @@ impl Renderer {
     }
 
     fn render_impl(&self, item: &Item, crate_data: &Crate) -> String {
-        let mut output = String::new();
-
+        let mut output = docs(item);
         let impl_ = extract_item!(item, ItemEnum::Impl);
+
         if !self.should_render_impl(impl_) {
             return String::new();
         }
@@ -324,9 +319,7 @@ impl Renderer {
             }
         }
 
-        let generics = Self::render_generics(&impl_.generics);
         let where_clause = Self::render_where_clause(&impl_.generics);
-        let unsafe_prefix = if impl_.is_unsafe { "unsafe " } else { "" };
 
         let trait_part = if let Some(trait_) = &impl_.trait_ {
             let trait_path = Self::render_path(trait_);
@@ -341,8 +334,8 @@ impl Renderer {
 
         output.push_str(&format!(
             "{}impl{} {}{}",
-            unsafe_prefix,
-            generics,
+            if impl_.is_unsafe { "unsafe " } else { "" },
+            Self::render_generics(&impl_.generics),
             trait_part,
             Self::render_type(&impl_.for_)
         ));
@@ -696,10 +689,6 @@ impl Renderer {
         let mut output = docs(item);
         let function = extract_item!(item, ItemEnum::Function);
 
-        let generics = Self::render_generics(&function.generics);
-        let args = Self::render_function_args(&function.decl);
-        let return_type = Self::render_return_type(&function.decl);
-
         // Handle const, async, and unsafe keywords in the correct order
         let mut prefixes = Vec::new();
         if function.header.const_ {
@@ -717,13 +706,9 @@ impl Renderer {
             render_vis(item),
             prefixes.join(" "),
             render_name(item),
-            generics,
-            args,
-            if return_type.is_empty() {
-                String::new()
-            } else {
-                format!(" -> {}", return_type)
-            },
+            Self::render_generics(&function.generics),
+            Self::render_function_args(&function.decl),
+            Self::render_return_type(&function.decl),
             Self::render_where_clause(&function.generics)
         ));
 
@@ -757,7 +742,6 @@ impl Renderer {
             .iter()
             .filter_map(Self::render_where_predicate)
             .collect();
-
         if predicates.is_empty() {
             String::new()
         } else {
@@ -863,7 +847,7 @@ impl Renderer {
 
     fn render_return_type(decl: &FnDecl) -> String {
         match &decl.output {
-            Some(ty) => Self::render_type(ty),
+            Some(ty) => format!("-> {}", Self::render_type(ty)),
             None => String::new(),
         }
     }
@@ -1005,12 +989,7 @@ impl Renderer {
 
     fn render_function_pointer(f: &FunctionPointer) -> String {
         let args = Self::render_function_args(&f.decl);
-        let return_type = Self::render_return_type(&f.decl);
-        if return_type.is_empty() {
-            format!("fn({})", args)
-        } else {
-            format!("fn({}) -> {}", args, return_type)
-        }
+        format!("fn({}) {}", args, Self::render_return_type(&f.decl))
     }
 
     fn render_generic_args(args: &GenericArgs) -> String {

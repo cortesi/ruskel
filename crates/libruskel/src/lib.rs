@@ -1,3 +1,18 @@
+//! Ruskel is a tool for generating skeletonized versions of Rust crates.
+//!
+//! It produces a single-page, syntactically valid Rust code representation of a crate,
+//! with all implementations omitted. This provides a clear overview of the crate's structure
+//! and public API.
+//!
+//! Ruskel works by first fetching all dependencies, then using the nightly Rust toolchain
+//! to generate JSON documentation data. This data is then parsed and rendered into
+//! the skeletonized format. The skeltonized code is then formatted with rustfmt, and optionally
+//! has syntax highlighting applied.
+//!
+//! Users of this module must have the nightly Rust toolchain installed and available.
+//! The main entry point is the `Ruskel` struct, which provides methods for configuring
+//! and executing the skeletonization process.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -17,6 +32,13 @@ mod render;
 pub use crate::error::{Result, RuskelError};
 use crate::render::Renderer;
 
+/// Ruskel generates a skeletonized version of a Rust crate in a single page.
+/// It produces syntactically valid Rust code with all implementations omitted.
+///
+/// The tool performs a 'cargo fetch' to ensure all referenced code is available locally,
+/// then uses 'cargo doc' with the nightly toolchain to generate JSON output. This JSON
+/// is parsed and used to render the skeletonized code. Users must have the nightly
+/// Rust toolchain installed and available.
 #[derive(Debug)]
 pub struct Ruskel {
     /// Path to the Cargo.toml file for the target crate.
@@ -36,6 +58,8 @@ pub struct Ruskel {
 }
 
 impl Ruskel {
+    /// Creates a new Ruskel instance for the specified target.
+    /// The target can be a path to a Rust file, directory, or a module name.
     pub fn new(target: &str) -> Result<Self> {
         let target_path = PathBuf::from(target);
 
@@ -65,26 +89,31 @@ impl Ruskel {
         }
     }
 
+    /// Enables or disables syntax highlighting in the output.
     pub fn with_highlighting(mut self, highlight: bool) -> Self {
         self.highlight = highlight;
         self
     }
 
+    /// Disables default features when building the target crate.
     pub fn with_no_default_features(mut self, value: bool) -> Self {
         self.no_default_features = value;
         self
     }
 
+    /// Enables all features when building the target crate.
     pub fn with_all_features(mut self, value: bool) -> Self {
         self.all_features = value;
         self
     }
 
+    /// Enables a specific feature when building the target crate.
     pub fn with_feature(mut self, feature: String) -> Self {
         self.features.push(feature);
         self
     }
 
+    /// Enables multiple specific features when building the target crate.
     pub fn with_features(mut self, features: Vec<String>) -> Self {
         self.features = features;
         self
@@ -107,6 +136,7 @@ impl Ruskel {
         Ok(output)
     }
 
+    /// Generates and returns the parsed JSON representation of the crate's API.
     pub fn json(&self) -> Result<Crate> {
         let json_path = rustdoc_json::Builder::default()
             .toolchain("nightly")
@@ -122,6 +152,7 @@ impl Ruskel {
         Ok(crate_data)
     }
 
+    /// Generates a skeletonized version of the crate as a string of Rust code.
     pub fn render(&self, auto_impls: bool, private_items: bool) -> Result<String> {
         let renderer = Renderer::default()
             .with_auto_impls(auto_impls)
@@ -137,7 +168,8 @@ impl Ruskel {
         }
     }
 
-    pub fn pretty_raw_json(&self) -> Result<String> {
+    /// Returns a pretty-printed version of the crate's JSON representation.
+    pub fn raw_json(&self) -> Result<String> {
         Ok(serde_json::to_string_pretty(&self.json()?)?)
     }
 

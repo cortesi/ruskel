@@ -65,7 +65,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .with_highlighting(should_highlight);
 
     if cli.raw {
-        let json = rs.pretty_raw_json()?;
+        let json = rs.raw_json()?;
         println!("{}", json);
     } else {
         let rendered = rs.render(cli.auto_impls, cli.private)?;
