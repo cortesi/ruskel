@@ -173,10 +173,10 @@ impl Renderer {
         if self.filter.is_empty() {
             return true;
         }
-        match self.filter_match(module_path, item) {
-            FilterMatch::Hit | FilterMatch::Suffix => true,
-            _ => false,
-        }
+        matches!(
+            self.filter_match(module_path, item),
+            FilterMatch::Hit | FilterMatch::Suffix
+        )
     }
 
     fn render_item(
@@ -440,7 +440,7 @@ impl Renderer {
             VariantKind::Struct { fields, .. } => {
                 output.push_str(" {\n");
                 for field in fields {
-                    output.push_str(&self.render_struct_field(crate_data, field));
+                    output.push_str(&self.render_struct_field(crate_data, field, true));
                 }
                 output.push_str("    }");
             }
@@ -586,7 +586,7 @@ impl Renderer {
                     where_clause
                 ));
                 for field in fields {
-                    output.push_str(&self.render_struct_field(crate_data, field));
+                    output.push_str(&self.render_struct_field(crate_data, field, false));
                 }
                 output.push_str("}\n\n");
             }
@@ -604,9 +604,9 @@ impl Renderer {
         output
     }
 
-    fn render_struct_field(&self, crate_data: &Crate, field_id: &Id) -> String {
+    fn render_struct_field(&self, crate_data: &Crate, field_id: &Id, force: bool) -> String {
         let field_item = must_get(crate_data, field_id);
-        if self.is_visible(field_item) {
+        if force || self.is_visible(field_item) {
             let ty = extract_item!(field_item, ItemEnum::StructField);
             format!(
                 "{}{}: {},\n",

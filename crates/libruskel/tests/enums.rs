@@ -1,4 +1,5 @@
 mod utils;
+use libruskel::Renderer;
 use utils::*;
 
 gen_tests! {
@@ -114,5 +115,37 @@ gen_tests! {
                 "#
             }
         }
+        rt_custom {
+            pub_enum_with_private_rendering: {
+                renderer: Renderer::default().with_private_items(false),
+                input: r#"
+                    pub enum PubEnumWithPrivateFields {
+                        Variant1,
+                        Variant2(i32),
+                        Variant3 {
+                            field1: String,
+                            field2: bool,
+                        }
+                    }
+
+                    enum PrivateEnum {
+                        PrivateVariant1,
+                        PrivateVariant2,
+                    }
+                "#,
+                output: r#"
+                    pub enum PubEnumWithPrivateFields {
+                        Variant1,
+                        Variant2(i32),
+                        Variant3 {
+                            field1: String,
+                            field2: bool,
+                        }
+                    }
+                "#
+            }
+        }
     }
+
+
 }
