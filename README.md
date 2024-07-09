@@ -1,39 +1,50 @@
-
 # Ruskel
 
 [![Crates.io](https://img.shields.io/crates/v/ruskel.svg)](https://crates.io/crates/ruskel)
 [![Documentation](https://docs.rs/ruskel/badge.svg)](https://docs.rs/ruskel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Ruskel is a command-line tool for generating skeletonized versions of Rust
-crates. It produces a single-page, syntactically valid Rust code representation
-of a crate, with all implementations omitted. This provides a quick, clear
-overview of the crate's structure and public API.
+Ruskel is a tool for generating skeletonized versions of Rust crates. It
+consists of two parts:
 
-A secondary goal of Ruskel is to provide complete snapshots of the entire
-public surface area of a crate or module, which can be passed to AI tools as a
-reference, without including the entire source.
+1. `ruskel`: A command-line interface for easy use.
+2. `libruskel`: A library that can be integrated into other Rust projects.
 
+Both produce a single-page, syntactically valid Rust code representation of a
+crate, with all implementations omitted. This provides a clear overview of the
+crate's structure and public API.
 
 ## Features
 
 - Generate a skeletonized view of any Rust crate
 - Support for local crates and remote crates from crates.io
-- Syntax highlighting for terminal output
+- Syntax highlighting for terminal output 
 - Option to output raw JSON data for further processing
 - Configurable to include private items and auto-implemented traits
 - Support for custom feature flags
 
-
 ## Installation
 
-Install Ruskel using Cargo:
+### CLI Tool
+
+Install the Ruskel CLI tool using Cargo:
 
 ```sh
 cargo install ruskel
 ```
 
+### Library
+
+To use `libruskel` in your Rust project, add it to your `Cargo.toml`:
+
+```toml
+[dependencies]
+libruskel = "0.1.0"
+```
+
 ## Usage
+
+### CLI
 
 Basic usage:
 
@@ -41,10 +52,9 @@ Basic usage:
 ruskel [TARGET]
 ```
 
-Where `TARGET` can be a directory, file path, or a module name. If omitted, it
-defaults to the current directory.
+Where `TARGET` can be a directory, file path, or a module name. If omitted, it defaults to the current directory.
 
-### Options
+#### Options
 
 - `--raw`: Output raw JSON instead of rendered Rust code
 - `--auto-impls`: Render auto-implemented traits
@@ -60,6 +70,23 @@ For more details, run:
 ```sh
 ruskel --help
 ```
+
+### Library
+
+Here's a basic example of using `libruskel` in your Rust code:
+
+```rust
+use libruskel::Ruskel;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let rs = Ruskel::new(".")?;
+    let rendered = rs.render(false, false)?;
+    println!("{}", rendered);
+    Ok(())
+}
+```
+
+Check the [API documentation](https://docs.rs/libruskel) for more details on using the library.
 
 ## Examples
 
@@ -94,3 +121,4 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
