@@ -1503,23 +1503,6 @@ mod tests {
     }
 
     #[test]
-    fn test_render_module() {
-        rt_priv_idemp(
-            r#"
-                mod test_module {
-                    pub fn test_function() {
-                    }
-                }
-
-                pub mod pub_module {
-                    pub fn pub_function() {
-                    }
-                }
-            "#,
-        );
-    }
-
-    #[test]
     fn test_render_complex_type() {
         rt_idemp(
             r#"
@@ -1617,87 +1600,6 @@ mod tests {
                 /// This is a documented constant.
                 pub const CONSTANT: u32 = 42;
                 const PRIVATE_CONSTANT: &str = "Hello, world!";
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_simple_impl() {
-        rt_priv_idemp(
-            r#"
-                pub struct MyStruct;
-
-                impl MyStruct {
-                    fn new() -> Self { }
-
-                    fn mymethod(&self) { }
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_impl_with_trait() {
-        rt_priv_idemp(
-            r#"
-                trait MyTrait {
-                    fn trait_method(&self);
-                }
-
-                struct MyStruct;
-
-                impl MyTrait for MyStruct {
-                    fn trait_method(&self) { }
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_impl_with_generics() {
-        rt_priv_idemp(
-            r#"
-                struct GenericStruct<T>(T);
-
-                impl<T: Clone> GenericStruct<T> {
-                    fn get_value(&self) -> T { }
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_impl_with_associated_types() {
-        rt_priv_idemp(
-            r#"
-                struct MyIterator<T>(Vec<T>);
-
-                impl<T> Iterator for MyIterator<T> {
-                    type Item = T;
-
-                    fn next(&mut self) -> Option<Self::Item> { }
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_unsafe_impl() {
-        // FIXME: This appears to be a bug in rustdoc - unsafe is not set on the unsafe impl block.
-        rt_private(
-            r#"
-                unsafe trait Foo {}
-
-                struct UnsafeStruct;
-
-                unsafe impl Foo for UnsafeStruct {}
-            "#,
-            r#"
-                unsafe trait Foo {}
-
-                struct UnsafeStruct;
-
-                impl Foo for UnsafeStruct {}
             "#,
         );
     }
@@ -1908,33 +1810,6 @@ mod tests {
 
                 /// A type alias with generics and where clause
                 pub type ComplexAlias<T, U> where T: Clone, U: Default = Result<Vec<(T, U)>, Box<dyn std::error::Error>>;
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_deserialize_impl() {
-        rt_idemp(
-            r#"
-            pub trait Deserialize<'de>: Sized {
-                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-                where
-                    D: Deserializer<'de>;
-            }
-
-            pub trait Deserializer<'de>: Sized {
-                type Error;
-            }
-
-            pub struct Message;
-
-            impl<'de> Deserialize<'de> for Message {
-                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-                where
-                    D: Deserializer<'de>
-                {
-                }
-            }
             "#,
         );
     }
@@ -2644,6 +2519,416 @@ mod tests {
                         }
                     "#,
                     output: r#"
+                    "#
+                }
+            }
+        }
+    }
+
+    gen_tests! {
+        modules, {
+            idemp {
+                basic: r#"
+                    pub mod basic_module {
+                        pub fn public_function() {}
+                        fn private_function() {}
+                    }
+                "#
+            }
+            idemp {
+                nested: r#"
+                    pub mod outer {
+                        pub mod inner {
+                            pub fn nested_function() {}
+                        }
+                        pub fn outer_function() {}
+                    }
+                "#
+            }
+            idemp {
+                with_structs_and_enums: r#"
+                    pub mod types {
+                        pub struct PublicStruct {
+                            pub field: i32,
+                        }
+                        
+                        struct PrivateStruct {
+                            field: i32,
+                        }
+                        
+                        pub enum PublicEnum {
+                            Variant1,
+                            Variant2,
+                        }
+                        
+                        enum PrivateEnum {
+                            Variant1,
+                            Variant2,
+                        }
+                    }
+                "#
+            }
+            idemp {
+                with_traits: r#"
+                    pub mod traits {
+                        pub trait PublicTrait {
+                            fn public_method(&self);
+                        }
+                        
+                        trait PrivateTrait {
+                            fn private_method(&self);
+                        }
+                    }
+                "#
+            }
+            idemp {
+                with_constants: r#"
+                    pub mod constants {
+                        pub const PUBLIC_CONSTANT: i32 = 42;
+                        const PRIVATE_CONSTANT: i32 = 7;
+                    }
+                "#
+            }
+            idemp {
+                with_type_aliases: r#"
+                    pub mod aliases {
+                        pub type PublicAlias = Vec<String>;
+                        type PrivateAlias = std::collections::HashMap<i32, String>;
+                    }
+                "#
+            }
+            idemp {
+                with_doc_comments_inner: r#"
+                    pub mod documented {
+                        //! This is an inner module-level doc comment
+                        
+                        /// This is a documented function
+                        pub fn documented_function() {}
+                    }
+                "#
+            }
+            rt {
+                with_doc_comments_outer: {
+                    input: r#"
+                        /// This is a documented module, with outer comments
+                        pub mod documented {
+                            
+                            /// This is a documented function
+                            pub fn documented_function() {}
+                        }
+                    "#,
+                    output: r#"
+                        pub mod documented {
+                            //! This is a documented module, with outer comments
+                            
+                            /// This is a documented function
+                            pub fn documented_function() {}
+                        }
+                    "#
+                }
+            }
+            rt {
+                with_multi_doc_comments: {
+                    input: r#"
+                        /// This is a documented module, with duplicate comments
+                        pub mod documented {
+                            //! This is a module-level doc comment
+                            
+                            /// This is a documented function
+                            pub fn documented_function() {}
+                        }
+                    "#,
+                    output: r#"
+                        pub mod documented {
+                            //! This is a documented module, with duplicate comments
+                            //! This is a module-level doc comment
+                            
+                            /// This is a documented function
+                            pub fn documented_function() {}
+                        }
+                    "#
+                }
+            }
+            rt {
+                with_use_statements: {
+                    input: r#"
+                        pub mod use_module {
+                            use std::collections::HashMap;
+                            pub use std::vec::Vec;
+                            
+                            pub fn use_hash_map() -> HashMap<String, i32> {
+                                HashMap::new()
+                            }
+                        }
+                    "#,
+                    output: r#"
+                        pub mod use_module {
+                            pub use std::vec::Vec;
+                            
+                            pub fn use_hash_map() -> std::collections::HashMap<String, i32> { }
+                        }
+                    "#
+                }
+            }
+            rt {
+                private_module: {
+                    input: r#"
+                        mod private_module {
+                            pub fn function_in_private_module() {}
+                        }
+                    "#,
+                    output: r#"
+                    "#
+                }
+            }
+            rt {
+                mixed_visibility: {
+                    input: r#"
+                        pub mod mixed {
+                            pub fn public_function() {}
+                            fn private_function() {}
+                            pub struct PublicStruct;
+                            struct PrivateStruct;
+                        }
+                    "#,
+                    output: r#"
+                        pub mod mixed {
+                            pub fn public_function() {}
+                            pub struct PublicStruct;
+                        }
+                    "#
+                }
+            }
+            rt {
+                re_exports: {
+                    input: r#"
+                        mod private {
+                            pub struct ReExported;
+                        }
+                        
+                        pub mod public {
+                            pub use super::private::ReExported;
+                        }
+                    "#,
+                    output: r#"
+                        pub mod public {
+                            pub struct ReExported;
+                        }
+                    "#
+                }
+            }
+        }
+    }
+
+    gen_tests! {
+        impl_tests, {
+            idemp {
+                basic: r#"
+                    struct BasicStruct;
+                    
+                    impl BasicStruct {
+                        pub fn new() -> Self {}
+                        
+                        pub fn public_method(&self) {}
+                        
+                        fn private_method(&self) {}
+                    }
+                "#
+            }
+            idemp {
+                trait_impl: r#"
+                    trait SomeTrait {
+                        fn trait_method(&self);
+                    }
+                    
+                    struct TraitStruct;
+                    
+                    impl SomeTrait for TraitStruct {
+                        fn trait_method(&self) {}
+                    }
+                "#
+            }
+            idemp {
+                generic_impl: r#"
+                    struct GenericStruct<T>(T);
+                    
+                    impl<T> GenericStruct<T> {
+                        pub fn new(value: T) -> Self {}
+                    }
+                "#
+            }
+            idemp {
+                impl_with_where_clause: r#"
+                    struct WhereStruct<T>(T);
+                    
+                    impl<T> WhereStruct<T>
+                    where
+                        T: Clone,
+                    {
+                        pub fn cloned(&self) -> Self {}
+                    }
+                "#
+            }
+            idemp {
+                impl_for_generic_trait: r#"
+                    trait GenericTrait<T> {
+                        fn generic_method(&self, value: T);
+                    }
+                    
+                    struct GenericTraitStruct;
+                    
+                    impl<U> GenericTrait<U> for GenericTraitStruct {
+                        fn generic_method(&self, value: U) {}
+                    }
+                "#
+            }
+            idemp {
+                associated_types_impl: r#"
+                    struct AssocTypeStruct;
+                    
+                    impl TraitWithAssocType for AssocTypeStruct {
+                        type Item = i32;
+                        fn get_item(&self) -> Self::Item {
+                        }
+                    }
+
+                    trait TraitWithAssocType {
+                        type Item;
+                        fn get_item(&self) -> Self::Item;
+                    }
+                "#
+            }
+            idemp {
+                default_impl: r#"
+                    trait DefaultTrait {
+                        fn default_method(&self) { }
+                    }
+                    
+                    struct DefaultImpl;
+                    
+                    impl DefaultTrait for DefaultImpl {}
+                "#
+            }
+            idemp {
+                impl_with_const_fn: r#"
+                    struct ConstStruct;
+                    
+                    impl ConstStruct {
+                        pub const fn const_method(&self) -> i32 { }
+                    }
+                "#
+            }
+            idemp {
+                impl_with_async_fn: r#"
+                    struct AsyncStruct;
+                    
+                    impl AsyncStruct {
+                        pub async fn async_method(&self) {}
+                    }
+                "#
+            }
+            idemp {
+                deserialize: r#"
+                pub trait Deserialize<'de>: Sized {
+                    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                    where
+                        D: Deserializer<'de>;
+                }
+
+                pub trait Deserializer<'de>: Sized {
+                    type Error;
+                }
+
+                pub struct Message;
+
+                impl<'de> Deserialize<'de> for Message {
+                    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                    where
+                        D: Deserializer<'de>
+                    {
+                    }
+                }
+                "#
+            }
+            // FIXME: This appears to be a bug in rustdoc - unsafe is not set on the unsafe impl block.
+            rt {
+                unsafe_impl: {
+                    input: r#"
+                        pub unsafe trait UnsafeTrait {
+                            unsafe fn unsafe_method(&self);
+                        }
+
+                        pub struct UnsafeStruct;
+
+                        unsafe impl UnsafeTrait for UnsafeStruct {
+                            unsafe fn unsafe_method(&self) {}
+                        }
+                    "#,
+                    output: r#"
+                        pub unsafe trait UnsafeTrait {
+                            unsafe fn unsafe_method(&self);
+                        }
+
+                        pub struct UnsafeStruct;
+
+                        impl UnsafeTrait for UnsafeStruct {
+                            unsafe fn unsafe_method(&self) {}
+                        }
+                    "#
+                }
+            }
+            rt {
+                private_impl: {
+                    input: r#"
+                        pub struct PublicStruct;
+                        
+                        impl PublicStruct {
+                            pub fn public_method(&self) {}
+                            fn private_method(&self) {}
+                        }
+                    "#,
+                    output: r#"
+                        pub struct PublicStruct;
+                        
+                        impl PublicStruct {
+                            pub fn public_method(&self) {}
+                        }
+                    "#
+                }
+            }
+            rt {
+                private_trait_impl: {
+                    input: r#"
+                        trait PrivateTrait {
+                            fn trait_method(&self);
+                        }
+                        
+                        pub struct PublicStruct;
+                        
+                        impl PrivateTrait for PublicStruct {
+                            fn trait_method(&self) {}
+                        }
+                    "#,
+                    output: r#"
+                        pub struct PublicStruct;
+                    "#
+                }
+            }
+            rt {
+                blanket_impl: {
+                    input: r#"
+                        pub trait SomeTrait {
+                            fn trait_method(&self);
+                        }
+                        
+                        impl<T: Clone> SomeTrait for T {
+                            fn trait_method(&self) {}
+                        }
+                    "#,
+                    output: r#"
+                        pub trait SomeTrait {
+                            fn trait_method(&self);
+                        }
                     "#
                 }
             }
