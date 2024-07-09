@@ -1945,7 +1945,7 @@ dependencies = [
 
 [[package]]
 name = "libruskel"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "cargo",
@@ -2502,7 +2502,7 @@ dependencies = [
 
 [[package]]
 name = "ruskel"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "clap",
  "libruskel",

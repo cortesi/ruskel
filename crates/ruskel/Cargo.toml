@@ -6,8 +6,9 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description.workspace = true
+readme.workspace = true
 
 [dependencies]
-libruskel = { version="0.0.1", path = "../libruskel" }
+libruskel = { version="0.0.2", path = "../libruskel" }
 clap = { version = "4.5.8", features = ["derive"] }
 
