@@ -31,7 +31,7 @@ mod error;
 mod render;
 
 pub use crate::error::{Result, RuskelError};
-use crate::render::Renderer;
+pub use crate::render::Renderer;
 
 /// Ruskel generates a skeletonized version of a Rust crate in a single page.
 /// It produces syntactically valid Rust code with all implementations omitted.

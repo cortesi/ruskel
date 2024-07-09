@@ -1,8 +1,25 @@
 use rustdoc_types::{
     FnDecl, FunctionPointer, GenericArg, GenericArgs, GenericBound, GenericParamDef,
-    GenericParamDefKind, Generics, Item, Path, PolyTrait, Term, TraitBoundModifier, Type,
+    GenericParamDefKind, Generics, Item, ItemEnum, Path, PolyTrait, Term, TraitBoundModifier, Type,
     TypeBinding, TypeBindingKind, Visibility, WherePredicate,
 };
+
+macro_rules! extract_item {
+    ($item:expr, $variant:path) => {
+        match &$item.inner {
+            $variant(inner) => inner,
+            _ => panic!("Expected {}, found {:?}", stringify!($variant), $item.inner),
+        }
+    };
+    ($item:expr, $variant:path { $($field:ident),+ }) => {
+        match &$item.inner {
+            $variant { $($field,)+ .. } => ($($field,)+),
+            _ => panic!("Expected {}, found {:?}", stringify!($variant), $item.inner),
+        }
+    };
+}
+
+pub(crate) use extract_item;
 
 pub fn docs(item: &Item) -> String {
     let mut output = String::new();
@@ -232,7 +249,7 @@ pub fn render_type(ty: &Type) -> String {
     render_type_inner(ty, false)
 }
 
-fn render_poly_trait(poly_trait: &PolyTrait) -> String {
+pub fn render_poly_trait(poly_trait: &PolyTrait) -> String {
     let generic_params = if poly_trait.generic_params.is_empty() {
         String::new()
     } else {
@@ -360,7 +377,7 @@ fn render_generic_arg(arg: &GenericArg) -> String {
     }
 }
 
-fn render_generic_bounds(bounds: &[GenericBound]) -> String {
+pub fn render_generic_bounds(bounds: &[GenericBound]) -> String {
     bounds
         .iter()
         .map(render_generic_bound)
@@ -453,4 +470,19 @@ pub fn render_where_predicate(pred: &WherePredicate) -> Option<String> {
             Some(format!("{} = {}", render_type(lhs), render_term(rhs)))
         }
     }
+}
+
+pub fn render_associated_type(item: &Item) -> String {
+    let (bounds, default) = extract_item!(item, ItemEnum::AssocType { bounds, default });
+
+    let bounds_str = if !bounds.is_empty() {
+        format!(": {}", render_generic_bounds(bounds))
+    } else {
+        String::new()
+    };
+    let default_str = default
+        .as_ref()
+        .map(|d| format!(" = {}", render_type(d)))
+        .unwrap_or_default();
+    format!("type {}{}{};\n", render_name(item), bounds_str, default_str)
 }
