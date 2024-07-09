@@ -15,6 +15,21 @@ fn render_vis(item: &Item) -> String {
     }
 }
 
+macro_rules! extract_item {
+    ($item:expr, $variant:path) => {
+        match &$item.inner {
+            $variant(inner) => inner,
+            _ => panic!("Expected {}, found {:?}", stringify!($variant), $item.inner),
+        }
+    };
+    ($item:expr, $variant:path { $($field:ident),+ }) => {
+        match &$item.inner {
+            $variant { $($field,)+ .. } => ($($field,)+),
+            _ => panic!("Expected {}, found {:?}", stringify!($variant), $item.inner),
+        }
+    };
+}
+
 pub struct Renderer {
     formatter: RustFmt,
     render_auto_impls: bool,
@@ -157,39 +172,38 @@ impl Renderer {
         }
         let fn_name = Self::render_name(&item.name);
 
-        if let ItemEnum::ProcMacro(proc_macro) = &item.inner {
-            match proc_macro.kind {
-                MacroKind::Derive => {
-                    if !proc_macro.helpers.is_empty() {
-                        output.push_str(&format!(
-                            "#[proc_macro_derive({}, attributes({}))]\n",
-                            fn_name,
-                            proc_macro.helpers.join(", ")
-                        ));
-                    } else {
-                        output.push_str(&format!("#[proc_macro_derive({})]\n", fn_name));
-                    }
-                }
-                MacroKind::Attr => {
-                    output.push_str("#[proc_macro_attribute]\n");
-                }
-                MacroKind::Bang => {
-                    output.push_str("#[proc_macro]\n");
+        let proc_macro = extract_item!(item, ItemEnum::ProcMacro);
+        match proc_macro.kind {
+            MacroKind::Derive => {
+                if !proc_macro.helpers.is_empty() {
+                    output.push_str(&format!(
+                        "#[proc_macro_derive({}, attributes({}))]\n",
+                        fn_name,
+                        proc_macro.helpers.join(", ")
+                    ));
+                } else {
+                    output.push_str(&format!("#[proc_macro_derive({})]\n", fn_name));
                 }
             }
-            let (args, return_type) = match proc_macro.kind {
-                MacroKind::Attr => (
-                    "attr: proc_macro::TokenStream, item: proc_macro::TokenStream",
-                    "proc_macro::TokenStream",
-                ),
-                _ => ("input: proc_macro::TokenStream", "proc_macro::TokenStream"),
-            };
-
-            output.push_str(&format!(
-                "pub fn {}({}) -> {} {{}}\n",
-                fn_name, args, return_type
-            ));
+            MacroKind::Attr => {
+                output.push_str("#[proc_macro_attribute]\n");
+            }
+            MacroKind::Bang => {
+                output.push_str("#[proc_macro]\n");
+            }
         }
+        let (args, return_type) = match proc_macro.kind {
+            MacroKind::Attr => (
+                "attr: proc_macro::TokenStream, item: proc_macro::TokenStream",
+                "proc_macro::TokenStream",
+            ),
+            _ => ("input: proc_macro::TokenStream", "proc_macro::TokenStream"),
+        };
+
+        output.push_str(&format!(
+            "pub fn {}({}) -> {} {{}}\n",
+            fn_name, args, return_type
+        ));
 
         output
     }
@@ -204,76 +218,65 @@ impl Renderer {
             }
         }
 
-        if let ItemEnum::Macro(macro_def) = &item.inner {
-            // Add #[macro_export] for public macros
-            if matches!(item.visibility, Visibility::Public) {
-                output.push_str("#[macro_export]\n");
-            }
-            output.push_str(&format!("{}\n", macro_def));
+        let macro_def = extract_item!(item, ItemEnum::Macro);
+        // Add #[macro_export] for public macros
+        if matches!(item.visibility, Visibility::Public) {
+            output.push_str("#[macro_export]\n");
         }
+        output.push_str(&format!("{}\n", macro_def));
 
         output
     }
 
     fn render_type_alias(item: &Item) -> String {
-        if let ItemEnum::TypeAlias(type_alias) = &item.inner {
-            let mut output = String::new();
+        let type_alias = extract_item!(item, ItemEnum::TypeAlias);
+        let mut output = String::new();
 
-            // Add doc comment if present
-            if let Some(docs) = &item.docs {
-                for line in docs.lines() {
-                    output.push_str(&format!("/// {}\n", line));
-                }
+        // Add doc comment if present
+        if let Some(docs) = &item.docs {
+            for line in docs.lines() {
+                output.push_str(&format!("/// {}\n", line));
             }
-
-            let generics = Self::render_generics(&type_alias.generics);
-            let where_clause = Self::render_where_clause(&type_alias.generics);
-
-            output.push_str(&format!(
-                "{}type {}{}{}",
-                render_vis(item),
-                Self::render_name(&item.name),
-                generics,
-                where_clause
-            ));
-
-            // If there's a where clause, add a line break before the assignment
-            if !where_clause.is_empty() {
-                output.push('\n');
-            }
-
-            output.push_str(&format!("= {};\n\n", Self::render_type(&type_alias.type_)));
-
-            output
-        } else {
-            String::new()
         }
+
+        let generics = Self::render_generics(&type_alias.generics);
+        let where_clause = Self::render_where_clause(&type_alias.generics);
+
+        output.push_str(&format!(
+            "{}type {}{}{}",
+            render_vis(item),
+            Self::render_name(&item.name),
+            generics,
+            where_clause
+        ));
+
+        // If there's a where clause, add a line break before the assignment
+        if !where_clause.is_empty() {
+            output.push('\n');
+        }
+
+        output.push_str(&format!("= {};\n\n", Self::render_type(&type_alias.type_)));
+
+        output
     }
 
     fn render_import(&self, item: &Item, crate_data: &Crate) -> String {
-        // FIXME: For the moment, we don't support imports from external crates. We should consider
-        // doing this.
-        let import = if let ItemEnum::Import(import) = &item.inner {
-            import
-        } else {
-            return String::new();
-        };
+        let import = extract_item!(item, ItemEnum::Import);
 
         if import.glob {
             // Handle glob imports
             if let Some(source_id) = &import.id {
                 if let Some(source_item) = crate_data.index.get(source_id) {
-                    if let ItemEnum::Module(module) = &source_item.inner {
-                        let mut output = String::new();
-                        for item_id in &module.items {
-                            if let Some(item) = crate_data.index.get(item_id) {
-                                if matches!(item.visibility, Visibility::Public) {
-                                    output.push_str(&self.render_item(item, crate_data, true));
-                                }
+                    let module = extract_item!(source_item, ItemEnum::Module);
+                    let mut output = String::new();
+                    for item_id in &module.items {
+                        if let Some(item) = crate_data.index.get(item_id) {
+                            if matches!(item.visibility, Visibility::Public) {
+                                output.push_str(&self.render_item(item, crate_data, true));
                             }
                         }
-                        return output;
                     }
+                    return output;
                 }
             }
             // If we can't resolve the glob import, fall back to rendering it as-is
@@ -306,65 +309,64 @@ impl Renderer {
     fn render_impl(&self, item: &Item, crate_data: &Crate) -> String {
         let mut output = String::new();
 
-        if let ItemEnum::Impl(impl_) = &item.inner {
-            if !self.should_render_impl(impl_) {
-                return String::new();
-            }
+        let impl_ = extract_item!(item, ItemEnum::Impl);
+        if !self.should_render_impl(impl_) {
+            return String::new();
+        }
 
-            // Check if the trait is private and skip if render_private_items is false
-            if let Some(trait_) = &impl_.trait_ {
-                if let Some(trait_item) = crate_data.index.get(&trait_.id) {
-                    if !matches!(trait_item.visibility, Visibility::Public)
-                        && !self.render_private_items
-                    {
-                        return String::new();
-                    }
+        // Check if the trait is private and skip if render_private_items is false
+        if let Some(trait_) = &impl_.trait_ {
+            if let Some(trait_item) = crate_data.index.get(&trait_.id) {
+                if !matches!(trait_item.visibility, Visibility::Public)
+                    && !self.render_private_items
+                {
+                    return String::new();
                 }
             }
+        }
 
-            let generics = Self::render_generics(&impl_.generics);
-            let where_clause = Self::render_where_clause(&impl_.generics);
-            let unsafe_prefix = if impl_.is_unsafe { "unsafe " } else { "" };
+        let generics = Self::render_generics(&impl_.generics);
+        let where_clause = Self::render_where_clause(&impl_.generics);
+        let unsafe_prefix = if impl_.is_unsafe { "unsafe " } else { "" };
 
-            let trait_part = if let Some(trait_) = &impl_.trait_ {
-                let trait_path = Self::render_path(trait_);
-                if !trait_path.is_empty() {
-                    format!("{} for ", trait_path)
-                } else {
-                    String::new()
-                }
+        let trait_part = if let Some(trait_) = &impl_.trait_ {
+            let trait_path = Self::render_path(trait_);
+            if !trait_path.is_empty() {
+                format!("{} for ", trait_path)
             } else {
                 String::new()
-            };
-
-            output.push_str(&format!(
-                "{}impl{} {}{}",
-                unsafe_prefix,
-                generics,
-                trait_part,
-                Self::render_type(&impl_.for_)
-            ));
-
-            if !where_clause.is_empty() {
-                output.push_str(&format!("\n{}", where_clause));
             }
+        } else {
+            String::new()
+        };
 
-            output.push_str(" {\n");
+        output.push_str(&format!(
+            "{}impl{} {}{}",
+            unsafe_prefix,
+            generics,
+            trait_part,
+            Self::render_type(&impl_.for_)
+        ));
 
-            for item_id in &impl_.items {
-                if let Some(item) = crate_data.index.get(item_id) {
-                    let is_trait_impl = impl_.trait_.is_some();
-                    if is_trait_impl
-                        || self.render_private_items
-                        || matches!(item.visibility, Visibility::Public)
-                    {
-                        output.push_str(&self.render_impl_item(item));
-                    }
+        if !where_clause.is_empty() {
+            output.push_str(&format!("\n{}", where_clause));
+        }
+
+        output.push_str(" {\n");
+
+        for item_id in &impl_.items {
+            if let Some(item) = crate_data.index.get(item_id) {
+                let is_trait_impl = impl_.trait_.is_some();
+                if is_trait_impl
+                    || self.render_private_items
+                    || matches!(item.visibility, Visibility::Public)
+                {
+                    output.push_str(&self.render_impl_item(item));
                 }
             }
-
-            output.push_str("}\n\n");
         }
+
+        output.push_str("}\n\n");
 
         output
     }
@@ -380,28 +382,23 @@ impl Renderer {
     }
 
     fn render_associated_type(item: &Item) -> String {
-        if let ItemEnum::AssocType {
-            bounds, default, ..
-        } = &item.inner
-        {
-            let bounds_str = if !bounds.is_empty() {
-                format!(": {}", Self::render_generic_bounds(bounds))
-            } else {
-                String::new()
-            };
-            let default_str = default
-                .as_ref()
-                .map(|d| format!(" = {}", Self::render_type(d)))
-                .unwrap_or_default();
-            format!(
-                "type {}{}{};\n",
-                item.name.as_deref().unwrap_or("?"),
-                bounds_str,
-                default_str
-            )
+        let (bounds, default) = extract_item!(item, ItemEnum::AssocType { bounds, default });
+
+        let bounds_str = if !bounds.is_empty() {
+            format!(": {}", Self::render_generic_bounds(bounds))
         } else {
             String::new()
-        }
+        };
+        let default_str = default
+            .as_ref()
+            .map(|d| format!(" = {}", Self::render_type(d)))
+            .unwrap_or_default();
+        format!(
+            "type {}{}{};\n",
+            item.name.as_deref().unwrap_or("?"),
+            bounds_str,
+            default_str
+        )
     }
 
     fn render_enum(&self, item: &Item, crate_data: &Crate) -> String {
@@ -414,26 +411,26 @@ impl Renderer {
             }
         }
 
-        if let ItemEnum::Enum(enum_) = &item.inner {
-            let generics = Self::render_generics(&enum_.generics);
-            let where_clause = Self::render_where_clause(&enum_.generics);
+        let enum_ = extract_item!(item, ItemEnum::Enum);
 
-            output.push_str(&format!(
-                "{}enum {}{}{} {{\n",
-                render_vis(item),
-                Self::render_name(&item.name),
-                generics,
-                where_clause
-            ));
+        let generics = Self::render_generics(&enum_.generics);
+        let where_clause = Self::render_where_clause(&enum_.generics);
 
-            for variant_id in &enum_.variants {
-                if let Some(variant_item) = crate_data.index.get(variant_id) {
-                    output.push_str(&self.render_enum_variant(variant_item, crate_data));
-                }
+        output.push_str(&format!(
+            "{}enum {}{}{} {{\n",
+            render_vis(item),
+            Self::render_name(&item.name),
+            generics,
+            where_clause
+        ));
+
+        for variant_id in &enum_.variants {
+            if let Some(variant_item) = crate_data.index.get(variant_id) {
+                output.push_str(&self.render_enum_variant(variant_item, crate_data));
             }
-
-            output.push_str("}\n\n");
         }
+
+        output.push_str("}\n\n");
 
         output
     }
@@ -448,51 +445,51 @@ impl Renderer {
             }
         }
 
-        if let ItemEnum::Variant(variant) = &item.inner {
-            output.push_str(&format!("    {}", Self::render_name(&item.name),));
+        let variant = extract_item!(item, ItemEnum::Variant);
 
-            match &variant.kind {
-                VariantKind::Plain => {}
-                VariantKind::Tuple(fields) => {
-                    let fields_str = fields
-                        .iter()
-                        .filter_map(|field| {
-                            field.as_ref().map(|id| {
-                                if let Some(field_item) = crate_data.index.get(id) {
-                                    if let ItemEnum::StructField(ty) = &field_item.inner {
-                                        Self::render_type(ty)
-                                    } else {
-                                        "".to_string()
-                                    }
+        output.push_str(&format!("    {}", Self::render_name(&item.name),));
+
+        match &variant.kind {
+            VariantKind::Plain => {}
+            VariantKind::Tuple(fields) => {
+                let fields_str = fields
+                    .iter()
+                    .filter_map(|field| {
+                        field.as_ref().map(|id| {
+                            if let Some(field_item) = crate_data.index.get(id) {
+                                if let ItemEnum::StructField(ty) = &field_item.inner {
+                                    Self::render_type(ty)
                                 } else {
                                     "".to_string()
                                 }
-                            })
+                            } else {
+                                "".to_string()
+                            }
                         })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    output.push_str(&format!("({})", fields_str));
-                }
-                VariantKind::Struct { fields, .. } => {
-                    output.push_str(" {\n");
-                    for field in fields {
-                        if let Some(_field_item) = crate_data.index.get(field) {
-                            output.push_str(&format!(
-                                "        {}\n",
-                                self.render_struct_field(crate_data, field)
-                            ));
-                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                output.push_str(&format!("({})", fields_str));
+            }
+            VariantKind::Struct { fields, .. } => {
+                output.push_str(" {\n");
+                for field in fields {
+                    if let Some(_field_item) = crate_data.index.get(field) {
+                        output.push_str(&format!(
+                            "        {}\n",
+                            self.render_struct_field(crate_data, field)
+                        ));
                     }
-                    output.push_str("    }");
                 }
+                output.push_str("    }");
             }
-
-            if let Some(discriminant) = &variant.discriminant {
-                output.push_str(&format!(" = {}", discriminant.expr));
-            }
-
-            output.push_str(",\n");
         }
+
+        if let Some(discriminant) = &variant.discriminant {
+            output.push_str(&format!(" = {}", discriminant.expr));
+        }
+
+        output.push_str(",\n");
 
         output
     }
@@ -507,36 +504,36 @@ impl Renderer {
             }
         }
 
-        if let ItemEnum::Trait(trait_) = &item.inner {
-            let generics = Self::render_generics(&trait_.generics);
-            let where_clause = Self::render_where_clause(&trait_.generics);
+        let trait_ = extract_item!(item, ItemEnum::Trait);
 
-            let bounds = if !trait_.bounds.is_empty() {
-                format!(": {}", Self::render_generic_bounds(&trait_.bounds))
-            } else {
-                String::new()
-            };
+        let generics = Self::render_generics(&trait_.generics);
+        let where_clause = Self::render_where_clause(&trait_.generics);
 
-            let unsafe_prefix = if trait_.is_unsafe { "unsafe " } else { "" };
+        let bounds = if !trait_.bounds.is_empty() {
+            format!(": {}", Self::render_generic_bounds(&trait_.bounds))
+        } else {
+            String::new()
+        };
 
-            output.push_str(&format!(
-                "{}{}trait {}{}{}{} {{\n",
-                render_vis(item),
-                unsafe_prefix,
-                Self::render_name(&item.name),
-                generics,
-                bounds,
-                where_clause
-            ));
+        let unsafe_prefix = if trait_.is_unsafe { "unsafe " } else { "" };
 
-            for item_id in &trait_.items {
-                if let Some(item) = crate_data.index.get(item_id) {
-                    output.push_str(&Self::render_trait_item(item));
-                }
+        output.push_str(&format!(
+            "{}{}trait {}{}{}{} {{\n",
+            render_vis(item),
+            unsafe_prefix,
+            Self::render_name(&item.name),
+            generics,
+            bounds,
+            where_clause
+        ));
+
+        for item_id in &trait_.items {
+            if let Some(item) = crate_data.index.get(item_id) {
+                output.push_str(&Self::render_trait_item(item));
             }
-
-            output.push_str("}\n\n");
         }
+
+        output.push_str("}\n\n");
 
         output
     }
@@ -601,81 +598,78 @@ impl Renderer {
             }
         }
 
-        if let ItemEnum::Struct(struct_) = &item.inner {
-            let generics = Self::render_generics(&struct_.generics);
-            let where_clause = Self::render_where_clause(&struct_.generics);
+        let struct_ = extract_item!(item, ItemEnum::Struct);
 
-            match &struct_.kind {
-                StructKind::Unit => {
-                    output.push_str(&format!(
-                        "{}struct {}{}{};\n\n",
-                        render_vis(item),
-                        Self::render_name(&item.name),
-                        generics,
-                        where_clause
-                    ));
-                }
-                StructKind::Tuple(fields) => {
-                    let fields_str = fields
-                        .iter()
-                        .filter_map(|field| {
-                            field.as_ref().map(|id| {
-                                if let Some(field_item) = crate_data.index.get(id) {
-                                    if let ItemEnum::StructField(ty) = &field_item.inner {
-                                        let visibility = match &field_item.visibility {
-                                            Visibility::Public => "pub ",
-                                            _ => "",
-                                        };
+        let generics = Self::render_generics(&struct_.generics);
+        let where_clause = Self::render_where_clause(&struct_.generics);
 
-                                        if !self.render_private_items
-                                            && !matches!(field_item.visibility, Visibility::Public)
-                                        {
-                                            "_".to_string()
-                                        } else {
-                                            format!("{}{}", visibility, Self::render_type(ty))
-                                        }
-                                    } else {
-                                        "".to_string()
-                                    }
-                                } else {
-                                    "".to_string()
-                                }
-                            })
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    output.push_str(&format!(
-                        "{}struct {}{}({}){};\n\n",
-                        render_vis(item),
-                        Self::render_name(&item.name),
-                        generics,
-                        fields_str,
-                        where_clause
-                    ));
-                }
-                StructKind::Plain { fields, .. } => {
-                    output.push_str(&format!(
-                        "{}struct {}{}{} {{\n",
-                        render_vis(item),
-                        Self::render_name(&item.name),
-                        generics,
-                        where_clause
-                    ));
-                    for field in fields {
-                        output.push_str(&self.render_struct_field(crate_data, field));
-                    }
-                    output.push_str("}\n\n");
-                }
+        match &struct_.kind {
+            StructKind::Unit => {
+                output.push_str(&format!(
+                    "{}struct {}{}{};\n\n",
+                    render_vis(item),
+                    Self::render_name(&item.name),
+                    generics,
+                    where_clause
+                ));
             }
+            StructKind::Tuple(fields) => {
+                let fields_str = fields
+                    .iter()
+                    .filter_map(|field| {
+                        field.as_ref().map(|id| {
+                            if let Some(field_item) = crate_data.index.get(id) {
+                                let ty = extract_item!(field_item, ItemEnum::StructField);
+                                let visibility = match &field_item.visibility {
+                                    Visibility::Public => "pub ",
+                                    _ => "",
+                                };
 
-            // Render impl blocks
-            for impl_id in &struct_.impls {
-                if let Some(impl_item) = crate_data.index.get(impl_id) {
-                    if let ItemEnum::Impl(impl_) = &impl_item.inner {
-                        if self.should_render_impl(impl_) {
-                            output.push_str(&self.render_impl(impl_item, crate_data));
-                        }
-                    }
+                                if !self.render_private_items
+                                    && !matches!(field_item.visibility, Visibility::Public)
+                                {
+                                    "_".to_string()
+                                } else {
+                                    format!("{}{}", visibility, Self::render_type(ty))
+                                }
+                            } else {
+                                "".to_string()
+                            }
+                        })
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+
+                output.push_str(&format!(
+                    "{}struct {}{}({}){};\n\n",
+                    render_vis(item),
+                    Self::render_name(&item.name),
+                    generics,
+                    fields_str,
+                    where_clause
+                ));
+            }
+            StructKind::Plain { fields, .. } => {
+                output.push_str(&format!(
+                    "{}struct {}{}{} {{\n",
+                    render_vis(item),
+                    Self::render_name(&item.name),
+                    generics,
+                    where_clause
+                ));
+                for field in fields {
+                    output.push_str(&self.render_struct_field(crate_data, field));
+                }
+                output.push_str("}\n\n");
+            }
+        }
+
+        // Render impl blocks
+        for impl_id in &struct_.impls {
+            if let Some(impl_item) = crate_data.index.get(impl_id) {
+                let impl_ = extract_item!(impl_item, ItemEnum::Impl);
+                if self.should_render_impl(impl_) {
+                    output.push_str(&self.render_impl(impl_item, crate_data));
                 }
             }
         }
@@ -687,16 +681,13 @@ impl Renderer {
         if let Some(field_item) = crate_data.index.get(field_id) {
             // Only render the field if it's public or render_private_items is true
             if matches!(field_item.visibility, Visibility::Public) || self.render_private_items {
-                if let ItemEnum::StructField(ty) = &field_item.inner {
-                    format!(
-                        "{}{}: {},\n",
-                        render_vis(field_item),
-                        Self::render_name(&field_item.name),
-                        Self::render_type(ty)
-                    )
-                } else {
-                    "// Unknown field type\n".to_string()
-                }
+                let ty = extract_item!(field_item, ItemEnum::StructField);
+                format!(
+                    "{}{}: {},\n",
+                    render_vis(field_item),
+                    Self::render_name(&field_item.name),
+                    Self::render_type(ty)
+                )
             } else {
                 String::new() // Don't render private fields if render_private_items is false
             }
@@ -715,15 +706,14 @@ impl Renderer {
             }
         }
 
-        if let ItemEnum::Constant { type_, const_ } = &item.inner {
-            output.push_str(&format!(
-                "{}const {}: {} = {};\n\n",
-                render_vis(item),
-                Self::render_name(&item.name),
-                Self::render_type(type_),
-                const_.expr
-            ));
-        }
+        let (type_, const_) = extract_item!(item, ItemEnum::Constant { type_, const_ });
+        output.push_str(&format!(
+            "{}const {}: {} = {};\n\n",
+            render_vis(item),
+            Self::render_name(&item.name),
+            Self::render_type(type_),
+            const_.expr
+        ));
 
         output
     }
@@ -743,18 +733,18 @@ impl Renderer {
             output.push('\n');
         }
 
-        if let ItemEnum::Module(module) = &item.inner {
-            for item_id in &module.items {
-                if let Some(item) = crate_data.index.get(item_id) {
-                    // Handle public imports differently
-                    if let ItemEnum::Import(_) = &item.inner {
-                        if matches!(item.visibility, Visibility::Public) {
-                            output.push_str(&self.render_import(item, crate_data));
-                            continue;
-                        }
+        let module = extract_item!(item, ItemEnum::Module);
+
+        for item_id in &module.items {
+            if let Some(item) = crate_data.index.get(item_id) {
+                // Handle public imports differently
+                if let ItemEnum::Import(_) = &item.inner {
+                    if matches!(item.visibility, Visibility::Public) {
+                        output.push_str(&self.render_import(item, crate_data));
+                        continue;
                     }
-                    output.push_str(&self.render_item(item, crate_data, false))
                 }
+                output.push_str(&self.render_item(item, crate_data, false))
             }
         }
 
@@ -793,51 +783,51 @@ impl Renderer {
             }
         }
 
-        if let ItemEnum::Function(function) = &item.inner {
-            let generics = Self::render_generics(&function.generics);
-            let args = Self::render_function_args(&function.decl);
-            let return_type = Self::render_return_type(&function.decl);
+        let function = extract_item!(item, ItemEnum::Function);
 
-            let where_clause = Self::render_where_clause(&function.generics);
+        let generics = Self::render_generics(&function.generics);
+        let args = Self::render_function_args(&function.decl);
+        let return_type = Self::render_return_type(&function.decl);
 
-            // Handle const, async, and unsafe keywords in the correct order
-            let mut prefixes = Vec::new();
-            if function.header.const_ {
-                prefixes.push("const");
-            }
-            if function.header.async_ {
-                prefixes.push("async");
-            }
-            if function.header.unsafe_ {
-                prefixes.push("unsafe");
-            }
-            let prefix = if !prefixes.is_empty() {
-                format!("{} ", prefixes.join(" "))
-            } else {
+        let where_clause = Self::render_where_clause(&function.generics);
+
+        // Handle const, async, and unsafe keywords in the correct order
+        let mut prefixes = Vec::new();
+        if function.header.const_ {
+            prefixes.push("const");
+        }
+        if function.header.async_ {
+            prefixes.push("async");
+        }
+        if function.header.unsafe_ {
+            prefixes.push("unsafe");
+        }
+        let prefix = if !prefixes.is_empty() {
+            format!("{} ", prefixes.join(" "))
+        } else {
+            String::new()
+        };
+
+        output.push_str(&format!(
+            "{}{}fn {}{}({}){}{}",
+            render_vis(item),
+            prefix,
+            Self::render_name(&item.name),
+            generics,
+            args,
+            if return_type.is_empty() {
                 String::new()
-            };
-
-            output.push_str(&format!(
-                "{}{}fn {}{}({}){}{}",
-                render_vis(item),
-                prefix,
-                Self::render_name(&item.name),
-                generics,
-                args,
-                if return_type.is_empty() {
-                    String::new()
-                } else {
-                    format!(" -> {}", return_type)
-                },
-                where_clause
-            ));
-
-            // Use semicolon for trait method declarations, empty body for implementations
-            if is_trait_method && !function.has_body {
-                output.push_str(";\n\n");
             } else {
-                output.push_str(" {}\n\n");
-            }
+                format!(" -> {}", return_type)
+            },
+            where_clause
+        ));
+
+        // Use semicolon for trait method declarations, empty body for implementations
+        if is_trait_method && !function.has_body {
+            output.push_str(";\n\n");
+        } else {
+            output.push_str(" {}\n\n");
         }
 
         output
