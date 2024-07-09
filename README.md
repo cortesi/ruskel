@@ -4,15 +4,7 @@
 [![Documentation](https://docs.rs/libruskel/badge.svg)](https://docs.rs/libruskel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Ruskel is a tool for generating skeletonized outlines of Rust crates. It
-consists of two parts:
-
-1. `ruskel`: A command-line interface for easy use.
-2. `libruskel`: A library that can be integrated into other Rust projects.
-
-Both produce a single-page, syntactically valid Rust code representation of a
-crate, with all implementations omitted. This provides a clear overview of the
-crate's structure and public API.
+Ruskel is a tool for generating skeletonized outlines of Rust crates. It produces a single-page, syntactically valid Rust code representation of a crate, with all implementations omitted. This provides a clear overview of the crate's structure and public API.
 
 ## Features
 
@@ -23,28 +15,15 @@ crate's structure and public API.
 - Configurable to include private items and auto-implemented traits
 - Support for custom feature flags
 
-## Installation
+## ruskel command line tool
 
-### CLI Tool
-
-Install the Ruskel CLI tool using Cargo:
+`ruskel` is the command-line interface for easy use of the Ruskel functionality.
 
 ```sh
 cargo install ruskel
 ```
 
-### Library
-
-To use `libruskel` in your Rust project, add it to your `Cargo.toml`:
-
-```toml
-[dependencies]
-libruskel = "0.1.0"
-```
-
-## Usage
-
-### CLI
+### Usage
 
 Basic usage:
 
@@ -71,24 +50,7 @@ For more details, run:
 ruskel --help
 ```
 
-### Library
-
-Here's a basic example of using `libruskel` in your Rust code:
-
-```rust
-use libruskel::Ruskel;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let rs = Ruskel::new(".")?;
-    let rendered = rs.render(false, false)?;
-    println!("{}", rendered);
-    Ok(())
-}
-```
-
-Check the [API documentation](https://docs.rs/libruskel) for more details on using the library.
-
-## Examples
+### Examples
 
 Generate a skeleton for the current project:
 
@@ -114,6 +76,31 @@ Include private items and auto-implemented traits:
 ruskel --private --auto-impls
 ```
 
+## libruskel library
+
+`libruskel` is a library that can be integrated into other Rust projects to provide Ruskel functionality.
+
+```sh
+cargo add libruskel
+```
+
+### Usage
+
+Here's a basic example of using `libruskel` in your Rust code:
+
+```rust
+use libruskel::Ruskel;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let rs = Ruskel::new(".")?;
+    let rendered = rs.render(false, false)?;
+    println!("{}", rendered);
+    Ok(())
+}
+```
+
+Check the [API documentation](https://docs.rs/libruskel) for more details on using the library.
+
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
@@ -121,4 +108,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+
 
