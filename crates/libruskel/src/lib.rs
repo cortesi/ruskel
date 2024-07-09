@@ -107,10 +107,9 @@ impl Ruskel {
                 let normalized_target = target.replace('-', "_");
                 let workspace_root = Self::find_module(&normalized_target)?;
                 let manifest_path = workspace_root.join("Cargo.toml");
-                (manifest_path, normalized_target)
+                (manifest_path, "".to_string())
             }
         };
-
         Ok(Ruskel {
             manifest_path,
             no_default_features: false,

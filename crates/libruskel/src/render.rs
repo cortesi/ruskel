@@ -56,31 +56,17 @@ impl Renderer {
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
         let mut output = String::new();
 
+        // The root item is always a module
         if let Some(root_item) = crate_data.index.get(&crate_data.root) {
-            let unformatted = self.render_item(root_item, crate_data, false);
+            let unformatted = self.render_item("", root_item, crate_data, false);
             output.push_str(&unformatted);
         }
 
         Ok(self.formatter.format_str(&output)?)
     }
 
-    fn should_show(&self, item: &Item, crate_data: &Crate) -> bool {
-        if !self.render_private_items && !matches!(item.visibility, Visibility::Public) {
-            return false;
-        }
-
-        if !self.filter.is_empty() {
-            if let Some(summary) = crate_data.paths.get(&item.id) {
-                let item_path = summary.path.join("::");
-                if !self.filter.starts_with(&item_path) && !item_path.starts_with(&self.filter) {
-                    return false;
-                }
-            } else {
-                return false;
-            }
-        }
-
-        true
+    fn is_visible(&self, item: &Item) -> bool {
+        self.render_private_items || matches!(item.visibility, Visibility::Public)
     }
 
     fn should_render_impl(&self, impl_: &Impl) -> bool {
@@ -140,13 +126,53 @@ impl Renderer {
         true
     }
 
-    fn render_item(&self, item: &Item, crate_data: &Crate, force_private: bool) -> String {
+    fn should_filter(&self, module_path: &str, item: &Item) -> bool {
+        if self.filter.is_empty() {
+            return false;
+        }
+        let item_path = if module_path.is_empty() {
+            render_name(item).to_string()
+        } else {
+            format!("{}::{}", module_path, render_name(item))
+        };
+
+        let filter_components: Vec<&str> = self.filter.split("::").collect();
+        let item_components: Vec<&str> = item_path.split("::").collect();
+
+        // If the item path matches the filter exactly, don't filter
+        if item_path == self.filter {
+            return false;
+        }
+
+        // If the item path is a prefix of the filter, don't filter
+        if filter_components.starts_with(&item_components) {
+            return false;
+        }
+        if item_components.starts_with(&filter_components) {
+            return false;
+        }
+
+        // Otherwise, filter the item
+        true
+    }
+
+    fn render_item(
+        &self,
+        module_path: &str,
+        item: &Item,
+        crate_data: &Crate,
+        force_private: bool,
+    ) -> String {
+        if self.should_filter(module_path, item) {
+            return String::new();
+        }
+
         let output = match &item.inner {
-            ItemEnum::Module(_) => self.render_module(item, crate_data),
+            ItemEnum::Module(_) => self.render_module(module_path, item, crate_data),
             ItemEnum::Struct(_) => self.render_struct(item, crate_data),
             ItemEnum::Enum(_) => self.render_enum(item, crate_data),
             ItemEnum::Trait(_) => self.render_trait(item, crate_data),
-            ItemEnum::Import(_) => self.render_import(item, crate_data),
+            ItemEnum::Import(_) => self.render_import(module_path, item, crate_data),
             ItemEnum::Function(_) => self.render_function(item, false),
             ItemEnum::Constant { .. } => self.render_constant(item),
             ItemEnum::TypeAlias(_) => self.render_type_alias(item),
@@ -155,7 +181,7 @@ impl Renderer {
             _ => String::new(),
         };
 
-        if !force_private && !self.should_show(item, crate_data) {
+        if !force_private && !self.is_visible(item) {
             String::new()
         } else {
             output
@@ -231,7 +257,7 @@ impl Renderer {
         output
     }
 
-    fn render_import(&self, item: &Item, crate_data: &Crate) -> String {
+    fn render_import(&self, module_path: &str, item: &Item, crate_data: &Crate) -> String {
         let import = extract_item!(item, ItemEnum::Import);
 
         if import.glob {
@@ -241,8 +267,13 @@ impl Renderer {
                     let mut output = String::new();
                     for item_id in &module.items {
                         if let Some(item) = crate_data.index.get(item_id) {
-                            if self.should_show(item, crate_data) {
-                                output.push_str(&self.render_item(item, crate_data, true));
+                            if self.is_visible(item) {
+                                output.push_str(&self.render_item(
+                                    module_path,
+                                    item,
+                                    crate_data,
+                                    true,
+                                ));
                             }
                         }
                     }
@@ -254,7 +285,7 @@ impl Renderer {
         }
 
         if let Some(imported_item) = import.id.as_ref().and_then(|id| crate_data.index.get(id)) {
-            return self.render_item(imported_item, crate_data, true);
+            return self.render_item(module_path, imported_item, crate_data, true);
         }
 
         let mut output = docs(item);
@@ -277,7 +308,7 @@ impl Renderer {
 
         if let Some(trait_) = &impl_.trait_ {
             if let Some(trait_item) = crate_data.index.get(&trait_.id) {
-                if !self.should_show(trait_item, crate_data) {
+                if !self.is_visible(trait_item) {
                     return String::new();
                 }
             }
@@ -313,7 +344,7 @@ impl Renderer {
         for item_id in &impl_.items {
             if let Some(item) = crate_data.index.get(item_id) {
                 let is_trait_impl = impl_.trait_.is_some();
-                if is_trait_impl || self.should_show(item, crate_data) {
+                if is_trait_impl || self.is_visible(item) {
                     output.push_str(&self.render_impl_item(item));
                 }
             }
@@ -514,7 +545,7 @@ impl Renderer {
                         field.as_ref().map(|id| {
                             if let Some(field_item) = crate_data.index.get(id) {
                                 let ty = extract_item!(field_item, ItemEnum::StructField);
-                                if !self.should_show(field_item, crate_data) {
+                                if !self.is_visible(field_item) {
                                     "_".to_string()
                                 } else {
                                     format!("{}{}", render_vis(field_item), render_type(ty))
@@ -566,7 +597,7 @@ impl Renderer {
 
     fn render_struct_field(&self, crate_data: &Crate, field_id: &Id) -> String {
         if let Some(field_item) = crate_data.index.get(field_id) {
-            if self.should_show(field_item, crate_data) {
+            if self.is_visible(field_item) {
                 let ty = extract_item!(field_item, ItemEnum::StructField);
                 format!(
                     "{}{}: {},\n",
@@ -597,7 +628,12 @@ impl Renderer {
         output
     }
 
-    fn render_module(&self, item: &Item, crate_data: &Crate) -> String {
+    fn render_module(&self, module_path: &str, item: &Item, crate_data: &Crate) -> String {
+        let module_path = if module_path.is_empty() {
+            render_name(item).to_string()
+        } else {
+            format!("{}::{}", module_path, render_name(item))
+        };
         let mut output = format!("{}mod {} {{\n", render_vis(item), render_name(item));
         // Add module doc comment if present
         if let Some(docs) = &item.docs {
@@ -611,14 +647,7 @@ impl Renderer {
 
         for item_id in &module.items {
             if let Some(item) = crate_data.index.get(item_id) {
-                // Handle public imports differently
-                if let ItemEnum::Import(_) = &item.inner {
-                    if self.should_show(item, crate_data) {
-                        output.push_str(&self.render_import(item, crate_data));
-                        continue;
-                    }
-                }
-                output.push_str(&self.render_item(item, crate_data, false))
+                output.push_str(&self.render_item(&module_path, item, crate_data, false));
             }
         }
 
