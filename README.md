@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/libruskel/badge.svg)](https://docs.rs/libruskel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Ruskel is a tool for generating skeletonized versions of Rust crates. It
+Ruskel is a tool for generating skeletonized outlines of Rust crates. It
 consists of two parts:
 
 1. `ruskel`: A command-line interface for easy use.

@@ -3,6 +3,9 @@ name = "libruskel"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 anyhow = "1.0.86"
