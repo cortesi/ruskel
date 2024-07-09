@@ -8,6 +8,6 @@ repository.workspace = true
 description.workspace = true
 
 [dependencies]
-libruskel = { path = "../libruskel" }
+libruskel = { version="0.0.1", path = "../libruskel" }
 clap = { version = "4.5.8", features = ["derive"] }
 
