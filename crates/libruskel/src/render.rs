@@ -81,6 +81,13 @@ impl Renderer {
         Ok(self.formatter.format_str(&output)?)
     }
 
+    fn should_show(&self, item: &Item) -> bool {
+        if !self.render_private_items && !matches!(item.visibility, Visibility::Public) {
+            return false;
+        }
+        true
+    }
+
     fn should_render_impl(&self, impl_: &Impl) -> bool {
         if impl_.synthetic && !self.render_auto_impls {
             return false;
@@ -139,10 +146,7 @@ impl Renderer {
     }
 
     fn render_item(&self, item: &Item, crate_data: &Crate, force_private: bool) -> String {
-        if !force_private
-            && !self.render_private_items
-            && !matches!(item.visibility, Visibility::Public)
-        {
+        if !force_private && !self.should_show(item) {
             return String::new(); // Don't render private items if not requested
         }
 
@@ -150,11 +154,11 @@ impl Renderer {
             ItemEnum::Module(_) => self.render_module(item, crate_data),
             ItemEnum::Struct(_) => self.render_struct(item, crate_data),
             ItemEnum::Enum(_) => self.render_enum(item, crate_data),
-            ItemEnum::Trait(_) => Self::render_trait(item, crate_data),
+            ItemEnum::Trait(_) => self.render_trait(item, crate_data),
             ItemEnum::Import(_) => self.render_import(item, crate_data),
-            ItemEnum::Function(_) => Self::render_function(item, false),
-            ItemEnum::Constant { .. } => Self::render_constant(item),
-            ItemEnum::TypeAlias(_) => Self::render_type_alias(item),
+            ItemEnum::Function(_) => self.render_function(item, false),
+            ItemEnum::Constant { .. } => self.render_constant(item),
+            ItemEnum::TypeAlias(_) => self.render_type_alias(item),
             ItemEnum::Macro(_) => self.render_macro(item),
             ItemEnum::ProcMacro(_) => self.render_proc_macro(item),
             _ => String::new(),
@@ -220,7 +224,7 @@ impl Renderer {
 
         let macro_def = extract_item!(item, ItemEnum::Macro);
         // Add #[macro_export] for public macros
-        if matches!(item.visibility, Visibility::Public) {
+        if self.should_show(item) {
             output.push_str("#[macro_export]\n");
         }
         output.push_str(&format!("{}\n", macro_def));
@@ -228,7 +232,7 @@ impl Renderer {
         output
     }
 
-    fn render_type_alias(item: &Item) -> String {
+    fn render_type_alias(&self, item: &Item) -> String {
         let type_alias = extract_item!(item, ItemEnum::TypeAlias);
         let mut output = String::new();
 
@@ -250,11 +254,6 @@ impl Renderer {
             where_clause
         ));
 
-        // If there's a where clause, add a line break before the assignment
-        if !where_clause.is_empty() {
-            output.push('\n');
-        }
-
         output.push_str(&format!("= {};\n\n", Self::render_type(&type_alias.type_)));
 
         output
@@ -271,7 +270,7 @@ impl Renderer {
                     let mut output = String::new();
                     for item_id in &module.items {
                         if let Some(item) = crate_data.index.get(item_id) {
-                            if matches!(item.visibility, Visibility::Public) {
+                            if self.should_show(item) {
                                 output.push_str(&self.render_item(item, crate_data, true));
                             }
                         }
@@ -314,12 +313,9 @@ impl Renderer {
             return String::new();
         }
 
-        // Check if the trait is private and skip if render_private_items is false
         if let Some(trait_) = &impl_.trait_ {
             if let Some(trait_item) = crate_data.index.get(&trait_.id) {
-                if !matches!(trait_item.visibility, Visibility::Public)
-                    && !self.render_private_items
-                {
+                if !self.should_show(trait_item) {
                     return String::new();
                 }
             }
@@ -357,10 +353,7 @@ impl Renderer {
         for item_id in &impl_.items {
             if let Some(item) = crate_data.index.get(item_id) {
                 let is_trait_impl = impl_.trait_.is_some();
-                if is_trait_impl
-                    || self.render_private_items
-                    || matches!(item.visibility, Visibility::Public)
-                {
+                if is_trait_impl || self.should_show(item) {
                     output.push_str(&self.render_impl_item(item));
                 }
             }
@@ -373,10 +366,10 @@ impl Renderer {
 
     fn render_impl_item(&self, item: &Item) -> String {
         match &item.inner {
-            ItemEnum::Function(_) => Self::render_function(item, false),
-            ItemEnum::Constant { .. } => Self::render_constant(item),
+            ItemEnum::Function(_) => self.render_function(item, false),
+            ItemEnum::Constant { .. } => self.render_constant(item),
             ItemEnum::AssocType { .. } => Self::render_associated_type(item),
-            ItemEnum::TypeAlias(_) => Self::render_type_alias(item), // Add this line
+            ItemEnum::TypeAlias(_) => self.render_type_alias(item),
             _ => String::new(),
         }
     }
@@ -457,11 +450,8 @@ impl Renderer {
                     .filter_map(|field| {
                         field.as_ref().map(|id| {
                             if let Some(field_item) = crate_data.index.get(id) {
-                                if let ItemEnum::StructField(ty) = &field_item.inner {
-                                    Self::render_type(ty)
-                                } else {
-                                    "".to_string()
-                                }
+                                let ty = extract_item!(field_item, ItemEnum::StructField);
+                                Self::render_type(ty)
                             } else {
                                 "".to_string()
                             }
@@ -494,7 +484,7 @@ impl Renderer {
         output
     }
 
-    fn render_trait(item: &Item, crate_data: &Crate) -> String {
+    fn render_trait(&self, item: &Item, crate_data: &Crate) -> String {
         let mut output = String::new();
 
         // Add doc comment if present
@@ -529,7 +519,7 @@ impl Renderer {
 
         for item_id in &trait_.items {
             if let Some(item) = crate_data.index.get(item_id) {
-                output.push_str(&Self::render_trait_item(item));
+                output.push_str(&self.render_trait_item(item));
             }
         }
 
@@ -538,9 +528,9 @@ impl Renderer {
         output
     }
 
-    fn render_trait_item(item: &Item) -> String {
+    fn render_trait_item(&self, item: &Item) -> String {
         match &item.inner {
-            ItemEnum::Function(_) => Self::render_function(item, true),
+            ItemEnum::Function(_) => self.render_function(item, true),
             ItemEnum::AssocConst { type_, default } => {
                 let default_str = default
                     .as_ref()
@@ -620,17 +610,10 @@ impl Renderer {
                         field.as_ref().map(|id| {
                             if let Some(field_item) = crate_data.index.get(id) {
                                 let ty = extract_item!(field_item, ItemEnum::StructField);
-                                let visibility = match &field_item.visibility {
-                                    Visibility::Public => "pub ",
-                                    _ => "",
-                                };
-
-                                if !self.render_private_items
-                                    && !matches!(field_item.visibility, Visibility::Public)
-                                {
+                                if !self.should_show(field_item) {
                                     "_".to_string()
                                 } else {
-                                    format!("{}{}", visibility, Self::render_type(ty))
+                                    format!("{}{}", render_vis(field_item), Self::render_type(ty))
                                 }
                             } else {
                                 "".to_string()
@@ -679,8 +662,7 @@ impl Renderer {
 
     fn render_struct_field(&self, crate_data: &Crate, field_id: &Id) -> String {
         if let Some(field_item) = crate_data.index.get(field_id) {
-            // Only render the field if it's public or render_private_items is true
-            if matches!(field_item.visibility, Visibility::Public) || self.render_private_items {
+            if self.should_show(field_item) {
                 let ty = extract_item!(field_item, ItemEnum::StructField);
                 format!(
                     "{}{}: {},\n",
@@ -689,14 +671,14 @@ impl Renderer {
                     Self::render_type(ty)
                 )
             } else {
-                String::new() // Don't render private fields if render_private_items is false
+                String::new()
             }
         } else {
-            String::new() // Field not found, return empty string
+            String::new()
         }
     }
 
-    fn render_constant(item: &Item) -> String {
+    fn render_constant(&self, item: &Item) -> String {
         let mut output = String::new();
 
         // Add doc comment if present
@@ -739,7 +721,7 @@ impl Renderer {
             if let Some(item) = crate_data.index.get(item_id) {
                 // Handle public imports differently
                 if let ItemEnum::Import(_) = &item.inner {
-                    if matches!(item.visibility, Visibility::Public) {
+                    if self.should_show(item) {
                         output.push_str(&self.render_import(item, crate_data));
                         continue;
                     }
@@ -773,7 +755,7 @@ impl Renderer {
         )
     }
 
-    fn render_function(item: &Item, is_trait_method: bool) -> String {
+    fn render_function(&self, item: &Item, is_trait_method: bool) -> String {
         let mut output = String::new();
 
         // Add doc comment if present
