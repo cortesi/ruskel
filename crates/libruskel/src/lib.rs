@@ -9,10 +9,8 @@
 //! the skeletonized format. The skeltonized code is then formatted with rustfmt, and optionally
 //! has syntax highlighting applied.
 //!
-//! Users of this module must have the nightly Rust toolchain installed and available.
-//! The main entry point is the `Ruskel` struct, which provides methods for configuring
-//! and executing the skeletonization process.
-
+//!
+//! You must have the nightly Rust toolchain installed to use (but not to install) RUskel.
 use std::fs;
 use std::path::{Path, PathBuf};
 

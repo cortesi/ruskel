@@ -10,6 +10,14 @@ fn must_get<'a>(crate_data: &'a Crate, id: &Id) -> &'a Item {
     crate_data.index.get(id).unwrap()
 }
 
+#[derive(Debug, PartialEq)]
+enum FilterMatch {
+    Hit,
+    Prefix,
+    Suffix,
+    Miss,
+}
+
 pub struct Renderer {
     formatter: RustFmt,
     render_auto_impls: bool,
@@ -134,6 +142,13 @@ impl Renderer {
         if self.filter.is_empty() {
             return false;
         }
+        match self.filter_match(module_path, item) {
+            FilterMatch::Hit | FilterMatch::Prefix | FilterMatch::Suffix => false,
+            FilterMatch::Miss => true,
+        }
+    }
+
+    fn filter_match(&self, module_path: &str, item: &Item) -> FilterMatch {
         let item_path = if module_path.is_empty() {
             render_name(item).to_string()
         } else {
@@ -143,21 +158,25 @@ impl Renderer {
         let filter_components: Vec<&str> = self.filter.split("::").collect();
         let item_components: Vec<&str> = item_path.split("::").collect();
 
-        // If the item path matches the filter exactly, don't filter
         if item_path == self.filter {
-            return false;
+            FilterMatch::Hit
+        } else if filter_components.starts_with(&item_components) {
+            FilterMatch::Prefix
+        } else if item_components.starts_with(&filter_components) {
+            FilterMatch::Suffix
+        } else {
+            FilterMatch::Miss
         }
+    }
 
-        // If the item path is a prefix of the filter, don't filter
-        if filter_components.starts_with(&item_components) {
-            return false;
+    fn should_module_doc(&self, module_path: &str, item: &Item) -> bool {
+        if self.filter.is_empty() {
+            return true;
         }
-        if item_components.starts_with(&filter_components) {
-            return false;
+        match self.filter_match(module_path, item) {
+            FilterMatch::Hit | FilterMatch::Suffix => true,
+            _ => false,
         }
-
-        // Otherwise, filter the item
-        true
     }
 
     fn render_item(
@@ -623,11 +642,13 @@ impl Renderer {
         };
         let mut output = format!("{}mod {} {{\n", render_vis(item), render_name(item));
         // Add module doc comment if present
-        if let Some(docs) = &item.docs {
-            for line in docs.lines() {
-                output.push_str(&format!("    //! {}\n", line));
+        if self.should_module_doc(&module_path, item) {
+            if let Some(docs) = &item.docs {
+                for line in docs.lines() {
+                    output.push_str(&format!("    //! {}\n", line));
+                }
+                output.push('\n');
             }
-            output.push('\n');
         }
 
         let module = extract_item!(item, ItemEnum::Module);
