@@ -6,6 +6,10 @@ use rustdoc_types::{
 use crate::crateutils::*;
 use crate::error::Result;
 
+fn must_get<'a>(crate_data: &'a Crate, id: &Id) -> &'a Item {
+    crate_data.index.get(id).unwrap()
+}
+
 pub struct Renderer {
     formatter: RustFmt,
     render_auto_impls: bool,
@@ -54,13 +58,13 @@ impl Renderer {
     }
 
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
-        let mut output = String::new();
-
         // The root item is always a module
-        if let Some(root_item) = crate_data.index.get(&crate_data.root) {
-            let unformatted = self.render_item("", root_item, crate_data, false);
-            output.push_str(&unformatted);
-        }
+        let output = self.render_item(
+            "",
+            must_get(crate_data, &crate_data.root),
+            crate_data,
+            false,
+        );
 
         Ok(self.formatter.format_str(&output)?)
     }
@@ -382,9 +386,8 @@ impl Renderer {
         ));
 
         for variant_id in &enum_.variants {
-            if let Some(variant_item) = crate_data.index.get(variant_id) {
-                output.push_str(&self.render_enum_variant(variant_item, crate_data));
-            }
+            let variant_item = must_get(crate_data, variant_id);
+            output.push_str(&self.render_enum_variant(variant_item, crate_data));
         }
 
         output.push_str("}\n\n");
@@ -406,12 +409,9 @@ impl Renderer {
                     .iter()
                     .filter_map(|field| {
                         field.as_ref().map(|id| {
-                            if let Some(field_item) = crate_data.index.get(id) {
-                                let ty = extract_item!(field_item, ItemEnum::StructField);
-                                render_type(ty)
-                            } else {
-                                "".to_string()
-                            }
+                            let field_item = must_get(crate_data, id);
+                            let ty = extract_item!(field_item, ItemEnum::StructField);
+                            render_type(ty)
                         })
                     })
                     .collect::<Vec<_>>()
@@ -421,12 +421,7 @@ impl Renderer {
             VariantKind::Struct { fields, .. } => {
                 output.push_str(" {\n");
                 for field in fields {
-                    if let Some(_field_item) = crate_data.index.get(field) {
-                        output.push_str(&format!(
-                            "        {}\n",
-                            self.render_struct_field(crate_data, field)
-                        ));
-                    }
+                    output.push_str(&self.render_struct_field(crate_data, field));
                 }
                 output.push_str("    }");
             }
@@ -468,9 +463,8 @@ impl Renderer {
         ));
 
         for item_id in &trait_.items {
-            if let Some(item) = crate_data.index.get(item_id) {
-                output.push_str(&self.render_trait_item(item));
-            }
+            let item = must_get(crate_data, item_id);
+            output.push_str(&self.render_trait_item(item));
         }
 
         output.push_str("}\n\n");
@@ -543,15 +537,12 @@ impl Renderer {
                     .iter()
                     .filter_map(|field| {
                         field.as_ref().map(|id| {
-                            if let Some(field_item) = crate_data.index.get(id) {
-                                let ty = extract_item!(field_item, ItemEnum::StructField);
-                                if !self.is_visible(field_item) {
-                                    "_".to_string()
-                                } else {
-                                    format!("{}{}", render_vis(field_item), render_type(ty))
-                                }
+                            let field_item = must_get(crate_data, id);
+                            let ty = extract_item!(field_item, ItemEnum::StructField);
+                            if !self.is_visible(field_item) {
+                                "_".to_string()
                             } else {
-                                "".to_string()
+                                format!("{}{}", render_vis(field_item), render_type(ty))
                             }
                         })
                     })
@@ -584,11 +575,10 @@ impl Renderer {
 
         // Render impl blocks
         for impl_id in &struct_.impls {
-            if let Some(impl_item) = crate_data.index.get(impl_id) {
-                let impl_ = extract_item!(impl_item, ItemEnum::Impl);
-                if self.should_render_impl(impl_) {
-                    output.push_str(&self.render_impl(impl_item, crate_data));
-                }
+            let impl_item = must_get(crate_data, impl_id);
+            let impl_ = extract_item!(impl_item, ItemEnum::Impl);
+            if self.should_render_impl(impl_) {
+                output.push_str(&self.render_impl(impl_item, crate_data));
             }
         }
 
@@ -596,18 +586,15 @@ impl Renderer {
     }
 
     fn render_struct_field(&self, crate_data: &Crate, field_id: &Id) -> String {
-        if let Some(field_item) = crate_data.index.get(field_id) {
-            if self.is_visible(field_item) {
-                let ty = extract_item!(field_item, ItemEnum::StructField);
-                format!(
-                    "{}{}: {},\n",
-                    render_vis(field_item),
-                    render_name(field_item),
-                    render_type(ty)
-                )
-            } else {
-                String::new()
-            }
+        let field_item = must_get(crate_data, field_id);
+        if self.is_visible(field_item) {
+            let ty = extract_item!(field_item, ItemEnum::StructField);
+            format!(
+                "{}{}: {},\n",
+                render_vis(field_item),
+                render_name(field_item),
+                render_type(ty)
+            )
         } else {
             String::new()
         }
@@ -646,9 +633,8 @@ impl Renderer {
         let module = extract_item!(item, ItemEnum::Module);
 
         for item_id in &module.items {
-            if let Some(item) = crate_data.index.get(item_id) {
-                output.push_str(&self.render_item(&module_path, item, crate_data, false));
-            }
+            let item = must_get(crate_data, item_id);
+            output.push_str(&self.render_item(&module_path, item, crate_data, false));
         }
 
         output.push_str("}\n\n");
