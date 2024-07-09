@@ -1,50 +1,11 @@
 use rust_format::{Config, Formatter, RustFmt};
 use rustdoc_types::{
-    Crate, FnDecl, FunctionPointer, GenericArg, GenericArgs, GenericBound, GenericParamDef,
-    GenericParamDefKind, Generics, Id, Impl, Item, ItemEnum, MacroKind, Path, PolyTrait,
-    StructKind, Term, TraitBoundModifier, Type, TypeBinding, TypeBindingKind, VariantKind,
-    Visibility, WherePredicate,
+    Crate, GenericBound, GenericParamDef, GenericParamDefKind, Id, Impl, Item, ItemEnum, MacroKind,
+    PolyTrait, StructKind, TraitBoundModifier, VariantKind, Visibility,
 };
 
+use crate::crateutils::*;
 use crate::error::Result;
-
-fn docs(item: &Item) -> String {
-    let mut output = String::new();
-    if let Some(docs) = &item.docs {
-        for line in docs.lines() {
-            output.push_str(&format!("/// {}\n", line));
-        }
-    }
-    output
-}
-
-fn render_vis(item: &Item) -> String {
-    match &item.visibility {
-        Visibility::Public => "pub ".to_string(),
-        _ => String::new(),
-    }
-}
-
-fn render_name(item: &Item) -> String {
-    const RESERVED_WORDS: &[&str] = &[
-        "abstract", "as", "become", "box", "break", "const", "continue", "crate", "do", "else",
-        "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in", "let", "loop",
-        "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref", "return", "self",
-        "Self", "static", "struct", "super", "trait", "true", "try", "type", "typeof", "unsafe",
-        "unsized", "use", "virtual", "where", "while", "yield",
-    ];
-
-    item.name.as_deref().map_or_else(
-        || "?".to_string(),
-        |n| {
-            if RESERVED_WORDS.contains(&n) {
-                format!("r#{}", n)
-            } else {
-                n.to_string()
-            }
-        },
-    )
-}
 
 macro_rules! extract_item {
     ($item:expr, $variant:path) => {
@@ -66,6 +27,7 @@ pub struct Renderer {
     render_auto_impls: bool,
     render_private_items: bool,
     render_blanket_impls: bool,
+    filter: String,
 }
 
 impl Default for Renderer {
@@ -83,7 +45,13 @@ impl Renderer {
             render_auto_impls: false,
             render_private_items: false,
             render_blanket_impls: false,
+            filter: String::new(),
         }
+    }
+
+    pub fn with_filter(mut self, filter: &str) -> Self {
+        self.filter = filter.to_string();
+        self
     }
 
     pub fn with_blanket_impls(mut self, render_blanket_impls: bool) -> Self {
@@ -112,10 +80,22 @@ impl Renderer {
         Ok(self.formatter.format_str(&output)?)
     }
 
-    fn should_show(&self, item: &Item) -> bool {
+    fn should_show(&self, item: &Item, crate_data: &Crate) -> bool {
         if !self.render_private_items && !matches!(item.visibility, Visibility::Public) {
             return false;
         }
+
+        if !self.filter.is_empty() {
+            if let Some(summary) = crate_data.paths.get(&item.id) {
+                let item_path = summary.path.join("::");
+                if !self.filter.starts_with(&item_path) && !item_path.starts_with(&self.filter) {
+                    return false;
+                }
+            } else {
+                return false;
+            }
+        }
+
         true
     }
 
@@ -177,11 +157,7 @@ impl Renderer {
     }
 
     fn render_item(&self, item: &Item, crate_data: &Crate, force_private: bool) -> String {
-        if !force_private && !self.should_show(item) {
-            return String::new(); // Don't render private items if not requested
-        }
-
-        match &item.inner {
+        let output = match &item.inner {
             ItemEnum::Module(_) => self.render_module(item, crate_data),
             ItemEnum::Struct(_) => self.render_struct(item, crate_data),
             ItemEnum::Enum(_) => self.render_enum(item, crate_data),
@@ -193,6 +169,12 @@ impl Renderer {
             ItemEnum::Macro(_) => self.render_macro(item),
             ItemEnum::ProcMacro(_) => self.render_proc_macro(item),
             _ => String::new(),
+        };
+
+        if !force_private && !self.should_show(item, crate_data) {
+            String::new()
+        } else {
+            output
         }
     }
 
@@ -242,9 +224,7 @@ impl Renderer {
 
         let macro_def = extract_item!(item, ItemEnum::Macro);
         // Add #[macro_export] for public macros
-        if self.should_show(item) {
-            output.push_str("#[macro_export]\n");
-        }
+        output.push_str("#[macro_export]\n");
         output.push_str(&format!("{}\n", macro_def));
 
         output
@@ -258,11 +238,11 @@ impl Renderer {
             "{}type {}{}{}",
             render_vis(item),
             render_name(item),
-            Self::render_generics(&type_alias.generics),
-            Self::render_where_clause(&type_alias.generics),
+            render_generics(&type_alias.generics),
+            render_where_clause(&type_alias.generics),
         ));
 
-        output.push_str(&format!("= {};\n\n", Self::render_type(&type_alias.type_)));
+        output.push_str(&format!("= {};\n\n", render_type(&type_alias.type_)));
 
         output
     }
@@ -277,7 +257,7 @@ impl Renderer {
                     let mut output = String::new();
                     for item_id in &module.items {
                         if let Some(item) = crate_data.index.get(item_id) {
-                            if self.should_show(item) {
+                            if self.should_show(item, crate_data) {
                                 output.push_str(&self.render_item(item, crate_data, true));
                             }
                         }
@@ -313,16 +293,16 @@ impl Renderer {
 
         if let Some(trait_) = &impl_.trait_ {
             if let Some(trait_item) = crate_data.index.get(&trait_.id) {
-                if !self.should_show(trait_item) {
+                if !self.should_show(trait_item, crate_data) {
                     return String::new();
                 }
             }
         }
 
-        let where_clause = Self::render_where_clause(&impl_.generics);
+        let where_clause = render_where_clause(&impl_.generics);
 
         let trait_part = if let Some(trait_) = &impl_.trait_ {
-            let trait_path = Self::render_path(trait_);
+            let trait_path = render_path(trait_);
             if !trait_path.is_empty() {
                 format!("{} for ", trait_path)
             } else {
@@ -335,9 +315,9 @@ impl Renderer {
         output.push_str(&format!(
             "{}impl{} {}{}",
             if impl_.is_unsafe { "unsafe " } else { "" },
-            Self::render_generics(&impl_.generics),
+            render_generics(&impl_.generics),
             trait_part,
-            Self::render_type(&impl_.for_)
+            render_type(&impl_.for_)
         ));
 
         if !where_clause.is_empty() {
@@ -349,7 +329,7 @@ impl Renderer {
         for item_id in &impl_.items {
             if let Some(item) = crate_data.index.get(item_id) {
                 let is_trait_impl = impl_.trait_.is_some();
-                if is_trait_impl || self.should_show(item) {
+                if is_trait_impl || self.should_show(item, crate_data) {
                     output.push_str(&self.render_impl_item(item));
                 }
             }
@@ -380,7 +360,7 @@ impl Renderer {
         };
         let default_str = default
             .as_ref()
-            .map(|d| format!(" = {}", Self::render_type(d)))
+            .map(|d| format!(" = {}", render_type(d)))
             .unwrap_or_default();
         format!("type {}{}{};\n", render_name(item), bounds_str, default_str)
     }
@@ -390,8 +370,8 @@ impl Renderer {
 
         let enum_ = extract_item!(item, ItemEnum::Enum);
 
-        let generics = Self::render_generics(&enum_.generics);
-        let where_clause = Self::render_where_clause(&enum_.generics);
+        let generics = render_generics(&enum_.generics);
+        let where_clause = render_where_clause(&enum_.generics);
 
         output.push_str(&format!(
             "{}enum {}{}{} {{\n",
@@ -428,7 +408,7 @@ impl Renderer {
                         field.as_ref().map(|id| {
                             if let Some(field_item) = crate_data.index.get(id) {
                                 let ty = extract_item!(field_item, ItemEnum::StructField);
-                                Self::render_type(ty)
+                                render_type(ty)
                             } else {
                                 "".to_string()
                             }
@@ -466,8 +446,8 @@ impl Renderer {
 
         let trait_ = extract_item!(item, ItemEnum::Trait);
 
-        let generics = Self::render_generics(&trait_.generics);
-        let where_clause = Self::render_where_clause(&trait_.generics);
+        let generics = render_generics(&trait_.generics);
+        let where_clause = render_where_clause(&trait_.generics);
 
         let bounds = if !trait_.bounds.is_empty() {
             format!(": {}", Self::render_generic_bounds(&trait_.bounds))
@@ -509,7 +489,7 @@ impl Renderer {
                 format!(
                     "const {}: {}{};\n",
                     render_name(item),
-                    Self::render_type(type_),
+                    render_type(type_),
                     default_str
                 )
             }
@@ -523,10 +503,10 @@ impl Renderer {
                 } else {
                     String::new()
                 };
-                let generics_str = Self::render_generics(generics);
+                let generics_str = render_generics(generics);
                 let default_str = default
                     .as_ref()
-                    .map(|d| format!(" = {}", Self::render_type(d)))
+                    .map(|d| format!(" = {}", render_type(d)))
                     .unwrap_or_default();
                 format!(
                     "type {}{}{}{};\n",
@@ -553,8 +533,8 @@ impl Renderer {
 
         let struct_ = extract_item!(item, ItemEnum::Struct);
 
-        let generics = Self::render_generics(&struct_.generics);
-        let where_clause = Self::render_where_clause(&struct_.generics);
+        let generics = render_generics(&struct_.generics);
+        let where_clause = render_where_clause(&struct_.generics);
 
         match &struct_.kind {
             StructKind::Unit => {
@@ -573,10 +553,10 @@ impl Renderer {
                         field.as_ref().map(|id| {
                             if let Some(field_item) = crate_data.index.get(id) {
                                 let ty = extract_item!(field_item, ItemEnum::StructField);
-                                if !self.should_show(field_item) {
+                                if !self.should_show(field_item, crate_data) {
                                     "_".to_string()
                                 } else {
-                                    format!("{}{}", render_vis(field_item), Self::render_type(ty))
+                                    format!("{}{}", render_vis(field_item), render_type(ty))
                                 }
                             } else {
                                 "".to_string()
@@ -625,13 +605,13 @@ impl Renderer {
 
     fn render_struct_field(&self, crate_data: &Crate, field_id: &Id) -> String {
         if let Some(field_item) = crate_data.index.get(field_id) {
-            if self.should_show(field_item) {
+            if self.should_show(field_item, crate_data) {
                 let ty = extract_item!(field_item, ItemEnum::StructField);
                 format!(
                     "{}{}: {},\n",
                     render_vis(field_item),
                     render_name(field_item),
-                    Self::render_type(ty)
+                    render_type(ty)
                 )
             } else {
                 String::new()
@@ -649,7 +629,7 @@ impl Renderer {
             "{}const {}: {} = {};\n\n",
             render_vis(item),
             render_name(item),
-            Self::render_type(type_),
+            render_type(type_),
             const_.expr
         ));
 
@@ -672,7 +652,7 @@ impl Renderer {
             if let Some(item) = crate_data.index.get(item_id) {
                 // Handle public imports differently
                 if let ItemEnum::Import(_) = &item.inner {
-                    if self.should_show(item) {
+                    if self.should_show(item, crate_data) {
                         output.push_str(&self.render_import(item, crate_data));
                         continue;
                     }
@@ -706,10 +686,10 @@ impl Renderer {
             render_vis(item),
             prefixes.join(" "),
             render_name(item),
-            Self::render_generics(&function.generics),
-            Self::render_function_args(&function.decl),
-            Self::render_return_type(&function.decl),
-            Self::render_where_clause(&function.generics)
+            render_generics(&function.generics),
+            render_function_args(&function.decl),
+            render_return_type(&function.decl),
+            render_where_clause(&function.generics)
         ));
 
         // Use semicolon for trait method declarations, empty body for implementations
@@ -720,238 +700,6 @@ impl Renderer {
         }
 
         output
-    }
-
-    fn render_generics(generics: &Generics) -> String {
-        let params: Vec<String> = generics
-            .params
-            .iter()
-            .filter_map(Self::render_generic_param_def)
-            .collect();
-
-        if params.is_empty() {
-            String::new()
-        } else {
-            format!("<{}>", params.join(", "))
-        }
-    }
-
-    fn render_where_clause(generics: &Generics) -> String {
-        let predicates: Vec<String> = generics
-            .where_predicates
-            .iter()
-            .filter_map(Self::render_where_predicate)
-            .collect();
-        if predicates.is_empty() {
-            String::new()
-        } else {
-            format!(" where {}", predicates.join(", "))
-        }
-    }
-
-    fn render_where_predicate(pred: &WherePredicate) -> Option<String> {
-        match pred {
-            WherePredicate::BoundPredicate {
-                type_,
-                bounds,
-                generic_params,
-            } => {
-                // Check if this is a synthetic type
-                if let Type::Generic(_name) = type_ {
-                    if generic_params.iter().any(|param| {
-                    matches!(&param.kind, GenericParamDefKind::Type { synthetic, .. } if *synthetic)
-                }) {
-                    return None;
-                }
-                }
-
-                let hrtb = if !generic_params.is_empty() {
-                    let params = generic_params
-                        .iter()
-                        .filter_map(Self::render_generic_param_def)
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    if params.is_empty() {
-                        String::new()
-                    } else {
-                        format!("for<{}> ", params)
-                    }
-                } else {
-                    String::new()
-                };
-
-                let bounds_str = bounds
-                    .iter()
-                    .map(Self::render_generic_bound)
-                    .collect::<Vec<_>>()
-                    .join(" + ");
-
-                Some(format!(
-                    "{}{}: {}",
-                    hrtb,
-                    Self::render_type(type_),
-                    bounds_str
-                ))
-            }
-            WherePredicate::LifetimePredicate { lifetime, outlives } => {
-                if outlives.is_empty() {
-                    Some(lifetime.clone())
-                } else {
-                    Some(format!("{}: {}", lifetime, outlives.join(" + ")))
-                }
-            }
-            WherePredicate::EqPredicate { lhs, rhs } => Some(format!(
-                "{} = {}",
-                Self::render_type(lhs),
-                Self::render_term(rhs)
-            )),
-        }
-    }
-
-    fn render_function_args(decl: &FnDecl) -> String {
-        decl.inputs
-            .iter()
-            .map(|(name, ty)| {
-                if name == "self" {
-                    match ty {
-                        Type::BorrowedRef { mutable, .. } => {
-                            if *mutable {
-                                "&mut self".to_string()
-                            } else {
-                                "&self".to_string()
-                            }
-                        }
-                        Type::ResolvedPath(path) => {
-                            if path.name == "Self" && path.args.is_none() {
-                                "self".to_string()
-                            } else {
-                                format!("self: {}", Self::render_type(ty))
-                            }
-                        }
-                        Type::Generic(name) => {
-                            if name == "Self" {
-                                "self".to_string()
-                            } else {
-                                format!("self: {}", Self::render_type(ty))
-                            }
-                        }
-                        _ => format!("self: {}", Self::render_type(ty)),
-                    }
-                } else {
-                    format!("{}: {}", name, Self::render_type(ty))
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
-    fn render_return_type(decl: &FnDecl) -> String {
-        match &decl.output {
-            Some(ty) => format!("-> {}", Self::render_type(ty)),
-            None => String::new(),
-        }
-    }
-
-    fn render_type_inner(ty: &Type, nested: bool) -> String {
-        let rendered = match ty {
-            Type::ResolvedPath(path) => {
-                let args = path
-                    .args
-                    .as_ref()
-                    .map(|args| Self::render_generic_args(args))
-                    .unwrap_or_default();
-                format!("{}{}", path.name.replace("$crate::", ""), args)
-            }
-            Type::DynTrait(dyn_trait) => {
-                let traits = dyn_trait
-                    .traits
-                    .iter()
-                    .map(Self::render_poly_trait)
-                    .collect::<Vec<_>>()
-                    .join(" + ");
-                let lifetime = dyn_trait
-                    .lifetime
-                    .as_ref()
-                    .map(|lt| format!(" + {}", lt))
-                    .unwrap_or_default();
-
-                let inner = format!("dyn {}{}", traits, lifetime);
-                if nested && dyn_trait.lifetime.is_some() {
-                    format!("({})", inner)
-                } else {
-                    inner
-                }
-            }
-            Type::Generic(s) => s.clone(),
-            Type::Primitive(s) => s.clone(),
-            Type::FunctionPointer(f) => Self::render_function_pointer(f),
-            Type::Tuple(types) => {
-                let inner = types
-                    .iter()
-                    .map(|ty| Self::render_type_inner(ty, true))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("({})", inner)
-            }
-            Type::Slice(ty) => format!("[{}]", Self::render_type_inner(ty, true)),
-            Type::Array { type_, len } => {
-                format!("[{}; {}]", Self::render_type_inner(type_, true), len)
-            }
-            Type::ImplTrait(bounds) => {
-                format!("impl {}", Self::render_generic_bounds(bounds))
-            }
-            Type::Infer => "_".to_string(),
-            Type::RawPointer { mutable, type_ } => {
-                let mutability = if *mutable { "mut" } else { "const" };
-                format!("*{} {}", mutability, Self::render_type_inner(type_, true))
-            }
-            Type::BorrowedRef {
-                lifetime,
-                mutable,
-                type_,
-            } => {
-                let lifetime = lifetime
-                    .as_ref()
-                    .map(|lt| format!("{} ", lt))
-                    .unwrap_or_default();
-                let mutability = if *mutable { "mut " } else { "" };
-                format!(
-                    "&{}{}{}",
-                    lifetime,
-                    mutability,
-                    Self::render_type_inner(type_, true)
-                )
-            }
-            Type::QualifiedPath {
-                name,
-                args,
-                self_type,
-                trait_,
-            } => {
-                let self_type_str = Self::render_type_inner(self_type, true);
-                let args_str = Self::render_generic_args(args);
-
-                if let Some(trait_) = trait_ {
-                    let trait_path = Self::render_path(trait_);
-                    if !trait_path.is_empty() {
-                        format!(
-                            "<{} as {}>::{}{}",
-                            self_type_str, trait_path, name, args_str
-                        )
-                    } else {
-                        format!("{}::{}{}", self_type_str, name, args_str)
-                    }
-                } else {
-                    format!("{}::{}{}", self_type_str, name, args_str)
-                }
-            }
-            Type::Pat { .. } => "/* pattern */".to_string(),
-        };
-        rendered
-    }
-
-    fn render_type(ty: &Type) -> String {
-        Self::render_type_inner(ty, false)
     }
 
     fn render_poly_trait(poly_trait: &PolyTrait) -> String {
@@ -971,97 +719,7 @@ impl Renderer {
             }
         };
 
-        format!(
-            "{}{}",
-            generic_params,
-            Self::render_path(&poly_trait.trait_)
-        )
-    }
-
-    fn render_path(path: &Path) -> String {
-        let args = path
-            .args
-            .as_ref()
-            .map(|args| Self::render_generic_args(args))
-            .unwrap_or_default();
-        format!("{}{}", path.name.replace("$crate::", ""), args)
-    }
-
-    fn render_function_pointer(f: &FunctionPointer) -> String {
-        let args = Self::render_function_args(&f.decl);
-        format!("fn({}) {}", args, Self::render_return_type(&f.decl))
-    }
-
-    fn render_generic_args(args: &GenericArgs) -> String {
-        match args {
-            GenericArgs::AngleBracketed { args, bindings } => {
-                if args.is_empty() && bindings.is_empty() {
-                    String::new()
-                } else {
-                    let args = args
-                        .iter()
-                        .map(Self::render_generic_arg)
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let bindings = bindings
-                        .iter()
-                        .map(Self::render_type_binding)
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let all = if args.is_empty() {
-                        bindings
-                    } else if bindings.is_empty() {
-                        args
-                    } else {
-                        format!("{}, {}", args, bindings)
-                    };
-                    format!("<{}>", all)
-                }
-            }
-            GenericArgs::Parenthesized { inputs, output } => {
-                let inputs = inputs
-                    .iter()
-                    .map(Self::render_type)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let output = output
-                    .as_ref()
-                    .map(|ty| format!(" -> {}", Self::render_type(ty)))
-                    .unwrap_or_default();
-                format!("({}){}", inputs, output)
-            }
-        }
-    }
-
-    fn render_generic_arg(arg: &GenericArg) -> String {
-        match arg {
-            GenericArg::Lifetime(lt) => lt.clone(),
-            GenericArg::Type(ty) => Self::render_type(ty),
-            GenericArg::Const(c) => c.expr.clone(),
-            GenericArg::Infer => "_".to_string(),
-        }
-    }
-
-    fn render_term(term: &Term) -> String {
-        match term {
-            Term::Type(ty) => Self::render_type(ty),
-            Term::Constant(c) => c.expr.clone(),
-        }
-    }
-
-    fn render_type_binding(binding: &TypeBinding) -> String {
-        let binding_kind = match &binding.binding {
-            TypeBindingKind::Equality(term) => format!(" = {}", Self::render_term(term)),
-            TypeBindingKind::Constraint(bounds) => {
-                let bounds = bounds
-                    .iter()
-                    .map(Self::render_generic_bound)
-                    .collect::<Vec<_>>()
-                    .join(" + ");
-                format!(": {}", bounds)
-            }
-        };
-        format!("{}{}", binding.name, binding_kind)
+        format!("{}{}", generic_params, render_path(&poly_trait.trait_))
     }
 
     fn render_generic_bound(bound: &GenericBound) -> String {
@@ -1118,7 +776,7 @@ impl Renderer {
                     };
                     let default = default
                         .as_ref()
-                        .map(|ty| format!(" = {}", Self::render_type(ty)))
+                        .map(|ty| format!(" = {}", render_type(ty)))
                         .unwrap_or_default();
                     Some(format!("{}{}{}", param.name, bounds, default))
                 }
@@ -1131,7 +789,7 @@ impl Renderer {
                 Some(format!(
                     "const {}: {}{}",
                     param.name,
-                    Self::render_type(type_),
+                    render_type(type_),
                     default
                 ))
             }

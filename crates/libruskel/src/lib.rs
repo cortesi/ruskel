@@ -26,6 +26,7 @@ use syntect::{
 
 use rustdoc_types::Crate;
 
+mod crateutils;
 mod error;
 mod render;
 
@@ -55,38 +56,69 @@ pub struct Ruskel {
 
     /// Whether to apply syntax highlighting to the output.
     highlight: bool,
+
+    /// Filter for specific modules within the crate, using "::" as separator.
+    filter: String,
 }
 
 impl Ruskel {
     /// Creates a new Ruskel instance for the specified target.
-    /// The target can be a path to a Rust file, directory, or a module name.
+    ///
+    /// The target can be:
+    /// - A path to a Rust file
+    /// - A directory containing a Cargo.toml file
+    /// - A module name (with or without path)
+    /// - A package name (with or without path)
+    /// - A fully qualified path to an item within a module
+    /// - Blank, in which case we use the current directory
+    ///
+    /// The method normalizes package names, converting hyphens to underscores for internal use.
+    ///
+    /// # Examples of valid targets:
+    ///
+    /// - src/lib.rs
+    /// - my_module
+    /// - serde
+    /// - rustdoc-types
+    /// - serde::Deserialize
+    /// - rustdoc-types::Crate
+    /// - rustdoc_types::Crate
+    ///
+    /// The method will attempt to locate the appropriate Cargo.toml file and set up
+    /// the filter for rendering based on the provided target.
     pub fn new(target: &str) -> Result<Self> {
-        let target_path = PathBuf::from(target);
-
-        if target_path.exists() {
-            let canonical_path = target_path.canonicalize()?;
-            let manifest_path = Self::find_manifest(&canonical_path)?;
-
-            Ok(Ruskel {
-                manifest_path,
-                no_default_features: false,
-                all_features: false,
-                features: Vec::new(),
-                highlight: false,
-            })
-        } else {
-            // Assume it's a module name if the path doesn't exist
-            let workspace_root = Self::find_module(target)?;
+        let components: Vec<&str> = target.split("::").collect();
+        let (manifest_path, filter) = if components.len() > 1 {
+            let normalized_first = components[0].replace('-', "_");
+            let workspace_root = Self::find_module(&normalized_first)?;
             let manifest_path = workspace_root.join("Cargo.toml");
+            let normalized_filter = std::iter::once(normalized_first)
+                .chain(components[1..].iter().map(|&s| s.to_string()))
+                .collect::<Vec<String>>()
+                .join("::");
+            (manifest_path, normalized_filter)
+        } else {
+            let target_path = PathBuf::from(target);
+            if target_path.exists() {
+                let canonical_path = target_path.canonicalize()?;
+                let manifest_path = Self::find_manifest(&canonical_path)?;
+                (manifest_path, String::new())
+            } else {
+                let normalized_target = target.replace('-', "_");
+                let workspace_root = Self::find_module(&normalized_target)?;
+                let manifest_path = workspace_root.join("Cargo.toml");
+                (manifest_path, normalized_target)
+            }
+        };
 
-            Ok(Ruskel {
-                manifest_path,
-                no_default_features: false,
-                all_features: false,
-                features: Vec::new(),
-                highlight: false,
-            })
-        }
+        Ok(Ruskel {
+            manifest_path,
+            no_default_features: false,
+            all_features: false,
+            features: Vec::new(),
+            highlight: false,
+            filter,
+        })
     }
 
     /// Enables or disables syntax highlighting in the output.
@@ -155,6 +187,7 @@ impl Ruskel {
     /// Generates a skeletonized version of the crate as a string of Rust code.
     pub fn render(&self, auto_impls: bool, private_items: bool) -> Result<String> {
         let renderer = Renderer::default()
+            .with_filter(&self.filter)
             .with_auto_impls(auto_impls)
             .with_private_items(private_items);
 
@@ -178,8 +211,10 @@ impl Ruskel {
         let workspace = Workspace::new(&Path::new("Cargo.toml").canonicalize()?, &config)
             .map_err(|e| RuskelError::Cargo(e.to_string()))?;
 
+        // Try to find the module with original name and normalized name
+        let original_name = module_name.replace('_', "-");
         for package in workspace.members() {
-            if package.name().as_str() == module_name {
+            if package.name().as_str() == module_name || package.name().as_str() == original_name {
                 return Ok(package.manifest_path().parent().unwrap().to_path_buf());
             }
         }
@@ -193,7 +228,7 @@ impl Ruskel {
             ops::fetch(&workspace, &options).map_err(|e| RuskelError::Cargo(e.to_string()))?;
 
         for i in ps.packages() {
-            if i.name().as_str() == module_name {
+            if i.name().as_str() == module_name || i.name().as_str() == original_name {
                 return Ok(i.manifest_path().parent().unwrap().to_path_buf());
             }
         }
