@@ -1,6 +1,7 @@
 use clap::Parser;
 use libruskel::Ruskel;
-use std::io::IsTerminal;
+use std::io::{self, IsTerminal, Write};
+use std::process::{Command, Stdio};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -40,6 +41,10 @@ struct Cli {
     /// Disable syntax highlighting
     #[arg(long, default_value_t = false, conflicts_with = "highlight")]
     no_highlight: bool,
+
+    /// Disable paging
+    #[arg(long, default_value_t = false)]
+    no_page: bool,
 }
 
 fn main() {
@@ -55,7 +60,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let should_highlight = if cli.no_highlight {
         false
     } else {
-        cli.highlight || std::io::stdout().is_terminal()
+        cli.highlight || io::stdout().is_terminal()
     };
 
     let rs = Ruskel::new(&cli.target)?
@@ -64,13 +69,30 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         .with_features(cli.features)
         .with_highlighting(should_highlight);
 
-    if cli.raw {
-        let json = rs.raw_json()?;
-        println!("{}", json);
+    let output = if cli.raw {
+        rs.raw_json()?
     } else {
-        let rendered = rs.render(cli.auto_impls, cli.private)?;
-        println!("{}", rendered);
+        rs.render(cli.auto_impls, cli.private)?
+    };
+
+    if io::stdout().is_terminal() && !cli.no_page {
+        page_output(&output)?;
+    } else {
+        println!("{}", output);
     }
 
     Ok(())
 }
+
+fn page_output(content: &str) -> io::Result<()> {
+    let pager = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
+    let mut child = Command::new(pager).stdin(Stdio::piped()).spawn()?;
+
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(content.as_bytes())?;
+    }
+
+    child.wait()?;
+    Ok(())
+}
+
