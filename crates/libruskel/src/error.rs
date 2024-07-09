@@ -29,6 +29,10 @@ pub enum RuskelError {
     /// Indicates an error occurred during syntax highlighting.
     #[error("Highlighting error: {0}")]
     Highlight(String),
+
+    /// The specified filter did not match any items.
+    #[error("Filter '{0}' did not match any items")]
+    FilterNotMatched(String),
 }
 
 impl From<syntect::Error> for RuskelError {

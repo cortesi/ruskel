@@ -259,3 +259,75 @@ gen_tests! {
         }
     }
 }
+
+gen_tests! {
+    filter_error, {
+        rt_custom {
+            filter_matched: {
+                renderer: Renderer::default().with_filter("dummy_crate::my_module"),
+                input: r#"
+                    pub mod my_module {
+                        pub fn my_function() {}
+                    }
+                "#,
+                output: r#"
+                    pub mod my_module {
+                        pub fn my_function() {}
+                    }
+                "#
+            }
+        }
+        rt_custom {
+            no_filter: {
+                renderer: Renderer::default(),
+                input: r#"
+                    pub mod my_module {
+                        pub fn my_function() {}
+                    }
+                    pub mod other_module {
+                        pub fn other_function() {}
+                    }
+                "#,
+                output: r#"
+                    pub mod my_module {
+                        pub fn my_function() {}
+                    }
+                    pub mod other_module {
+                        pub fn other_function() {}
+                    }
+                "#
+            }
+        }
+        rt_custom {
+            partial_match: {
+                renderer: Renderer::default().with_filter("dummy_crate::my_module"),
+                input: r#"
+                    pub mod my_module {
+                        pub mod nested_module {
+                            pub fn nested_function() {}
+                        }
+                    }
+                "#,
+                output: r#"
+                    pub mod my_module {
+                        pub mod nested_module {
+                            pub fn nested_function() {}
+                        }
+                    }
+                "#
+            }
+        }
+        rt_err {
+            filter_not_matched: {
+                renderer: Renderer::default().with_filter("dummy_crate::non_existent_module"),
+                input: r#"
+                    pub mod my_module {
+                        pub fn my_function() {}
+                    }
+                "#,
+                error: "Filter 'dummy_crate::non_existent_module' did not match any items"
+            }
+        }
+
+    }
+}

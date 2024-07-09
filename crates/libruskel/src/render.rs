@@ -4,7 +4,7 @@ use rustdoc_types::{
 };
 
 use crate::crateutils::*;
-use crate::error::Result;
+use crate::error::{Result, RuskelError};
 
 fn must_get<'a>(crate_data: &'a Crate, id: &Id) -> &'a Item {
     crate_data.index.get(id).unwrap()
@@ -23,6 +23,7 @@ pub struct Renderer {
     render_auto_impls: bool,
     render_private_items: bool,
     render_blanket_impls: bool,
+    filter_matched: bool,
     filter: String,
 }
 
@@ -42,6 +43,7 @@ impl Renderer {
             render_private_items: false,
             render_blanket_impls: false,
             filter: String::new(),
+            filter_matched: false,
         }
     }
 
@@ -65,7 +67,7 @@ impl Renderer {
         self
     }
 
-    pub fn render(&self, crate_data: &Crate) -> Result<String> {
+    pub fn render(&mut self, crate_data: &Crate) -> Result<String> {
         // The root item is always a module
         let output = self.render_item(
             "",
@@ -73,6 +75,10 @@ impl Renderer {
             crate_data,
             false,
         );
+
+        if !self.filter.is_empty() && !self.filter_matched {
+            return Err(RuskelError::FilterNotMatched(self.filter.clone()));
+        }
 
         Ok(self.formatter.format_str(&output)?)
     }
@@ -138,12 +144,16 @@ impl Renderer {
         true
     }
 
-    fn should_filter(&self, module_path: &str, item: &Item) -> bool {
+    fn should_filter(&mut self, module_path: &str, item: &Item) -> bool {
         if self.filter.is_empty() {
             return false;
         }
         match self.filter_match(module_path, item) {
-            FilterMatch::Hit | FilterMatch::Prefix | FilterMatch::Suffix => false,
+            FilterMatch::Hit => {
+                self.filter_matched = true;
+                false
+            }
+            FilterMatch::Prefix | FilterMatch::Suffix => false,
             FilterMatch::Miss => true,
         }
     }
@@ -180,7 +190,7 @@ impl Renderer {
     }
 
     fn render_item(
-        &self,
+        &mut self,
         module_path: &str,
         item: &Item,
         crate_data: &Crate,
@@ -280,7 +290,7 @@ impl Renderer {
         output
     }
 
-    fn render_import(&self, module_path: &str, item: &Item, crate_data: &Crate) -> String {
+    fn render_import(&mut self, module_path: &str, item: &Item, crate_data: &Crate) -> String {
         let import = extract_item!(item, ItemEnum::Import);
 
         if import.glob {
@@ -634,7 +644,7 @@ impl Renderer {
         output
     }
 
-    fn render_module(&self, module_path: &str, item: &Item, crate_data: &Crate) -> String {
+    fn render_module(&mut self, module_path: &str, item: &Item, crate_data: &Crate) -> String {
         let module_path = if module_path.is_empty() {
             render_name(item).to_string()
         } else {
