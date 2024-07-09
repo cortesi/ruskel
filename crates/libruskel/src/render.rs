@@ -1344,32 +1344,29 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let crate_path = temp_dir.path().join("src");
         fs::create_dir(&crate_path).unwrap();
-
-        // Write the source code to a file
         let lib_rs_path = crate_path.join("lib.rs");
         fs::write(&lib_rs_path, source).unwrap();
 
-        // Create a dummy Cargo.toml
         let cargo_toml_content = if is_proc_macro {
             r#"
-        [package]
-        name = "dummy_crate"
-        version = "0.1.0"
-        edition = "2021"
+                [package]
+                name = "dummy_crate"
+                version = "0.1.0"
+                edition = "2021"
 
-        [lib]
-        proc-macro = true
+                [lib]
+                proc-macro = true
 
-        [dependencies]
-        proc-macro2 = "1.0"
-        "#
+                [dependencies]
+                proc-macro2 = "1.0"
+            "#
         } else {
             r#"
-        [package]
-        name = "dummy_crate"
-        version = "0.1.0"
-        edition = "2021"
-        "#
+                [package]
+                name = "dummy_crate"
+                version = "0.1.0"
+                edition = "2021"
+            "#
         };
         fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml_content).unwrap();
 
@@ -1425,22 +1422,36 @@ mod tests {
         render(&Renderer::default(), source, expected_output, true);
     }
 
-    fn rt_idemp_multi(sources: &[&str]) {
-        for source in sources {
-            rt_idemp(source);
-        }
-    }
+    macro_rules! gen_tests {
+        ($prefix:ident, {
+            $(idemp {
+                $idemp_name:ident: $input:expr
+            })*
+            $(rt {
+                $rt_name:ident: {
+                    input: $rt_input:expr,
+                    output: $rt_output:expr
+                }
+            })*
+        }) => {
+            mod $prefix {
+                use super::*;
 
-    fn rt_priv_idemp_multi(sources: &[&str]) {
-        for source in sources {
-            rt_priv_idemp(source);
-        }
-    }
+                $(
+                    #[test]
+                    fn $idemp_name() {
+                        rt_priv_idemp($input);
+                    }
+                )*
 
-    fn rt_multi(cases: &[(&str, &str)]) {
-        for (source, expected_output) in cases {
-            rt(source, expected_output);
-        }
+                $(
+                    #[test]
+                    fn $rt_name() {
+                        rt($rt_input, $rt_output);
+                    }
+                )*
+            }
+        };
     }
 
     #[test]
@@ -1606,244 +1617,6 @@ mod tests {
                 /// This is a documented constant.
                 pub const CONSTANT: u32 = 42;
                 const PRIVATE_CONSTANT: &str = "Hello, world!";
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_unit_struct() {
-        rt_idemp(
-            r#"
-                /// A unit struct
-                pub struct UnitStruct;
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_simple_trait() {
-        rt_idemp(
-            r#"
-                /// A simple trait
-                pub trait SimpleTrait {
-                    fn method(&self);
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_trait_with_generics() {
-        rt_idemp(
-            r#"
-                /// A trait with generics
-                pub trait GenericTrait<T> {
-                    fn method(&self, value: T);
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_trait_with_default_methods() {
-        rt_idemp(
-            r#"
-                /// A trait with default methods
-                pub trait TraitWithDefault {
-                    fn method_with_default(&self) {}
-                    fn method_without_default(&self);
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_unsafe_trait() {
-        rt_idemp(
-            r#"
-                /// An unsafe trait
-                pub unsafe trait UnsafeTrait {
-                    unsafe fn unsafe_method(&self);
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_trait_with_supertraits() {
-        rt_idemp(
-            r#"
-                /// A trait with supertraits
-                pub trait SuperTrait: std::fmt::Debug + Clone {
-                    fn super_method(&self);
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_trait_with_self_methods() {
-        rt_idemp(
-            r#"
-                pub trait TraitWithSelfMethods {
-                    fn method1(self);
-                    fn method2(&self);
-                    fn method3(&mut self);
-                    fn method4(self: Box<Self>);
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_trait_with_associated_types() {
-        rt_idemp(
-            r#"
-                /// A trait with associated types
-                pub trait TraitWithAssocTypes {
-                    type Item;
-                    type Container<T>;
-                    type WithBounds: Clone + 'static;
-                    fn get_item(&self) -> Self::Item;
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_simple_enum() {
-        rt_idemp(
-            r#"
-                /// A simple enum
-                pub enum SimpleEnum {
-                    Variant1,
-                    Variant2,
-                    Variant3,
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_enum_with_tuple_variants() {
-        rt_idemp(
-            r#"
-                /// An enum with tuple variants
-                pub enum TupleEnum {
-                    Variant1(i32, String),
-                    Variant2(bool),
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_enum_with_struct_variants() {
-        rt_priv_idemp(
-            r#"
-                /// An enum with struct variants
-                pub enum StructEnum {
-                    Variant1 {
-                        field1: i32,
-                        field2: String,
-                    },
-                    Variant2 {
-                        field: bool,
-                    },
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_enum_with_mixed_variants() {
-        rt_priv_idemp(
-            r#"
-                /// An enum with mixed variant types
-                pub enum MixedEnum {
-                    Variant1,
-                    Variant2(i32, String),
-                    Variant3 {
-                        field: bool,
-                    },
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_enum_with_discriminants() {
-        rt_idemp(
-            r#"
-                /// An enum with discriminants
-                pub enum DiscriminantEnum {
-                    Variant1 = 1,
-                    Variant2 = 2,
-                    Variant3 = 4,
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_enum_with_generics() {
-        rt_idemp(
-            r#"
-                /// An enum with generic types
-                pub enum GenericEnum<T, U> {
-                    Variant1(T),
-                    Variant2(U),
-                    Variant3(T, U),
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_enum_with_lifetimes() {
-        rt_idemp(
-            r#"
-                /// An enum with lifetimes
-                pub enum LifetimeEnum<'a, 'b> {
-                    Variant1(&'a str),
-                    Variant2(&'b str),
-                    Variant3(&'a str, &'b str),
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_enum_with_generics_and_where_clause() {
-        rt_priv_idemp(
-            r#"
-                /// An enum with generics and a where clause
-                pub enum ComplexEnum<T, U>
-                where
-                    T: Clone,
-                    U: Default,
-                {
-                    Variant1(T),
-                    Variant2(U),
-                    Variant3 {
-                        field1: T,
-                        field2: U,
-                    },
-                }
-            "#,
-        );
-    }
-
-    #[test]
-    fn test_render_enum_with_lifetimes_and_generics() {
-        rt_idemp(
-            r#"
-                /// An enum with lifetimes and generics
-                pub enum MixedEnum<'a, T: 'a> {
-                    Variant1(&'a T),
-                    Variant2(T),
-                    Variant3(&'a [T]),
-                }
             "#,
         );
     }
@@ -2033,26 +1806,6 @@ mod tests {
                 }
             "#,
             false,
-        );
-    }
-
-    #[test]
-    fn test_render_complex_generic_args() {
-        rt_priv_idemp(
-            r#"
-                pub struct Complex<T, U> {
-                    data: Vec<T>,
-                    marker: std::marker::PhantomData<U>,
-                }
-
-                impl<T, U> Complex<T, U> {
-                    pub fn new() -> Self { }
-                }
-
-                impl<T: Clone, U> Clone for Complex<T, U> {
-                    fn clone(&self) -> Self { }
-                }
-            "#,
         );
     }
 
@@ -2437,81 +2190,47 @@ mod tests {
         rt_procmacro(source, expected_output);
     }
 
-    #[test]
-    fn test_plain_struct() {
-        rt_priv_idemp_multi(&[
-            r#"
-                pub struct EmptyStruct {}
-            "#,
-            r#"
-                pub struct S {
-                    pub field1: i32,
-                    field2: String,
-                }
-            "#,
-            r#"
-                /// A plain struct with generic types
-                pub struct S<T, U> {
-                    pub field1: T,
-                    field2: U,
-                }
-            "#,
-            r#"
-                pub struct S<T, U>
-                where
-                    T: Clone,
-                    U: Default,
-                {
-                    pub field1: T,
-                    field2: U,
-                }
-            "#,
-            r#"
-                /// A struct with a lifetime
-                pub struct S<'a> {
-                    field: &'a str,
-                }
-            "#,
-            r#"
-                /// A struct with both lifetime and generic type
-                pub struct S<'a, T> {
-                    reference: &'a str,
-                    value: T,
-                }
-            "#,
-        ]);
-
-        // Test for public struct with private fields
-        rt_multi(&[
-            (
-                r#"
-                    pub struct S {
+    gen_tests! {
+        plain_struct, {
+            idemp {
+                empty: r#"
+                    pub struct EmptyStruct {}
+                "#
+            }
+            idemp {
+                basic: r#"
+                    pub struct BasicStruct {
                         pub field1: i32,
                         field2: String,
                     }
-                "#,
-                r#"
-                    pub struct S {
-                        pub field1: i32,
-                    }
-                "#,
-            ),
-            (
-                r#"
-                    pub struct S<T, U> {
+                "#
+            }
+            idemp {
+                generic: r#"
+                    pub struct GenericStruct<T, U> {
                         pub field1: T,
                         field2: U,
                     }
-                "#,
-                r#"
-                    pub struct S<T, U> {
-                        pub field1: T,
+                "#
+            }
+            idemp {
+                with_lifetime: r#"
+                    pub struct LifetimeStruct<'a> {
+                        field: &'a str,
                     }
-                "#,
-            ),
-            (
-                r#"
-                    pub struct S<T, U>
+                "#
+            }
+            idemp {
+                with_lifetime_and_generic: r#"
+                    pub struct MixedStruct<'a, T> {
+                        reference: &'a str,
+                        value: T,
+                    }
+                "#
+            }
+            idemp {
+                with_where_clause: r#"
+                    pub struct WhereStruct<T, U>
                     where
                         T: Clone,
                         U: Default,
@@ -2519,74 +2238,415 @@ mod tests {
                         pub field1: T,
                         field2: U,
                     }
-                "#,
-                r#"
-                    pub struct S<T, U>
-                    where
-                        T: Clone,
-                        U: Default,
-                    {
-                        pub field1: T,
-                    }
-                "#,
-            ),
-            (
-                r#"
-                    pub struct S {
-                        pub public_field: i32,
-                        private_field: String,
-                    }
-                "#,
-                r#"
-                    pub struct S {
-                        pub public_field: i32,
-                    }
-                "#,
-            ),
-            (
-                r#"
-                    pub struct S {
-                        private_field: String,
-                    }
-                "#,
-                r#"
-                    pub struct S {}
-                "#,
-            ),
-        ]);
+                "#
+            }
+            rt {
+                with_private_fields: {
+                    input: r#"
+                        pub struct PrivateFieldStruct {
+                            pub field1: i32,
+                            field2: String,
+                        }
+                    "#,
+                    output: r#"
+                        pub struct PrivateFieldStruct {
+                            pub field1: i32,
+                        }
+                    "#
+                }
+            }
+            rt {
+                generic_with_private_fields: {
+                    input: r#"
+                        pub struct GenericPrivateFieldStruct<T, U> {
+                            pub field1: T,
+                            field2: U,
+                        }
+                    "#,
+                    output: r#"
+                        pub struct GenericPrivateFieldStruct<T, U> {
+                            pub field1: T,
+                        }
+                    "#
+                }
+            }
+            rt {
+                where_clause_with_private_fields: {
+                    input: r#"
+                        pub struct WherePrivateFieldStruct<T, U>
+                        where
+                            T: Clone,
+                            U: Default,
+                        {
+                            pub field1: T,
+                            field2: U,
+                        }
+                    "#,
+                    output: r#"
+                        pub struct WherePrivateFieldStruct<T, U>
+                        where
+                            T: Clone,
+                            U: Default,
+                        {
+                            pub field1: T,
+                        }
+                    "#
+                }
+            }
+            rt {
+                only_private_fields: {
+                    input: r#"
+                        pub struct OnlyPrivateFieldStruct {
+                            field: String,
+                        }
+                    "#,
+                    output: r#"
+                        pub struct OnlyPrivateFieldStruct {}
+                    "#
+                }
+            }
+        }
     }
 
-    #[test]
-    fn test_tuple_struct() {
-        rt_priv_idemp_multi(&[
-            r#" pub struct S(pub i32, String); "#,
-            r#"
-                /// A tuple struct with generic types
-                pub struct S<T, U>(T, U);
-            "#,
-            r#"
-                pub struct S<T, U>(T, U);
-            "#,
-        ]);
+    gen_tests! {
+        unit_struct, {
+            idemp {
+                basic: r#"
+                    pub struct UnitStruct;
+                "#
+            }
+            rt {
+                private: {
+                    input: r#"
+                        struct PrivateUnitStruct;
+                    "#,
+                    output: r#"
+                    "#
+                }
+            }
+        }
+    }
 
-        // Test for public struct with private fields
-        rt_multi(&[
-            (
-                r#"
-                    pub struct S(pub i32, String);
-                "#,
-                r#"
-                    pub struct S(pub i32, _);
-                "#,
-            ),
-            (
-                r#"
-                    pub struct S<T, U>(T, U);
-                "#,
-                r#"
-                    pub struct S<T, U>(_, _);
-                "#,
-            ),
-        ]);
+    gen_tests! {
+        tuple_struct, {
+            idemp {
+                basic: r#"
+                    pub struct BasicTuple(i32, String);
+                "#
+            }
+            idemp {
+                with_pub_fields: r#"
+                    pub struct PubFieldsTuple(pub i32, pub String);
+                "#
+            }
+            idemp {
+                mixed_visibility: r#"
+                    pub struct MixedVisibilityTuple(pub i32, String, pub bool);
+                "#
+            }
+            idemp {
+                generic: r#"
+                    pub struct GenericTuple<T, U>(T, U);
+                "#
+            }
+            idemp {
+                with_lifetime: r#"
+                    pub struct LifetimeTuple<'a>(&'a str, String);
+                "#
+            }
+            idemp {
+                with_lifetime_and_generic: r#"
+                    pub struct MixedTuple<'a, T>(&'a str, T);
+                "#
+            }
+            idemp {
+                with_where_clause: r#"
+                    pub struct WhereTuple<T, U>(T, U)
+                    where
+                        T: Clone,
+                        U: Default;
+                "#
+            }
+            idemp {
+                complex: r#"
+                    pub struct ComplexTuple<'a, T, U>(&'a str, T, U, i32)
+                    where
+                        T: Clone,
+                        U: Default + 'a;
+                "#
+            }
+            rt {
+                with_private_fields: {
+                    input: r#"
+                        pub struct PrivateFieldsTuple(pub i32, String, pub bool);
+                    "#,
+                    output: r#"
+                        pub struct PrivateFieldsTuple(pub i32, _, pub bool);
+                    "#
+                }
+            }
+            rt {
+                generic_with_private_fields: {
+                    input: r#"
+                        pub struct GenericPrivateTuple<T, U>(pub T, U);
+                    "#,
+                    output: r#"
+                        pub struct GenericPrivateTuple<T, U>(pub T, _);
+                    "#
+                }
+            }
+            rt {
+                only_private_fields: {
+                    input: r#"
+                        pub struct OnlyPrivateTuple(String, i32);
+                    "#,
+                    output: r#"
+                        pub struct OnlyPrivateTuple(_, _);
+                    "#
+                }
+            }
+            rt {
+                private_struct: {
+                    input: r#"
+                        struct PrivateTuple(i32, String);
+                    "#,
+                    output: r#"
+                    "#
+                }
+            }
+        }
+    }
+
+    gen_tests! {
+        enums, {
+            idemp {
+                basic: r#"
+                    pub enum BasicEnum {
+                        Variant1,
+                        Variant2,
+                        Variant3,
+                    }
+                "#
+            }
+            idemp {
+                with_tuple_variants: r#"
+                    pub enum TupleEnum {
+                        Variant1(i32, String),
+                        Variant2(bool),
+                    }
+                "#
+            }
+            idemp {
+                with_struct_variants: r#"
+                    pub enum StructEnum {
+                        Variant1 {
+                            field1: i32,
+                            field2: String,
+                        },
+                        Variant2 {
+                            field: bool,
+                        },
+                    }
+                "#
+            }
+            idemp {
+                mixed_variants: r#"
+                    pub enum MixedEnum {
+                        Variant1,
+                        Variant2(i32, String),
+                        Variant3 {
+                            field: bool,
+                        },
+                    }
+                "#
+            }
+            idemp {
+                with_discriminants: r#"
+                    pub enum DiscriminantEnum {
+                        Variant1 = 1,
+                        Variant2 = 2,
+                        Variant3 = 4,
+                    }
+                "#
+            }
+            idemp {
+                generic: r#"
+                    pub enum GenericEnum<T, U> {
+                        Variant1(T),
+                        Variant2(U),
+                        Variant3(T, U),
+                    }
+                "#
+            }
+            idemp {
+                with_lifetime: r#"
+                    pub enum LifetimeEnum<'a> {
+                        Variant1(&'a str),
+                        Variant2(String),
+                    }
+                "#
+            }
+            idemp {
+                with_where_clause: r#"
+                    pub enum WhereEnum<T, U>
+                    where
+                        T: Clone,
+                        U: Default,
+                    {
+                        Variant1(T),
+                        Variant2(U),
+                        Variant3 {
+                            field1: T,
+                            field2: U,
+                        },
+                    }
+                "#
+            }
+            rt {
+                private_enum: {
+                    input: r#"
+                        enum PrivateEnum {
+                            Variant1,
+                            Variant2(i32),
+                        }
+                    "#,
+                    output: r#"
+                    "#
+                }
+            }
+            rt {
+                private_variants: {
+                    input: r#"
+                        pub enum PrivateVariantsEnum {
+                            Variant1,
+                            #[doc(hidden)]
+                            Variant2,
+                        }
+                    "#,
+                    output: r#"
+                        pub enum PrivateVariantsEnum {
+                            Variant1,
+                        }
+                    "#
+                }
+            }
+        }
+    }
+
+    gen_tests! {
+        traits, {
+            idemp {
+                basic: r#"
+                    pub trait BasicTrait {
+                        fn method(&self);
+                        fn default_method(&self) {
+                        }
+                    }
+                "#
+            }
+            idemp {
+                with_associated_types: r#"
+                    pub trait TraitWithAssocTypes {
+                        type Item;
+                        type Container<T>;
+                        fn get_item(&self) -> Self::Item;
+                    }
+                "#
+            }
+            idemp {
+                with_associated_consts: r#"
+                    pub trait TraitWithAssocConsts {
+                        const CONSTANT: i32;
+                        const DEFAULT_CONSTANT: bool = true;
+                    }
+                "#
+            }
+            idemp {
+                generic: r#"
+                    pub trait GenericTrait<T, U> {
+                        fn process(&self, t: T) -> U;
+                    }
+                "#
+            }
+            idemp {
+                with_lifetime: r#"
+                    pub trait LifetimeTrait<'a> {
+                        fn process(&self, data: &'a str) -> &'a str;
+                    }
+                "#
+            }
+            idemp {
+                with_supertraits: r#"
+                    pub trait SuperTrait: std::fmt::Debug + Clone {
+                        fn super_method(&self);
+                    }
+                "#
+            }
+            idemp {
+                with_where_clause: r#"
+                    pub trait WhereTraitMulti<T, U>
+                    where
+                        T: Clone,
+                        U: Default,
+                    {
+                        fn process(&self, t: T, u: U);
+                    }
+                "#
+            }
+            idemp {
+                unsafe_trait: r#"
+                    pub unsafe trait UnsafeTrait {
+                        unsafe fn unsafe_method(&self);
+                    }
+                "#
+            }
+            idemp {
+                with_associated_type_bounds: r#"
+                    pub trait BoundedAssocType {
+                        type Item: Clone + 'static;
+                        fn get_item(&self) -> Self::Item;
+                    }
+                "#
+            }
+            idemp {
+                with_self_type: r#"
+                    pub trait WithSelfType {
+                        fn as_ref(&self) -> &Self;
+                        fn into_owned(self) -> Self;
+                    }
+                "#
+            }
+            rt {
+                private_items: {
+                    input: r#"
+                        pub trait TraitWithPrivateItems {
+                            fn public_method(&self);
+                            #[doc(hidden)]
+                            fn private_method(&self);
+                            type PublicType;
+                            #[doc(hidden)]
+                            type PrivateType;
+                        }
+                    "#,
+                    output: r#"
+                        pub trait TraitWithPrivateItems {
+                            fn public_method(&self);
+                            type PublicType;
+                        }
+                    "#
+                }
+            }
+            rt {
+                private_trait: {
+                    input: r#"
+                        trait PrivateTrait {
+                            fn method(&self);
+                        }
+                    "#,
+                    output: r#"
+                    "#
+                }
+            }
+        }
     }
 }
