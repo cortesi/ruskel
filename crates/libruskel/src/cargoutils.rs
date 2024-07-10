@@ -62,9 +62,14 @@ impl CargoPath {
             .map_or(false, |m| m.workspace.is_some() && m.package.is_none())
     }
 
-    pub fn create_dummy_crate(&self, dependency: &str) -> Result<()> {
+    pub fn create_dummy_crate(
+        &self,
+        dependency: &str,
+        version: Option<&str>,
+        features: Option<&[&str]>,
+    ) -> Result<()> {
         if self.has_manifest() {
-            return Err(RuskelError::Cargo("manifst already exists".to_string()));
+            return Err(RuskelError::Cargo("manifest already exists".to_string()));
         }
         let src_dir = self.as_path().join("src");
         fs::create_dir_all(&src_dir)?;
@@ -74,15 +79,17 @@ impl CargoPath {
         writeln!(file, "// Dummy crate")?;
 
         let manifest_path = self.manifest_path();
+        let version_str = version.map_or("*".to_string(), |v| v.to_string());
+        let features_str = features.map_or(String::new(), |f| format!(", features = {:?}", f));
         let manifest = format!(
             r#"[package]
-                name = "dummy-crate"
-                version = "0.1.0"
+            name = "dummy-crate"
+            version = "0.1.0"
 
-                [dependencies]
-                {} = "*"
+            [dependencies]
+            {} = {{ version = "{}"{}}}
             "#,
-            dependency
+            dependency, version_str, features_str
         );
         fs::write(manifest_path, manifest)?;
         Ok(())
@@ -238,7 +245,7 @@ impl CargoPath {
         // We have no package or workspace. Our last ditch effort is  to create a dummy module with
         // a dependency.
         let dummy = CargoPath::TempDir(TempDir::new()?);
-        dummy.create_dummy_crate(&components[0])?;
+        dummy.create_dummy_crate(&components[0], None, None)?;
         Ok((dummy, components))
     }
 }
@@ -254,15 +261,16 @@ mod tests {
         let temp_dir = tempdir()?;
         let cargo_path = CargoPath::Path(temp_dir.path().to_path_buf());
 
-        cargo_path.create_dummy_crate("serde")?;
+        cargo_path.create_dummy_crate("serde", None, None)?;
         assert!(cargo_path.has_manifest());
 
         let manifest_content = fs::read_to_string(cargo_path.manifest_path())?;
+        println!("{}", manifest_content);
         assert!(manifest_content.contains("[dependencies]"));
-        assert!(manifest_content.contains("serde = \"*\""));
+        assert!(manifest_content.contains("serde = { version = \"*\""));
 
         // Ensure creating a second crate fails
-        assert!(cargo_path.create_dummy_crate("rand").is_err());
+        assert!(cargo_path.create_dummy_crate("rand", None, None).is_err());
 
         Ok(())
     }
