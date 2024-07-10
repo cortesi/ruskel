@@ -49,7 +49,7 @@ Where `TARGET` can be a directory, file path, or a module name. If omitted, it d
 
 #### Sample Options
 
-- `--raw`: Output raw JSON instead of rendered Rust code
+- `--no-page`: Disable paging
 - `--auto-impls`: Render auto-implemented traits
 - `--private`: Render private items
 - `--no-default-features`: Disable default features
