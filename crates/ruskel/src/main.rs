@@ -67,7 +67,8 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         cli.highlight || io::stdout().is_terminal()
     };
 
-    let rs = Ruskel::new(&cli.target, cli.offline)?
+    let rs = Ruskel::new(&cli.target)
+        .with_offline(cli.offline)
         .with_no_default_features(cli.no_default_features)
         .with_all_features(cli.all_features)
         .with_features(cli.features)

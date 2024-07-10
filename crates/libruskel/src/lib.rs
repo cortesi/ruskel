@@ -39,8 +39,8 @@ use cargoutils::*;
 /// Rust toolchain installed and available.
 #[derive(Debug)]
 pub struct Ruskel {
-    /// Path to the Cargo.toml file for the target crate.
-    package_path: CargoPath,
+    /// The user's full target specification
+    target: String,
 
     /// Whether to build without default features.
     no_default_features: bool,
@@ -54,8 +54,8 @@ pub struct Ruskel {
     /// Whether to apply syntax highlighting to the output.
     highlight: bool,
 
-    /// Filter for specific modules within the crate, using "::" as separator.
-    filter: String,
+    /// In offline mode Ruskell will not attempt to fetch dependencies from the network.
+    offline: bool,
 }
 
 impl Ruskel {
@@ -85,26 +85,22 @@ impl Ruskel {
     /// the filter for rendering based on the provided target.
     ///
     /// If offline is true, Ruskel will not attempt to fetch dependencies from the network.
-    pub fn new(target: &str, offline: bool) -> Result<Self> {
-        let (package_path, filter) = CargoPath::from_target(target)?;
-        let (package_path, filter) = if !filter.is_empty() {
-            if let Some(cp) = package_path.find_dependency(&filter[0], offline)? {
-                (cp, filter[1..].to_vec())
-            } else {
-                (package_path, filter)
-            }
-        } else {
-            (package_path, filter)
-        };
-
-        Ok(Ruskel {
-            package_path,
+    pub fn new(target: &str) -> Self {
+        Ruskel {
+            target: target.to_string(),
             no_default_features: false,
             all_features: false,
             features: Vec::new(),
             highlight: false,
-            filter: filter.join("::"),
-        })
+            offline: false,
+        }
+    }
+
+    /// Enables or disables offline mode, which prevents Ruskel from fetching dependencies from the
+    /// network.
+    pub fn with_offline(mut self, offline: bool) -> Self {
+        self.offline = offline;
+        self
     }
 
     /// Enables or disables syntax highlighting in the output.
@@ -154,11 +150,10 @@ impl Ruskel {
         Ok(output)
     }
 
-    /// Generates and returns the parsed JSON representation of the crate's API.
-    pub fn json(&self) -> Result<Crate> {
+    fn crate_from_package(&self, package_path: CargoPath) -> Result<Crate> {
         let json_path = rustdoc_json::Builder::default()
             .toolchain("nightly")
-            .manifest_path(self.package_path.manifest_path())
+            .manifest_path(package_path.manifest_path())
             .document_private_items(true)
             .no_default_features(self.no_default_features)
             .all_features(self.all_features)
@@ -170,14 +165,36 @@ impl Ruskel {
         Ok(crate_data)
     }
 
+    /// Generates and returns the parsed JSON representation of the crate's API.
+    pub fn make_crate(&self) -> Result<Crate> {
+        let (package_path, _) = self.find_cargo()?;
+        self.crate_from_package(package_path)
+    }
+
+    fn find_cargo(&self) -> Result<(CargoPath, String)> {
+        let (package_path, filter) = CargoPath::from_target(&self.target)?;
+        let (package_path, filter) = if !filter.is_empty() {
+            if let Some(cp) = package_path.find_dependency(&filter[0], self.offline)? {
+                (cp, filter[1..].to_vec())
+            } else {
+                (package_path, filter)
+            }
+        } else {
+            (package_path, filter)
+        };
+        Ok((package_path, filter.join("::")))
+    }
+
     /// Generates a skeletonized version of the crate as a string of Rust code.
     pub fn render(&self, auto_impls: bool, private_items: bool) -> Result<String> {
+        let (package_path, filter) = self.find_cargo()?;
+        let crate_data = self.crate_from_package(package_path)?;
+
         let renderer = Renderer::default()
-            .with_filter(&self.filter)
+            .with_filter(&filter)
             .with_auto_impls(auto_impls)
             .with_private_items(private_items);
 
-        let crate_data = self.json()?;
         let rendered = renderer.render(&crate_data)?;
 
         if self.highlight {
@@ -189,6 +206,6 @@ impl Ruskel {
 
     /// Returns a pretty-printed version of the crate's JSON representation.
     pub fn raw_json(&self) -> Result<String> {
-        Ok(serde_json::to_string_pretty(&self.json()?)?)
+        Ok(serde_json::to_string_pretty(&self.make_crate()?)?)
     }
 }
