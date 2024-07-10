@@ -15,6 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use cargo::{core::Workspace, ops, util::context::GlobalContext};
+use cargo_toml::Manifest;
 use syntect::{
     easy::HighlightLines,
     highlighting::ThemeSet,
@@ -86,27 +87,10 @@ impl Ruskel {
     /// the filter for rendering based on the provided target.
     pub fn new(target: &str) -> Result<Self> {
         let components: Vec<&str> = target.split("::").collect();
-        let (manifest_path, filter) = if components.len() > 1 {
-            let normalized_first = components[0].replace('-', "_");
-            let workspace_root = Self::find_module(&normalized_first)?;
-            let manifest_path = workspace_root.join("Cargo.toml");
-            let normalized_filter = std::iter::once(normalized_first)
-                .chain(components[1..].iter().map(|&s| s.to_string()))
-                .collect::<Vec<String>>()
-                .join("::");
-            (manifest_path, normalized_filter)
+        let (manifest_path, filter) = if Path::new(components[0]).exists() {
+            Self::resolve_existing_path(&components)?
         } else {
-            let target_path = PathBuf::from(target);
-            if target_path.exists() {
-                let canonical_path = target_path.canonicalize()?;
-                let manifest_path = Self::find_manifest(&canonical_path)?;
-                (manifest_path, String::new())
-            } else {
-                let normalized_target = target.replace('-', "_");
-                let workspace_root = Self::find_module(&normalized_target)?;
-                let manifest_path = workspace_root.join("Cargo.toml");
-                (manifest_path, "".to_string())
-            }
+            Self::resolve_module_name(&components)?
         };
         Ok(Ruskel {
             manifest_path,
@@ -116,6 +100,107 @@ impl Ruskel {
             highlight: false,
             filter,
         })
+    }
+
+    /// Resolves the manifest path and filter for an existing file system path.
+    fn resolve_existing_path(components: &[&str]) -> Result<(PathBuf, String)> {
+        let canonical_path = Path::new(components[0]).canonicalize()?;
+        let root_manifest_path = Self::find_manifest(&canonical_path)?;
+
+        if Self::is_workspace_manifest(&root_manifest_path)? {
+            Self::resolve_workspace_package(&canonical_path, components)
+        } else {
+            Self::resolve_single_package(&root_manifest_path, components)
+        }
+    }
+
+    /// Resolves the manifest path and filter for a workspace package.
+    fn resolve_workspace_package(
+        canonical_path: &Path,
+        components: &[&str],
+    ) -> Result<(PathBuf, String)> {
+        if let Some(package_name) = components.get(1) {
+            let package_path = Self::find_module_in_workspace(canonical_path, package_name)?;
+            let package_manifest_path = package_path.join("Cargo.toml");
+            let module_name = Self::get_module_name(&package_manifest_path)?;
+            let filter = Self::construct_filter(module_name, components.get(2..).unwrap_or(&[]));
+            Ok((package_manifest_path, filter))
+        } else {
+            Ok((canonical_path.join("Cargo.toml"), String::new()))
+        }
+    }
+
+    /// Resolves the manifest path and filter for a single package (non-workspace).
+    fn resolve_single_package(
+        manifest_path: &Path,
+        components: &[&str],
+    ) -> Result<(PathBuf, String)> {
+        let module_name = Self::get_module_name(manifest_path)?;
+        let filter = Self::construct_filter(module_name, &components[1..]);
+        Ok((manifest_path.to_path_buf(), filter))
+    }
+
+    /// Resolves the manifest path and filter for a module name (not a file system path).
+    fn resolve_module_name(components: &[&str]) -> Result<(PathBuf, String)> {
+        if components.len() > 1 {
+            let normalized_first = components[0].replace('-', "_");
+            let workspace_root = Self::find_module(&normalized_first)?;
+            let manifest_path = workspace_root.join("Cargo.toml");
+            let filter = Self::construct_filter(normalized_first, &components[1..]);
+            Ok((manifest_path, filter))
+        } else {
+            let normalized_target = components[0].replace('-', "_");
+            let workspace_root = Self::find_module(&normalized_target)?;
+            let manifest_path = workspace_root.join("Cargo.toml");
+            Ok((manifest_path, String::new()))
+        }
+    }
+
+    /// Constructs a filter string from a module name and additional components.
+    fn construct_filter<S: AsRef<str>>(first: String, rest: &[S]) -> String {
+        std::iter::once(first)
+            .chain(rest.iter().map(|s| s.as_ref().to_string()))
+            .collect::<Vec<String>>()
+            .join("::")
+    }
+
+    fn find_module_in_workspace(workspace_path: &Path, module_name: &str) -> Result<PathBuf> {
+        let config = GlobalContext::default().map_err(|e| RuskelError::Cargo(e.to_string()))?;
+        let workspace = Workspace::new(&workspace_path.join("Cargo.toml"), &config)
+            .map_err(|e| RuskelError::Cargo(e.to_string()))?;
+
+        let normalized_name = module_name.replace('-', "_");
+        let original_name = module_name.replace('_', "-");
+
+        for package in workspace.members() {
+            if package.name().as_str() == normalized_name
+                || package.name().as_str() == original_name
+            {
+                return Ok(package.manifest_path().parent().unwrap().to_path_buf());
+            }
+        }
+
+        Err(RuskelError::ModuleNotFound(module_name.to_string()))
+    }
+
+    // Helper function to check if a manifest is a workspace without a package
+    fn is_workspace_manifest(manifest_path: &Path) -> Result<bool> {
+        let manifest = Manifest::from_path(manifest_path)
+            .map_err(|e| RuskelError::ManifestParse(e.to_string()))?;
+
+        Ok(manifest.workspace.is_some() && manifest.package.is_none())
+    }
+
+    fn get_module_name(manifest_path: &Path) -> Result<String> {
+        let manifest = Manifest::from_path(manifest_path)
+            .map_err(|e| RuskelError::ManifestParse(e.to_string()))?;
+
+        manifest
+            .package
+            .ok_or_else(|| {
+                RuskelError::ManifestParse("No package section found in Cargo.toml".to_string())
+            })
+            .map(|package| package.name)
     }
 
     /// Enables or disables syntax highlighting in the output.

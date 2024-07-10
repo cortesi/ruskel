@@ -2,10 +2,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum RuskelError {
-    /// Indicates that the Cargo.toml manifest file could not be found in the current directory or any parent directories.
-    #[error("Failed to find Cargo.toml in the current directory or any parent directories")]
-    ManifestNotFound,
-
     /// Indicates that a specified module could not be found.
     #[error("Module not found: {0}")]
     ModuleNotFound(String),
@@ -33,6 +29,14 @@ pub enum RuskelError {
     /// The specified filter did not match any items.
     #[error("Filter '{0}' did not match any items")]
     FilterNotMatched(String),
+
+    /// Failed to parse a Cargo.toml manifest
+    #[error("Failed to parse Cargo.toml manifest: {0}")]
+    ManifestParse(String),
+
+    /// Indicates that the Cargo.toml manifest file could not be found in the current directory or any parent directories.
+    #[error("Failed to find Cargo.toml in the current directory or any parent directories")]
+    ManifestNotFound,
 }
 
 impl From<syntect::Error> for RuskelError {

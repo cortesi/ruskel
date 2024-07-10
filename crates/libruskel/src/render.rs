@@ -168,10 +168,14 @@ impl<'a, 'b> RenderState<'a, 'b> {
     }
 
     fn filter_match(&self, module_path: &str, item: &Item) -> FilterMatch {
-        let item_path = if module_path.is_empty() {
-            render_name(item).to_string()
+        let item_path = if let Some(name) = &item.name {
+            if module_path.is_empty() {
+                name.clone()
+            } else {
+                format!("{}::{}", module_path, name)
+            }
         } else {
-            format!("{}::{}", module_path, render_name(item))
+            module_path.to_string()
         };
 
         let filter_components: Vec<&str> = self.config.filter.split("::").collect();
