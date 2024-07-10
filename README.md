@@ -1,4 +1,4 @@
-# Ruskel
+# ruskel
 
 [![Crates.io](https://img.shields.io/crates/v/libruskel.svg)](https://crates.io/crates/libruskel)
 [![Documentation](https://docs.rs/libruskel/badge.svg)](https://docs.rs/libruskel)
@@ -8,11 +8,12 @@ Ruskel generates skeletonized outlines of Rust crates. It produces a
 single-page representation of a crate's public API with all implementation
 omitted, while still rendering syntactically correct Rust. 
 
-Ruskel has two main aims:
+Ruskel has two main uses:
 
-- Providing quick access to Rust documentation from the command line.
-- Exporting the full public API of a crate as a single file to pass to LLMs and
+- To provide quick access to Rust documentation from the command line.
+- To export the full public API of a crate as a single file to pass to LLMs and
   other tools.
+
 
 ## Features
 
@@ -23,6 +24,7 @@ Ruskel has two main aims:
 - Configurable to include private items and auto-implemented traits
 - Support for custom feature flags
 
+
 ## ruskel command line tool
 
 `ruskel` is the command-line interface for easy use of the Ruskel functionality.
@@ -30,6 +32,10 @@ Ruskel has two main aims:
 ```sh
 cargo install ruskel
 ```
+
+Because Ruskel uses nightly-only features on `cargo doc`, you need to have the
+nightly toolchain installed.
+
 
 ### Usage
 
