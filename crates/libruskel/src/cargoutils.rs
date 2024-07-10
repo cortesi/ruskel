@@ -88,8 +88,21 @@ impl CargoPath {
         Ok(())
     }
 
-    pub fn find_dependency(&self, dependency: &str) -> Result<Option<CargoPath>> {
-        let config = GlobalContext::default().map_err(|e| RuskelError::Cargo(e.to_string()))?;
+    pub fn find_dependency(&self, dependency: &str, offline: bool) -> Result<Option<CargoPath>> {
+        let mut config = GlobalContext::default().map_err(|e| RuskelError::Cargo(e.to_string()))?;
+        config
+            .configure(
+                0,     // verbose
+                true,  // quiet
+                None,  // color
+                false, // frozen
+                false, // locked
+                offline,
+                &None, // target_dir
+                &[],   // unstable_flags
+                &[],   // cli_config
+            )
+            .map_err(|e| RuskelError::Cargo(e.to_string()))?;
         let workspace = Workspace::new(&self.manifest_path(), &config)
             .map_err(|e| RuskelError::Cargo(e.to_string()))?;
 

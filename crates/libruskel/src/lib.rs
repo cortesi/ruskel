@@ -83,10 +83,12 @@ impl Ruskel {
     ///
     /// The method will attempt to locate the appropriate Cargo.toml file and set up
     /// the filter for rendering based on the provided target.
-    pub fn new(target: &str) -> Result<Self> {
+    ///
+    /// If offline is true, Ruskel will not attempt to fetch dependencies from the network.
+    pub fn new(target: &str, offline: bool) -> Result<Self> {
         let (package_path, filter) = CargoPath::from_target(target)?;
         let (package_path, filter) = if !filter.is_empty() {
-            if let Some(cp) = package_path.find_dependency(&filter[0])? {
+            if let Some(cp) = package_path.find_dependency(&filter[0], offline)? {
                 (cp, filter[1..].to_vec())
             } else {
                 (package_path, filter)

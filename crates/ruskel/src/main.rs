@@ -45,6 +45,10 @@ struct Cli {
     /// Disable paging
     #[arg(long, default_value_t = false)]
     no_page: bool,
+
+    /// Enable offline mode, ensuring Cargo will not use the network
+    #[arg(long, default_value_t = false)]
+    offline: bool,
 }
 
 fn main() {
@@ -63,7 +67,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         cli.highlight || io::stdout().is_terminal()
     };
 
-    let rs = Ruskel::new(&cli.target)?
+    let rs = Ruskel::new(&cli.target, cli.offline)?
         .with_no_default_features(cli.no_default_features)
         .with_all_features(cli.all_features)
         .with_features(cli.features)
@@ -95,4 +99,3 @@ fn page_output(content: &str) -> io::Result<()> {
     child.wait()?;
     Ok(())
 }
-

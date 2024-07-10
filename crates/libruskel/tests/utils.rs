@@ -87,7 +87,7 @@ pub fn render(renderer: Renderer, source: &str, expected_output: &str, is_proc_m
     fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml_content).unwrap();
 
     // Parse the crate using Ruskel
-    let ruskel = Ruskel::new(temp_dir.path().to_str().unwrap()).unwrap();
+    let ruskel = Ruskel::new(temp_dir.path().to_str().unwrap(), true).unwrap();
     let crate_data = ruskel.json().unwrap();
 
     // Render the crate data
@@ -155,7 +155,7 @@ pub fn render_err(renderer: Renderer, source: &str, expected_error: &str) {
     fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml_content).unwrap();
 
     // Parse the crate using Ruskel
-    let ruskel = Ruskel::new(temp_dir.path().to_str().unwrap()).unwrap();
+    let ruskel = Ruskel::new(temp_dir.path().to_str().unwrap(), true).unwrap();
     let crate_data = ruskel.json().unwrap();
 
     // Render the crate data
