@@ -250,6 +250,33 @@ impl CargoPath {
     }
 }
 
+#[derive(Debug)]
+pub struct ResolvedTarget {
+    pub package_path: CargoPath,
+    pub filter: String,
+    pub version: Option<String>,
+    pub features: Vec<String>,
+}
+
+pub fn resolve_target(target: &str, offline: bool) -> Result<ResolvedTarget> {
+    let (package_path, filter) = CargoPath::from_target(target)?;
+    let (package_path, filter) = if !filter.is_empty() {
+        if let Some(cp) = package_path.find_dependency(&filter[0], offline)? {
+            (cp, filter[1..].to_vec())
+        } else {
+            (package_path, filter)
+        }
+    } else {
+        (package_path, filter)
+    };
+    Ok(ResolvedTarget {
+        package_path,
+        filter: filter.join("::"),
+        version: None,
+        features: vec![],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

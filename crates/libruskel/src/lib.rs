@@ -167,31 +167,17 @@ impl Ruskel {
 
     /// Generates and returns the parsed JSON representation of the crate's API.
     pub fn make_crate(&self) -> Result<Crate> {
-        let (package_path, _) = self.find_cargo()?;
-        self.crate_from_package(package_path)
-    }
-
-    fn find_cargo(&self) -> Result<(CargoPath, String)> {
-        let (package_path, filter) = CargoPath::from_target(&self.target)?;
-        let (package_path, filter) = if !filter.is_empty() {
-            if let Some(cp) = package_path.find_dependency(&filter[0], self.offline)? {
-                (cp, filter[1..].to_vec())
-            } else {
-                (package_path, filter)
-            }
-        } else {
-            (package_path, filter)
-        };
-        Ok((package_path, filter.join("::")))
+        let rt = resolve_target(&self.target, self.offline)?;
+        self.crate_from_package(rt.package_path)
     }
 
     /// Generates a skeletonized version of the crate as a string of Rust code.
     pub fn render(&self, auto_impls: bool, private_items: bool) -> Result<String> {
-        let (package_path, filter) = self.find_cargo()?;
-        let crate_data = self.crate_from_package(package_path)?;
+        let rt = resolve_target(&self.target, self.offline)?;
+        let crate_data = self.crate_from_package(rt.package_path)?;
 
         let renderer = Renderer::default()
-            .with_filter(&filter)
+            .with_filter(&rt.filter)
             .with_auto_impls(auto_impls)
             .with_private_items(private_items);
 
