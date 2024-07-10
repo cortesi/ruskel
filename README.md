@@ -4,7 +4,15 @@
 [![Documentation](https://docs.rs/libruskel/badge.svg)](https://docs.rs/libruskel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Ruskel is a tool for generating skeletonized outlines of Rust crates. It produces a single-page, syntactically valid Rust code representation of a crate, with all implementations omitted. This provides a clear overview of the crate's structure and public API.
+Ruskel generates skeletonized outlines of Rust crates. It produces a
+single-page representation of a crate's public API with all implementation
+omitted, while still rendering syntactically correct Rust. 
+
+Ruskel has two main aims:
+
+- Providing quick access to Rust documentation from the command line.
+- Exporting the full public API of a crate as a single file to pass to LLMs and
+  other tools.
 
 ## Features
 
@@ -33,7 +41,7 @@ ruskel [TARGET]
 
 Where `TARGET` can be a directory, file path, or a module name. If omitted, it defaults to the current directory.
 
-#### Options
+#### Sample Options
 
 - `--raw`: Output raw JSON instead of rendered Rust code
 - `--auto-impls`: Render auto-implemented traits
@@ -44,7 +52,7 @@ Where `TARGET` can be a directory, file path, or a module name. If omitted, it d
 - `--highlight`: Force enable syntax highlighting
 - `--no-highlight`: Disable syntax highlighting
 
-For more details, run:
+For full details, run:
 
 ```sh
 ruskel --help
@@ -58,16 +66,24 @@ Generate a skeleton for the current project:
 ruskel
 ```
 
-Generate a skeleton for a specific crate from crates.io:
+Generate a skeleton for a specific crate, or a specific path within a crate
+from crates.io:
 
 ```sh
 ruskel serde
+ruskel serde::de::Deserialize 
 ```
 
-Output raw JSON data:
+Generate a skeleton for at the given path:
 
 ```sh
-ruskel --raw tokio
+ruskel /my/path
+```
+
+Generate a skeleton for the module `foo` under the given path:
+
+```sh
+ruskel /my/path::foo
 ```
 
 Include private items and auto-implemented traits:
@@ -75,6 +91,7 @@ Include private items and auto-implemented traits:
 ```sh
 ruskel --private --auto-impls
 ```
+
 
 ## libruskel library
 
