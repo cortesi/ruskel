@@ -133,27 +133,6 @@ impl CargoPath {
         Ok(None)
     }
 
-    fn find_workspace_package(&self, module_name: &str) -> Result<Option<CargoPath>> {
-        let workspace_manifest_path = self.manifest_path();
-        let original_name = module_name.replace('-', "_");
-        let normalized_name = module_name.to_string();
-
-        let config = GlobalContext::default().map_err(|e| RuskelError::Cargo(e.to_string()))?;
-        let workspace = Workspace::new(&workspace_manifest_path, &config)
-            .map_err(|e| RuskelError::Cargo(e.to_string()))?;
-
-        for package in workspace.members() {
-            if package.name().as_str() == normalized_name
-                || package.name().as_str() == original_name
-            {
-                let package_path = package.manifest_path().parent().unwrap().to_path_buf();
-                return Ok(Some(CargoPath::Path(package_path)));
-            }
-        }
-
-        Ok(None)
-    }
-
     pub fn nearest_manifest(start_dir: &Path) -> Option<CargoPath> {
         let mut current_dir = start_dir.to_path_buf();
 
@@ -169,18 +148,49 @@ impl CargoPath {
         None
     }
 
-    /// Search a package or a workspace for a sub-specification. The sub-spec first component is a
-    /// package if we're a workspace.
-    fn search_spec(&self, components: &[String]) -> Result<Option<(CargoPath, Vec<String>)>> {
+    fn find_workspace_package(&self, module_name: &str) -> Result<Option<ResolvedTarget>> {
+        let workspace_manifest_path = self.manifest_path();
+        let original_name = module_name.replace('-', "_");
+        let normalized_name = module_name.to_string();
+
+        let config = GlobalContext::default().map_err(|e| RuskelError::Cargo(e.to_string()))?;
+        let workspace = Workspace::new(&workspace_manifest_path, &config)
+            .map_err(|e| RuskelError::Cargo(e.to_string()))?;
+
+        for package in workspace.members() {
+            if package.name().as_str() == normalized_name
+                || package.name().as_str() == original_name
+            {
+                let feats = package.summary().features();
+                let package_path = package.manifest_path().parent().unwrap().to_path_buf();
+                let version = Some(package.version().to_string());
+                let features = feats.keys().map(|x| x.as_str().to_string()).collect();
+                return Ok(Some(ResolvedTarget {
+                    package_path: CargoPath::Path(package_path),
+                    filter: String::new(),
+                    version,
+                    features,
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    fn search_spec(&self, components: &[String]) -> Result<Option<ResolvedTarget>> {
         if self.is_package() {
-            return Ok(Some((self.copy()?, components[0..].to_vec())));
+            return Ok(Some(ResolvedTarget {
+                package_path: self.copy()?,
+                filter: components.join("::"),
+                version: None,
+                features: vec![],
+            }));
         } else if self.is_workspace() {
             if components.is_empty() {
                 return Ok(None);
             }
-            // Now we check if the next component is one of the workspace packages
-            if let Some(package) = self.find_workspace_package(&components[0])? {
-                return Ok(Some((package, components[1..].to_vec())));
+            if let Some(mut resolved) = self.find_workspace_package(&components[0])? {
+                resolved.filter = components[1..].join("::");
+                return Ok(Some(resolved));
             }
         };
         Ok(None)
@@ -201,25 +211,17 @@ impl CargoPath {
     ///     - "module::path" matches a module and subpath in the package
     ///     - "package" matches a dependency in the workspace
     /// - Otherwise, the first component is retreived from cargo.io
-    pub fn from_target(target: &str) -> Result<(CargoPath, Vec<String>)> {
+    pub fn from_target(target: &str) -> Result<ResolvedTarget> {
         let components: Vec<String> = target.split("::").map(|x| x.into()).collect();
         if components.is_empty() {
             return Err(RuskelError::ModuleNotFound("empty target".to_string()));
         }
 
         if is_path(&components[0]) {
-            // If the path is path-like but doesn't exist, that's an erro
-            if !Path::new(&components[0]).exists() {
-                return Err(RuskelError::ModuleNotFound(format!(
-                    "path {} does not exist",
-                    components[0]
-                )));
-            }
-
             let root = CargoPath::Path(components[0].clone().into());
             let subpath = components[1..].to_vec();
-            if let Some((path, target)) = root.search_spec(&subpath)? {
-                return Ok((path, target));
+            if let Some(resolved) = root.search_spec(&subpath)? {
+                return Ok(resolved);
             } else if components.len() == 1 {
                 return Err(RuskelError::ModuleNotFound(format!(
                     "no submodule specified, but {:?} is not a package",
@@ -234,19 +236,20 @@ impl CargoPath {
             }
         }
 
-        // Ok, the first component is not a path. Next, we check whether we are somewhere inside a
-        // workspace or package.
         if let Some(root) = CargoPath::nearest_manifest(&PathBuf::from(".")) {
-            if let Some((path, target)) = root.search_spec(&components)? {
-                return Ok((path, target));
+            if let Some(resolved) = root.search_spec(&components)? {
+                return Ok(resolved);
             }
         }
 
-        // We have no package or workspace. Our last ditch effort is  to create a dummy module with
-        // a dependency.
         let dummy = CargoPath::TempDir(TempDir::new()?);
         dummy.create_dummy_crate(&components[0], None, None)?;
-        Ok((dummy, components))
+        Ok(ResolvedTarget {
+            package_path: dummy,
+            filter: components.join("::"),
+            version: None,
+            features: vec![],
+        })
     }
 }
 
@@ -259,22 +262,23 @@ pub struct ResolvedTarget {
 }
 
 pub fn resolve_target(target: &str, offline: bool) -> Result<ResolvedTarget> {
-    let (package_path, filter) = CargoPath::from_target(target)?;
-    let (package_path, filter) = if !filter.is_empty() {
-        if let Some(cp) = package_path.find_dependency(&filter[0], offline)? {
-            (cp, filter[1..].to_vec())
-        } else {
-            (package_path, filter)
+    let mut resolved = CargoPath::from_target(target)?;
+    if !resolved.filter.is_empty() {
+        let first_component = resolved.filter.split("::").next().unwrap().to_string();
+        if let Some(cp) = resolved
+            .package_path
+            .find_dependency(&first_component, offline)?
+        {
+            resolved.package_path = cp;
+            resolved.filter = resolved
+                .filter
+                .split_once("::")
+                .map(|x| x.1)
+                .unwrap_or("")
+                .to_string();
         }
-    } else {
-        (package_path, filter)
-    };
-    Ok(ResolvedTarget {
-        package_path,
-        filter: filter.join("::"),
-        version: None,
-        features: vec![],
-    })
+    }
+    Ok(resolved)
 }
 
 #[cfg(test)]
@@ -326,53 +330,142 @@ mod tests {
     }
 
     #[test]
-    fn test_find_workspace_package() {
-        let temp_dir = tempdir().unwrap();
+    fn test_find_workspace_package() -> Result<()> {
+        let temp_dir = tempdir()?;
 
         // Create a workspace Cargo.toml
         let manifest = r#"
             [workspace]
             members = ["member1", "member2"]
         "#;
-        fs::write(temp_dir.path().join("Cargo.toml"), manifest).unwrap();
+        fs::write(temp_dir.path().join("Cargo.toml"), manifest)?;
 
         // Create the "member1" package
         let member1_dir = temp_dir.path().join("member1");
-        fs::create_dir(&member1_dir).unwrap();
-        fs::create_dir(member1_dir.join("src")).unwrap();
+        fs::create_dir(&member1_dir)?;
+        fs::create_dir(member1_dir.join("src"))?;
         let member1_manifest = r#"
             [package]
             name = "member1"
             version = "0.1.0"
+
+            [features]
+            default = []
+            feature1 = []
         "#;
-        fs::write(member1_dir.join("Cargo.toml"), member1_manifest).unwrap();
-        fs::write(member1_dir.join("src").join("lib.rs"), "// member1 lib.rs").unwrap();
+        fs::write(member1_dir.join("Cargo.toml"), member1_manifest)?;
+        fs::write(member1_dir.join("src").join("lib.rs"), "// member1 lib.rs")?;
 
         // Create the "member2" package
         let member2_dir = temp_dir.path().join("member2");
-        fs::create_dir(&member2_dir).unwrap();
-        fs::create_dir(member2_dir.join("src")).unwrap();
+        fs::create_dir(&member2_dir)?;
+        fs::create_dir(member2_dir.join("src"))?;
         let member2_manifest = r#"
             [package]
             name = "member2"
-            version = "0.1.0"
+            version = "0.2.0"
         "#;
-        fs::write(member2_dir.join("Cargo.toml"), member2_manifest).unwrap();
-        fs::write(member2_dir.join("src").join("lib.rs"), "// member2 lib.rs").unwrap();
+        fs::write(member2_dir.join("Cargo.toml"), member2_manifest)?;
+        fs::write(member2_dir.join("src").join("lib.rs"), "// member2 lib.rs")?;
 
         let cargo_path = CargoPath::Path(temp_dir.path().to_path_buf());
 
         // Test finding a package in the workspace
-        if let Some(package_path) = cargo_path.find_workspace_package("member1").unwrap() {
-            assert_eq!(package_path.as_path(), member1_dir);
+        if let Some(resolved) = cargo_path.find_workspace_package("member1")? {
+            assert_eq!(resolved.package_path.as_path(), member1_dir);
+            assert_eq!(resolved.version, Some("0.1.0".to_string()));
+            assert_eq!(
+                resolved.features,
+                vec!["default".to_string(), "feature1".to_string()]
+            );
+            assert_eq!(resolved.filter, "");
+        } else {
+            panic!("Failed to find package in the workspace");
+        }
+
+        // Test finding another package in the workspace
+        if let Some(resolved) = cargo_path.find_workspace_package("member2")? {
+            assert_eq!(resolved.package_path.as_path(), member2_dir);
+            assert_eq!(resolved.version, Some("0.2.0".to_string()));
+            assert!(resolved.features.is_empty());
+            assert_eq!(resolved.filter, "");
         } else {
             panic!("Failed to find package in the workspace");
         }
 
         // Test not finding a package in the workspace
         assert!(cargo_path
-            .find_workspace_package("non-existent-package")
-            .unwrap()
+            .find_workspace_package("non-existent-package")?
             .is_none());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_from_target() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let workspace_path = temp_dir.path().to_path_buf();
+
+        // Create a workspace with two packages
+        fs::create_dir_all(workspace_path.join("pkg1").join("src"))?;
+        fs::create_dir_all(workspace_path.join("pkg2").join("src"))?;
+
+        let workspace_manifest = r#"
+            [workspace]
+            members = ["pkg1", "pkg2"]
+        "#;
+        fs::write(workspace_path.join("Cargo.toml"), workspace_manifest)?;
+
+        let pkg1_manifest = r#"
+            [package]
+            name = "pkg1"
+            version = "0.1.0"
+
+            [features]
+            feature1 = []
+        "#;
+        fs::write(
+            workspace_path.join("pkg1").join("Cargo.toml"),
+            pkg1_manifest,
+        )?;
+        fs::write(
+            workspace_path.join("pkg1").join("src").join("lib.rs"),
+            "// pkg1 lib",
+        )?;
+
+        let pkg2_manifest = r#"
+            [package]
+            name = "pkg2"
+            version = "0.2.0"
+        "#;
+        fs::write(
+            workspace_path.join("pkg2").join("Cargo.toml"),
+            pkg2_manifest,
+        )?;
+        fs::write(
+            workspace_path.join("pkg2").join("src").join("lib.rs"),
+            "// pkg2 lib",
+        )?;
+
+        // Test resolving a package in the workspace
+        let resolved =
+            CargoPath::from_target(&format!("{}::pkg1::module", workspace_path.display()))?;
+        assert_eq!(resolved.package_path.as_path(), workspace_path.join("pkg1"));
+        assert_eq!(resolved.filter, "module");
+        assert_eq!(resolved.version, Some("0.1.0".to_string()));
+        assert_eq!(resolved.features, vec!["feature1".to_string()]);
+
+        // Test resolving another package in the workspace
+        let resolved = CargoPath::from_target(&format!("{}::pkg2", workspace_path.display()))?;
+        assert_eq!(resolved.package_path.as_path(), workspace_path.join("pkg2"));
+        assert_eq!(resolved.filter, "");
+        assert_eq!(resolved.version, Some("0.2.0".to_string()));
+        assert!(resolved.features.is_empty());
+
+        // Test resolving a non-existent package
+        let result = CargoPath::from_target(&format!("{}::non_existent", workspace_path.display()));
+        assert!(result.is_err());
+
+        Ok(())
     }
 }
