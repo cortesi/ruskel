@@ -12,10 +12,6 @@
 //!
 //! You must have the nightly Rust toolchain installed to use (but not to install) RUskel.
 use std::fs;
-use std::path::{Path, PathBuf};
-
-use cargo::{core::Workspace, ops, util::context::GlobalContext};
-use cargo_toml::Manifest;
 use syntect::{
     easy::HighlightLines,
     highlighting::ThemeSet,
@@ -25,12 +21,14 @@ use syntect::{
 
 use rustdoc_types::Crate;
 
+mod cargoutils;
 mod crateutils;
 mod error;
 mod render;
 
 pub use crate::error::{Result, RuskelError};
 pub use crate::render::Renderer;
+use cargoutils::*;
 
 /// Ruskel generates a skeletonized version of a Rust crate in a single page.
 /// It produces syntactically valid Rust code with all implementations omitted.
@@ -42,7 +40,7 @@ pub use crate::render::Renderer;
 #[derive(Debug)]
 pub struct Ruskel {
     /// Path to the Cargo.toml file for the target crate.
-    manifest_path: PathBuf,
+    package_path: CargoPath,
 
     /// Whether to build without default features.
     no_default_features: bool,
@@ -86,121 +84,25 @@ impl Ruskel {
     /// The method will attempt to locate the appropriate Cargo.toml file and set up
     /// the filter for rendering based on the provided target.
     pub fn new(target: &str) -> Result<Self> {
-        let components: Vec<&str> = target.split("::").collect();
-        let (manifest_path, filter) = if Path::new(components[0]).exists() {
-            Self::resolve_existing_path(&components)?
+        let (package_path, filter) = CargoPath::from_target(target)?;
+        let (package_path, filter) = if !filter.is_empty() {
+            if let Some(cp) = package_path.find_dependency(&filter[0])? {
+                (cp, filter[1..].to_vec())
+            } else {
+                (package_path, filter)
+            }
         } else {
-            Self::resolve_module_name(&components)?
+            (package_path, filter)
         };
+
         Ok(Ruskel {
-            manifest_path,
+            package_path,
             no_default_features: false,
             all_features: false,
             features: Vec::new(),
             highlight: false,
-            filter,
+            filter: filter.join("::"),
         })
-    }
-
-    /// Resolves the manifest path and filter for an existing file system path.
-    fn resolve_existing_path(components: &[&str]) -> Result<(PathBuf, String)> {
-        let canonical_path = Path::new(components[0]).canonicalize()?;
-        let root_manifest_path = Self::find_manifest(&canonical_path)?;
-
-        if Self::is_workspace_manifest(&root_manifest_path)? {
-            Self::resolve_workspace_package(&canonical_path, components)
-        } else {
-            Self::resolve_single_package(&root_manifest_path, components)
-        }
-    }
-
-    /// Resolves the manifest path and filter for a workspace package.
-    fn resolve_workspace_package(
-        canonical_path: &Path,
-        components: &[&str],
-    ) -> Result<(PathBuf, String)> {
-        if let Some(package_name) = components.get(1) {
-            let package_path = Self::find_module_in_workspace(canonical_path, package_name)?;
-            let package_manifest_path = package_path.join("Cargo.toml");
-            let module_name = Self::get_module_name(&package_manifest_path)?;
-            let filter = Self::construct_filter(module_name, components.get(2..).unwrap_or(&[]));
-            Ok((package_manifest_path, filter))
-        } else {
-            Ok((canonical_path.join("Cargo.toml"), String::new()))
-        }
-    }
-
-    /// Resolves the manifest path and filter for a single package (non-workspace).
-    fn resolve_single_package(
-        manifest_path: &Path,
-        components: &[&str],
-    ) -> Result<(PathBuf, String)> {
-        let module_name = Self::get_module_name(manifest_path)?;
-        let filter = Self::construct_filter(module_name, &components[1..]);
-        Ok((manifest_path.to_path_buf(), filter))
-    }
-
-    /// Resolves the manifest path and filter for a module name (not a file system path).
-    fn resolve_module_name(components: &[&str]) -> Result<(PathBuf, String)> {
-        if components.len() > 1 {
-            let normalized_first = components[0].replace('-', "_");
-            let workspace_root = Self::find_module(&normalized_first)?;
-            let manifest_path = workspace_root.join("Cargo.toml");
-            let filter = Self::construct_filter(normalized_first, &components[1..]);
-            Ok((manifest_path, filter))
-        } else {
-            let normalized_target = components[0].replace('-', "_");
-            let workspace_root = Self::find_module(&normalized_target)?;
-            let manifest_path = workspace_root.join("Cargo.toml");
-            Ok((manifest_path, String::new()))
-        }
-    }
-
-    /// Constructs a filter string from a module name and additional components.
-    fn construct_filter<S: AsRef<str>>(first: String, rest: &[S]) -> String {
-        std::iter::once(first)
-            .chain(rest.iter().map(|s| s.as_ref().to_string()))
-            .collect::<Vec<String>>()
-            .join("::")
-    }
-
-    fn find_module_in_workspace(workspace_path: &Path, module_name: &str) -> Result<PathBuf> {
-        let config = GlobalContext::default().map_err(|e| RuskelError::Cargo(e.to_string()))?;
-        let workspace = Workspace::new(&workspace_path.join("Cargo.toml"), &config)
-            .map_err(|e| RuskelError::Cargo(e.to_string()))?;
-
-        let normalized_name = module_name.replace('-', "_");
-        let original_name = module_name.replace('_', "-");
-
-        for package in workspace.members() {
-            if package.name().as_str() == normalized_name
-                || package.name().as_str() == original_name
-            {
-                return Ok(package.manifest_path().parent().unwrap().to_path_buf());
-            }
-        }
-
-        Err(RuskelError::ModuleNotFound(module_name.to_string()))
-    }
-
-    // Helper function to check if a manifest is a workspace without a package
-    fn is_workspace_manifest(manifest_path: &Path) -> Result<bool> {
-        let manifest = Manifest::from_path(manifest_path)
-            .map_err(|e| RuskelError::ManifestParse(e.to_string()))?;
-
-        Ok(manifest.workspace.is_some() && manifest.package.is_none())
-    }
-
-    fn get_module_name(manifest_path: &Path) -> Result<String> {
-        let manifest = Manifest::from_path(manifest_path)
-            .map_err(|e| RuskelError::ManifestParse(e.to_string()))?;
-
-        manifest
-            .package
-            .ok_or_else(|| {
-                RuskelError::ManifestParse("No package section found in Cargo.toml".to_string())
-            })
-            .map(|package| package.name)
     }
 
     /// Enables or disables syntax highlighting in the output.
@@ -254,7 +156,7 @@ impl Ruskel {
     pub fn json(&self) -> Result<Crate> {
         let json_path = rustdoc_json::Builder::default()
             .toolchain("nightly")
-            .manifest_path(&self.manifest_path)
+            .manifest_path(self.package_path.manifest_path())
             .document_private_items(true)
             .no_default_features(self.no_default_features)
             .all_features(self.all_features)
@@ -286,154 +188,5 @@ impl Ruskel {
     /// Returns a pretty-printed version of the crate's JSON representation.
     pub fn raw_json(&self) -> Result<String> {
         Ok(serde_json::to_string_pretty(&self.json()?)?)
-    }
-
-    fn find_module(module_name: &str) -> Result<PathBuf> {
-        let config = GlobalContext::default().map_err(|e| RuskelError::Cargo(e.to_string()))?;
-        let workspace = Workspace::new(&Path::new("Cargo.toml").canonicalize()?, &config)
-            .map_err(|e| RuskelError::Cargo(e.to_string()))?;
-
-        // Try to find the module with original name and normalized name
-        let original_name = module_name.replace('_', "-");
-        for package in workspace.members() {
-            if package.name().as_str() == module_name || package.name().as_str() == original_name {
-                return Ok(package.manifest_path().parent().unwrap().to_path_buf());
-            }
-        }
-
-        // Fetch all packages
-        let options = ops::FetchOptions {
-            gctx: &config,
-            targets: vec![],
-        };
-        let (_, ps) =
-            ops::fetch(&workspace, &options).map_err(|e| RuskelError::Cargo(e.to_string()))?;
-
-        for i in ps.packages() {
-            if i.name().as_str() == module_name || i.name().as_str() == original_name {
-                return Ok(i.manifest_path().parent().unwrap().to_path_buf());
-            }
-        }
-
-        Err(RuskelError::ModuleNotFound(module_name.to_string()))
-    }
-
-    fn find_manifest(target_path: &Path) -> Result<PathBuf> {
-        let mut path = if target_path.is_file() {
-            target_path.parent().unwrap_or(Path::new("/")).to_path_buf()
-        } else {
-            target_path.to_path_buf()
-        };
-
-        loop {
-            let manifest_path = path.join("Cargo.toml");
-            if manifest_path.exists() {
-                return Ok(manifest_path);
-            }
-            if !path.pop() {
-                break;
-            }
-        }
-        Err(RuskelError::ManifestNotFound)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs::{self, File};
-    use tempfile::{tempdir, TempDir};
-
-    macro_rules! assert_path_eq {
-        ($left:expr, $right:expr) => {
-            assert_eq!(
-                $left.canonicalize().unwrap(),
-                $right.canonicalize().unwrap()
-            )
-        };
-    }
-
-    fn create_cargo_ws(dir: &Path) -> std::io::Result<()> {
-        let content = "[workspace]\nmembers = [\"member1\", \"member2\"]";
-        fs::write(dir.join("Cargo.toml"), content)
-    }
-
-    fn create_cargo_child(dir: &Path, name: &str) -> std::io::Result<()> {
-        let content = format!("[package]\nname = \"{}\"\nversion = \"0.1.0\"", name);
-        fs::write(dir.join("Cargo.toml"), content)
-    }
-
-    fn setup_workspace() -> Result<TempDir> {
-        let temp_dir = tempdir()?;
-        create_cargo_ws(temp_dir.path())?;
-
-        let member1_dir = temp_dir.path().join("member1");
-        fs::create_dir_all(member1_dir.join("src"))?;
-        create_cargo_child(&member1_dir, "test-package1")?;
-        File::create(member1_dir.join("src").join("lib.rs"))?;
-
-        let member2_dir = temp_dir.path().join("member2");
-        fs::create_dir_all(member2_dir.join("src"))?;
-        create_cargo_child(&member2_dir, "test-package2")?;
-        File::create(member2_dir.join("src").join("main.rs"))?;
-
-        Ok(temp_dir)
-    }
-
-    #[test]
-    fn test_parse_rust_file_in_workspace() -> Result<()> {
-        let temp_dir = setup_workspace()?;
-        let lib_rs_path = temp_dir.path().join("member1").join("src").join("lib.rs");
-
-        // Ensure the file exists
-        assert!(lib_rs_path.exists(), "lib.rs file does not exist");
-
-        let target = Ruskel::new(lib_rs_path.to_str().unwrap())?;
-        assert_path_eq!(
-            target.manifest_path,
-            temp_dir.path().join("member1").join("Cargo.toml")
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_nonexistent_path() {
-        let result = Ruskel::new("/path/does/not/exist");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_standalone_crate() -> Result<()> {
-        let temp_dir = tempdir()?;
-        create_cargo_child(temp_dir.path(), "test1")?;
-        let src_dir = temp_dir.path().join("src");
-        fs::create_dir(&src_dir)?;
-        File::create(src_dir.join("lib.rs"))?;
-
-        let target = Ruskel::new(temp_dir.path().to_str().unwrap())?;
-        assert_path_eq!(target.manifest_path, temp_dir.path().join("Cargo.toml"));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_workspace_root() -> Result<()> {
-        let temp_dir = setup_workspace()?;
-
-        let target = Ruskel::new(temp_dir.path().to_str().unwrap())?;
-        assert_path_eq!(target.manifest_path, temp_dir.path().join("Cargo.toml"));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_parse_workspace_member() -> Result<()> {
-        let temp_dir = setup_workspace()?;
-        let member1_dir = temp_dir.path().join("member1");
-
-        let target = Ruskel::new(member1_dir.to_str().unwrap())?;
-        assert_path_eq!(target.manifest_path, member1_dir.join("Cargo.toml"));
-
-        Ok(())
     }
 }
