@@ -49,22 +49,21 @@ Where `TARGET` can be a directory, file path, or a module name. If omitted, it d
 
 #### Sample Options
 
-- `--no-page`: Disable paging
-- `--auto-impls`: Render auto-implemented traits
-- `--private`: Render private items
-- `--no-default-features`: Disable default features
 - `--all-features`: Enable all features
+- `--auto-impls`: Render auto-implemented traits
 - `--features <FEATURES>`: Specify features to enable (comma-separated)
 - `--highlight`: Force enable syntax highlighting
+- `--no-default-features`: Disable default features
 - `--no-highlight`: Disable syntax highlighting
+- `--no-page`: Disable paging
+- `--offline`: Don't fetch from crates.io
+- `--private`: Render private items
 
-For full details, run:
+For full details, see:
 
 ```sh
 ruskel --help
 ```
-
-### Examples
 
 Ruskel has a flexible target specification that tries to do the right thing in a wide set of circumstances.
 
