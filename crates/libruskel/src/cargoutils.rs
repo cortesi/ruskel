@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::{absolute, Path, PathBuf};
 
 use cargo::{core::Workspace, ops, util::context::GlobalContext};
+use semver::Version;
 use tempfile::TempDir;
 
 use crate::error::{Result, RuskelError};
@@ -65,7 +66,7 @@ impl CargoPath {
     pub fn create_dummy_crate(
         &self,
         dependency: &str,
-        version: Option<&str>,
+        version: Option<String>,
         features: Option<&[&str]>,
     ) -> Result<()> {
         if self.has_manifest() {
@@ -189,7 +190,7 @@ impl CargoPath {
                 return Ok(None);
             }
             if let Some(mut resolved) = self.find_workspace_package(&components[0])? {
-                resolved.filter = components[1..].join("::");
+                resolved.filter = components.join("::");
                 return Ok(Some(resolved));
             }
         };
@@ -262,7 +263,28 @@ pub struct ResolvedTarget {
 }
 
 pub fn resolve_target(target: &str, offline: bool) -> Result<ResolvedTarget> {
-    let mut resolved = CargoPath::from_target(target)?;
+    let (target_str, version) = parse_target(target)?;
+
+    let mut resolved = if version.is_some() {
+        // If a version is specified, always create a dummy package
+        let dummy = CargoPath::TempDir(TempDir::new()?);
+        let components: Vec<String> = target_str.split("::").map(|x| x.into()).collect();
+        dummy.create_dummy_crate(
+            &components[0],
+            version.as_ref().map(|v| v.to_string()),
+            None,
+        )?;
+        let filter = components.join("::");
+        ResolvedTarget {
+            package_path: dummy,
+            filter,
+            version: version.map(|v| v.to_string()),
+            features: vec![],
+        }
+    } else {
+        CargoPath::from_target(&target_str)?
+    };
+
     if !resolved.filter.is_empty() {
         let first_component = resolved.filter.split("::").next().unwrap().to_string();
         if let Some(cp) = resolved
@@ -270,15 +292,30 @@ pub fn resolve_target(target: &str, offline: bool) -> Result<ResolvedTarget> {
             .find_dependency(&first_component, offline)?
         {
             resolved.package_path = cp;
-            resolved.filter = resolved
-                .filter
-                .split_once("::")
-                .map(|x| x.1)
-                .unwrap_or("")
-                .to_string();
         }
     }
     Ok(resolved)
+}
+
+pub fn parse_target(target: &str) -> Result<(String, Option<Version>)> {
+    let parts: Vec<&str> = target.rsplitn(2, '@').collect();
+
+    match parts.len() {
+        1 => Ok((target.to_string(), None)),
+        2 => {
+            if parts[1].contains('@') {
+                return Err(RuskelError::InvalidTarget(
+                    "Target contains multiple '@' characters".to_string(),
+                ));
+            }
+            let version = Version::parse(parts[0].trim())
+                .map_err(|e| RuskelError::InvalidVersion(e.to_string()))?;
+            Ok((parts[1].to_string(), Some(version)))
+        }
+        _ => Err(RuskelError::InvalidTarget(
+            "Invalid target format".to_string(),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -286,6 +323,50 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_parse_target() -> Result<()> {
+        let test_cases = vec![
+            ("my/target::here", Ok(("my/target::here".to_string(), None))),
+            (
+                "my/target::here@1.2.3",
+                Ok(("my/target::here".to_string(), Some(Version::new(1, 2, 3)))),
+            ),
+            (
+                "my/target::here@1.2.3-alpha.1+build.456",
+                Ok((
+                    "my/target::here".to_string(),
+                    Some(Version::parse("1.2.3-alpha.1+build.456").unwrap()),
+                )),
+            ),
+            ("my/target::here@invalid", Err("Invalid version:")),
+            ("my/target::here@1.0.0@2.0.0", Err("Invalid target:")),
+            ("my/target::here@", Err("Invalid version:")),
+        ];
+
+        for (input, expected) in test_cases {
+            let result = parse_target(input);
+            match (result, expected) {
+                (Ok((target, version)), Ok((exp_target, exp_version))) => {
+                    assert_eq!(target, exp_target);
+                    assert_eq!(version, exp_version);
+                }
+                (Err(e), Err(exp_prefix)) => {
+                    let error_string = format!("{}", e);
+                    assert!(
+                        error_string.starts_with(exp_prefix),
+                        "Error '{}' does not start with expected prefix '{}'",
+                        error_string,
+                        exp_prefix
+                    );
+                }
+                (Ok(_), Err(_)) => panic!("Expected error, but got Ok for input: {}", input),
+                (Err(e), Ok(_)) => panic!("Expected Ok, but got error: {} for input: {}", e, input),
+            }
+        }
+
+        Ok(())
+    }
 
     #[test]
     fn test_create_dummy_crate() -> Result<()> {
@@ -451,14 +532,14 @@ mod tests {
         let resolved =
             CargoPath::from_target(&format!("{}::pkg1::module", workspace_path.display()))?;
         assert_eq!(resolved.package_path.as_path(), workspace_path.join("pkg1"));
-        assert_eq!(resolved.filter, "module");
+        assert_eq!(resolved.filter, "pkg1::module");
         assert_eq!(resolved.version, Some("0.1.0".to_string()));
         assert_eq!(resolved.features, vec!["feature1".to_string()]);
 
         // Test resolving another package in the workspace
         let resolved = CargoPath::from_target(&format!("{}::pkg2", workspace_path.display()))?;
         assert_eq!(resolved.package_path.as_path(), workspace_path.join("pkg2"));
-        assert_eq!(resolved.filter, "");
+        assert_eq!(resolved.filter, "pkg2");
         assert_eq!(resolved.version, Some("0.2.0".to_string()));
         assert!(resolved.features.is_empty());
 

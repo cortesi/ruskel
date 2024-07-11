@@ -1958,6 +1958,7 @@ dependencies = [
  "rust-format",
  "rustdoc-json",
  "rustdoc-types",
+ "semver",
  "serde_json",
  "syntect",
  "tempfile",

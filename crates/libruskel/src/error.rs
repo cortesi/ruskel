@@ -37,6 +37,14 @@ pub enum RuskelError {
     /// Indicates that the Cargo.toml manifest file could not be found in the current directory or any parent directories.
     #[error("Failed to find Cargo.toml in the current directory or any parent directories")]
     ManifestNotFound,
+
+    /// Indicates an invalid version string was provided.
+    #[error("Invalid version: {0}")]
+    InvalidVersion(String),
+
+    /// Indicates an invalid target specification was provided.
+    #[error("Invalid target: {0}")]
+    InvalidTarget(String),
 }
 
 impl From<syntect::Error> for RuskelError {
