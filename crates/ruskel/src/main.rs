@@ -1,6 +1,6 @@
 use clap::Parser;
 use libruskel::Ruskel;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, ErrorKind, IsTerminal, Write};
 use std::process::{Command, Stdio};
 
 #[derive(Parser)]
@@ -81,7 +81,10 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if io::stdout().is_terminal() && !cli.no_page {
-        page_output(&output)?;
+        match page_output(&output) {
+            Err(err) if err.kind() == ErrorKind::BrokenPipe => (),
+            r => r?,
+        };
     } else {
         println!("{}", output);
     }
