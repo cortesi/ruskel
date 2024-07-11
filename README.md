@@ -4,9 +4,9 @@
 [![Documentation](https://docs.rs/libruskel/badge.svg)](https://docs.rs/libruskel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Ruskel generates skeletonized outlines of Rust crates. It produces a
+Ruskel generates skeletonized outlines of Rust crates. It renders a
 single-page representation of a crate's public API with all implementation
-omitted, while still rendering syntactically correct Rust. 
+omitted, while still producing syntactically correct Rust. 
 
 Ruskel has two main uses:
 
@@ -77,7 +77,7 @@ ruskel mypackage
 # A dependency of the current project, else we fetch from crates.io 
 ruskel serde
 
-# A sub-pagh within a crate
+# A sub-path within a crate
 ruskel serde::de::Deserialize 
 
 # Path to a crate
@@ -106,14 +106,5 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
 
 
