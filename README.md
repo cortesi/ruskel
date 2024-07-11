@@ -66,48 +66,34 @@ ruskel --help
 
 ### Examples
 
-Generate a skeleton for the current project:
+Ruskel has a flexible target specification that tries to do the right thing in a wide set of circumstances.
 
 ```sh
+# Current project
 ruskel
-```
 
-Generate a skeleton for a specific crate, or a specific path within a crate
-from crates.io:
+# If we're in a workspace and we have a crate mypacakage
+ruskel mypackage
 
-```sh
+# A dependency of the current project, else we fetch from crates.io 
 ruskel serde
+
+# A sub-pagh within a crate
 ruskel serde::de::Deserialize 
-```
 
-Generate a skeleton for at the given path:
-
-```sh
+# Path to a crate
 ruskel /my/path
-```
 
-Generate a skeleton for the module `foo` under the given path:
-
-```sh
+# A module within that crate
 ruskel /my/path::foo
+
+# A crate from crates.io with a specific version
+ruskel serde@1.0.0
 ```
-
-Include private items and auto-implemented traits:
-
-```sh
-ruskel --private --auto-impls
-```
-
 
 ## libruskel library
 
 `libruskel` is a library that can be integrated into other Rust projects to provide Ruskel functionality.
-
-```sh
-cargo add libruskel
-```
-
-### Usage
 
 Here's a basic example of using `libruskel` in your Rust code:
 
@@ -115,14 +101,12 @@ Here's a basic example of using `libruskel` in your Rust code:
 use libruskel::Ruskel;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let rs = Ruskel::new(".")?;
+    let rs = Ruskel::new("/path/to/target")?;
     let rendered = rs.render(false, false)?;
     println!("{}", rendered);
     Ok(())
 }
 ```
-
-Check the [API documentation](https://docs.rs/libruskel) for more details on using the library.
 
 ## Contributing
 

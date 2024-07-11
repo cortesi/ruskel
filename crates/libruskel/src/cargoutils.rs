@@ -162,15 +162,10 @@ impl CargoPath {
             if package.name().as_str() == normalized_name
                 || package.name().as_str() == original_name
             {
-                let feats = package.summary().features();
                 let package_path = package.manifest_path().parent().unwrap().to_path_buf();
-                let version = Some(package.version().to_string());
-                let features = feats.keys().map(|x| x.as_str().to_string()).collect();
                 return Ok(Some(ResolvedTarget {
                     package_path: CargoPath::Path(package_path),
                     filter: String::new(),
-                    version,
-                    features,
                 }));
             }
         }
@@ -182,8 +177,6 @@ impl CargoPath {
             return Ok(Some(ResolvedTarget {
                 package_path: self.copy()?,
                 filter: components.join("::"),
-                version: None,
-                features: vec![],
             }));
         } else if self.is_workspace() {
             if components.is_empty() {
@@ -248,8 +241,6 @@ impl CargoPath {
         Ok(ResolvedTarget {
             package_path: dummy,
             filter: components.join("::"),
-            version: None,
-            features: vec![],
         })
     }
 }
@@ -258,8 +249,6 @@ impl CargoPath {
 pub struct ResolvedTarget {
     pub package_path: CargoPath,
     pub filter: String,
-    pub version: Option<String>,
-    pub features: Vec<String>,
 }
 
 pub fn resolve_target(target: &str, offline: bool) -> Result<ResolvedTarget> {
@@ -278,8 +267,6 @@ pub fn resolve_target(target: &str, offline: bool) -> Result<ResolvedTarget> {
         ResolvedTarget {
             package_path: dummy,
             filter,
-            version: version.map(|v| v.to_string()),
-            features: vec![],
         }
     } else {
         CargoPath::from_target(&target_str)?
@@ -454,11 +441,6 @@ mod tests {
         // Test finding a package in the workspace
         if let Some(resolved) = cargo_path.find_workspace_package("member1")? {
             assert_eq!(resolved.package_path.as_path(), member1_dir);
-            assert_eq!(resolved.version, Some("0.1.0".to_string()));
-            assert_eq!(
-                resolved.features,
-                vec!["default".to_string(), "feature1".to_string()]
-            );
             assert_eq!(resolved.filter, "");
         } else {
             panic!("Failed to find package in the workspace");
@@ -467,8 +449,6 @@ mod tests {
         // Test finding another package in the workspace
         if let Some(resolved) = cargo_path.find_workspace_package("member2")? {
             assert_eq!(resolved.package_path.as_path(), member2_dir);
-            assert_eq!(resolved.version, Some("0.2.0".to_string()));
-            assert!(resolved.features.is_empty());
             assert_eq!(resolved.filter, "");
         } else {
             panic!("Failed to find package in the workspace");
@@ -533,15 +513,11 @@ mod tests {
             CargoPath::from_target(&format!("{}::pkg1::module", workspace_path.display()))?;
         assert_eq!(resolved.package_path.as_path(), workspace_path.join("pkg1"));
         assert_eq!(resolved.filter, "pkg1::module");
-        assert_eq!(resolved.version, Some("0.1.0".to_string()));
-        assert_eq!(resolved.features, vec!["feature1".to_string()]);
 
         // Test resolving another package in the workspace
         let resolved = CargoPath::from_target(&format!("{}::pkg2", workspace_path.display()))?;
         assert_eq!(resolved.package_path.as_path(), workspace_path.join("pkg2"));
         assert_eq!(resolved.filter, "pkg2");
-        assert_eq!(resolved.version, Some("0.2.0".to_string()));
-        assert!(resolved.features.is_empty());
 
         // Test resolving a non-existent package
         let result = CargoPath::from_target(&format!("{}::non_existent", workspace_path.display()));
