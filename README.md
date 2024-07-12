@@ -20,9 +20,8 @@ Ruskel has two main uses:
 - Generate a skeletonized view of any Rust crate
 - Support for local crates and remote crates from crates.io
 - Syntax highlighting for terminal output 
-- Option to output raw JSON data for further processing
-- Configurable to include private items and auto-implemented traits
-- Support for custom feature flags
+- Optionally include private items and auto-implemented traits
+- Support for custom feature flags and version specification
 
 
 ## ruskel command line tool
@@ -34,7 +33,7 @@ cargo install ruskel
 ```
 
 Because Ruskel uses nightly-only features on `cargo doc`, you need to have the
-nightly toolchain installed.
+nightly toolchain installed to run it, but not to install it.
 
 
 ### Usage
