@@ -129,7 +129,7 @@ pub fn render_generic_bound(bound: &GenericBound) -> String {
     match bound {
         GenericBound::Use(ty) => {
             // https://github.com/rust-lang/rust/issues/123432
-            unsupported!("unstable feature precise capturing not supported yet")
+            unimplemented!("unstable feature precise capturing not supported yet")
         }
         GenericBound::TraitBound {
             trait_,
