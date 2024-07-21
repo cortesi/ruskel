@@ -72,9 +72,6 @@ pub fn render(renderer: Renderer, source: &str, expected_output: &str, is_proc_m
 
                 [lib]
                 proc-macro = true
-
-                [dependencies]
-                proc-macro2 = "1.0"
             "#
     } else {
         r#"
