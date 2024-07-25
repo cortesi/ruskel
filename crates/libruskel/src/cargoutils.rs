@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::{absolute, Path, PathBuf};
 
 use cargo::{core::Workspace, ops, util::context::GlobalContext};
+use rustdoc_types::Crate;
 use semver::Version;
 use tempfile::TempDir;
 
@@ -16,8 +17,129 @@ fn join_components(components: &[String]) -> String {
     components.join("::")
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Entrypoint {
+    /// A path to a Rust file or directory.
+    Path(PathBuf),
+    /// A module or package name, optionally with a version.
+    Name {
+        name: String,
+        version: Option<Version>,
+    },
+}
+
+/// A parsed target specification for the ruskel tool.
+///
+/// A target specification consists of an entrypoint and an optional path, separated by '::'.
+///
+/// # Format
+///
+/// The general format is:
+///
+/// ```text
+/// entrypoint[::path]
+/// ```
+///
+/// Where:
+/// - `entrypoint` can be a file path, directory path, module name, or package name (optionally with a version).
+/// - `path` is an optional fully qualified path within the entrypoint, with components separated by '::'.
+///
+/// # Entrypoint Types
+///
+/// - **File Path**: A path to a Rust file
+/// - **Directory Path**: A path to a directory containing a Cargo.toml file
+/// - **Module**: A module name, typically starting with an uppercase letter
+/// - **Package**: A package name, optionally followed by '@' and a version number
+///
+/// # Examples of valid target specifications:
+///
+/// - File paths:
+///   - `src/lib.rs`
+///   - `src/main.rs::my_module::MyStruct`
+///
+/// - Directory paths:
+///   - `/path/to/my_project`
+///   - `/path/to/my_project::some_module::function`
+///
+/// - Modules:
+///   - `MyModule`
+///   - `MyModule::SubModule::function`
+///
+/// - Packages:
+///   - `serde`
+///   - `serde::Deserialize`
+///   - `serde@1.0.104`
+///   - `serde@1.0.104::Serialize`
+///
+/// - Other examples:
+///   - `tokio::sync::Mutex`
+///   - `std::collections::HashMap`
+///   - `my_crate::utils::helper_function`
+#[derive(Debug, Clone, PartialEq)]
+pub struct Target {
+    pub entrypoint: Entrypoint,
+    pub path: Vec<String>,
+}
+
+impl Target {
+    pub fn parse(spec: &str) -> Result<Self> {
+        if spec.is_empty() {
+            return Ok(Target {
+                entrypoint: Entrypoint::Name {
+                    name: String::new(),
+                    version: None,
+                },
+                path: vec![],
+            });
+        }
+
+        let parts: Vec<&str> = spec.split("::").collect();
+
+        if parts[0].is_empty() {
+            return Err(RuskelError::InvalidTarget(
+                "Invalid name specification: empty name".to_string(),
+            ));
+        }
+
+        let (entrypoint, path) = parts.split_first().unwrap();
+
+        let entrypoint = if entrypoint.contains('/') || entrypoint.contains('\\') {
+            // It's a file or directory path
+            Entrypoint::Path(PathBuf::from(entrypoint))
+        } else if entrypoint.contains('@') {
+            // It's a name with version
+            let name_parts: Vec<&str> = entrypoint.split('@').collect();
+            if name_parts.len() != 2 {
+                return Err(RuskelError::InvalidTarget(format!(
+                    "Invalid name specification: {}",
+                    entrypoint
+                )));
+            }
+            let name = name_parts[0].to_string();
+            let version = Version::parse(name_parts[1])
+                .map_err(|e| RuskelError::InvalidTarget(format!("Invalid version: {}", e)))?;
+            Entrypoint::Name {
+                name,
+                version: Some(version),
+            }
+        } else {
+            // It's a name without version
+            Entrypoint::Name {
+                name: entrypoint.to_string(),
+                version: None,
+            }
+        };
+
+        Ok(Target {
+            entrypoint,
+            path: path.iter().map(|&s| s.to_string()).collect(),
+        })
+    }
+}
+
+/// A path to a crate. This can be a directory on the filesystem or a temporary directory.
 #[derive(Debug)]
-pub enum CargoPath {
+enum CargoPath {
     Path(PathBuf),
     TempDir(TempDir),
 }
@@ -37,6 +159,26 @@ impl CargoPath {
                 "Cannot copy a TempDir CargoPath".to_string(),
             )),
         }
+    }
+
+    pub fn read_crate(
+        &self,
+        no_default_features: bool,
+        all_features: bool,
+        features: Vec<String>,
+    ) -> Result<Crate> {
+        let json_path = rustdoc_json::Builder::default()
+            .toolchain("nightly")
+            .manifest_path(self.manifest_path())
+            .document_private_items(true)
+            .no_default_features(no_default_features)
+            .all_features(all_features)
+            .features(&features)
+            .build()
+            .map_err(|e| RuskelError::Generate(e.to_string()))?;
+        let json_content = fs::read_to_string(&json_path)?;
+        let crate_data: Crate = serde_json::from_str(&json_content)?;
+        Ok(crate_data)
     }
 
     pub fn manifest_path(&self) -> PathBuf {
@@ -61,39 +203,6 @@ impl CargoPath {
         manifest
             .as_ref()
             .map_or(false, |m| m.workspace.is_some() && m.package.is_none())
-    }
-
-    pub fn create_dummy_crate(
-        &self,
-        dependency: &str,
-        version: Option<String>,
-        features: Option<&[&str]>,
-    ) -> Result<()> {
-        if self.has_manifest() {
-            return Err(RuskelError::Cargo("manifest already exists".to_string()));
-        }
-        let src_dir = self.as_path().join("src");
-        fs::create_dir_all(&src_dir)?;
-
-        let lib_rs = src_dir.join("lib.rs");
-        let mut file = fs::File::create(lib_rs)?;
-        writeln!(file, "// Dummy crate")?;
-
-        let manifest_path = self.manifest_path();
-        let version_str = version.map_or("*".to_string(), |v| v.to_string());
-        let features_str = features.map_or(String::new(), |f| format!(", features = {:?}", f));
-        let manifest = format!(
-            r#"[package]
-            name = "dummy-crate"
-            version = "0.1.0"
-
-            [dependencies]
-            {} = {{ version = "{}"{}}}
-            "#,
-            dependency, version_str, features_str
-        );
-        fs::write(manifest_path, manifest)?;
-        Ok(())
     }
 
     pub fn find_dependency(&self, dependency: &str, offline: bool) -> Result<Option<CargoPath>> {
@@ -130,7 +239,6 @@ impl CargoPath {
                 )));
             }
         }
-
         Ok(None)
     }
 
@@ -149,6 +257,7 @@ impl CargoPath {
         None
     }
 
+    /// Find a package in the current workspace by name.
     fn find_workspace_package(&self, module_name: &str) -> Result<Option<ResolvedTarget>> {
         let workspace_manifest_path = self.manifest_path();
         let original_name = module_name.replace('-', "_");
@@ -163,10 +272,10 @@ impl CargoPath {
                 || package.name().as_str() == original_name
             {
                 let package_path = package.manifest_path().parent().unwrap().to_path_buf();
-                return Ok(Some(ResolvedTarget {
-                    package_path: CargoPath::Path(package_path),
-                    filter: String::new(),
-                }));
+                return Ok(Some(ResolvedTarget::new(
+                    CargoPath::Path(package_path),
+                    &[],
+                )));
             }
         }
         Ok(None)
@@ -174,10 +283,7 @@ impl CargoPath {
 
     fn search_spec(&self, components: &[String]) -> Result<Option<ResolvedTarget>> {
         if self.is_package() {
-            return Ok(Some(ResolvedTarget {
-                package_path: self.copy()?,
-                filter: components.join("::"),
-            }));
+            return Ok(Some(ResolvedTarget::new(self.copy()?, components)));
         } else if self.is_workspace() {
             if components.is_empty() {
                 return Ok(None);
@@ -205,7 +311,7 @@ impl CargoPath {
     ///     - "module::path" matches a module and subpath in the package
     ///     - "package" matches a dependency in the workspace
     /// - Otherwise, the first component is retreived from cargo.io
-    pub fn from_target(target: &str) -> Result<ResolvedTarget> {
+    pub fn from_target_str(target: &str) -> Result<ResolvedTarget> {
         let components: Vec<String> = target.split("::").map(|x| x.into()).collect();
         if components.is_empty() {
             return Err(RuskelError::ModuleNotFound("empty target".to_string()));
@@ -236,29 +342,92 @@ impl CargoPath {
             }
         }
 
-        let dummy = CargoPath::TempDir(TempDir::new()?);
-        dummy.create_dummy_crate(&components[0], None, None)?;
-        Ok(ResolvedTarget {
-            package_path: dummy,
-            filter: components.join("::"),
-        })
+        let dummy = create_dummy_crate(&components[0], None, None)?;
+        Ok(ResolvedTarget::new(dummy, &components))
     }
 }
 
+fn create_dummy_crate(
+    dependency: &str,
+    version: Option<String>,
+    features: Option<&[&str]>,
+) -> Result<CargoPath> {
+    let temp_dir = TempDir::new()?;
+    let path = temp_dir.path();
+
+    let manifest_path = path.join("Cargo.toml");
+    let src_dir = path.join("src");
+    fs::create_dir_all(&src_dir)?;
+
+    let lib_rs = src_dir.join("lib.rs");
+    let mut file = fs::File::create(lib_rs)?;
+    writeln!(file, "// Dummy crate")?;
+
+    let version_str = version.map_or("*".to_string(), |v| v.to_string());
+    let features_str = features.map_or(String::new(), |f| format!(", features = {:?}", f));
+    let manifest = format!(
+        r#"[package]
+        name = "dummy-crate"
+        version = "0.1.0"
+
+        [dependencies]
+        {} = {{ version = "{}"{}}}
+        "#,
+        dependency, version_str, features_str
+    );
+    fs::write(manifest_path, manifest)?;
+
+    Ok(CargoPath::TempDir(temp_dir))
+}
+
+/// A resolved Rust package or module target.
 #[derive(Debug)]
 pub struct ResolvedTarget {
-    pub package_path: CargoPath,
+    /// Package directory path (filesystem or temporary).
+    package_path: CargoPath,
+
+    /// Module path within the package, excluding the package name. E.g.,
+    /// "module::submodule::item". Empty string for package root. This might not necessarily match
+    /// the user's input.
     pub filter: String,
 }
 
+impl ResolvedTarget {
+    fn new(path: CargoPath, components: &[String]) -> Self {
+        let filter = if components.is_empty() {
+            String::new()
+        } else {
+            let mut normalized_components = components.to_vec();
+            normalized_components[0] = to_import_name(&normalized_components[0]);
+            normalized_components.join("::")
+        };
+
+        ResolvedTarget {
+            package_path: path,
+            filter,
+        }
+    }
+
+    pub fn read_crate(
+        &self,
+        no_default_features: bool,
+        all_features: bool,
+        features: Vec<String>,
+    ) -> Result<Crate> {
+        self.package_path
+            .read_crate(no_default_features, all_features, features)
+    }
+}
+
+/// Resovles a target specification and returns a ResolvedTarget, pointing to the package
+/// directory. If necessary, construct temporary dummy crate to download packages from cargo.io.
 pub fn resolve_target(target: &str, offline: bool) -> Result<ResolvedTarget> {
     let (target_str, version) = parse_target(target)?;
 
     let mut resolved = if version.is_some() {
         // If a version is specified, always create a dummy package
-        let dummy = CargoPath::TempDir(TempDir::new()?);
         let components: Vec<String> = target_str.split("::").map(|x| x.into()).collect();
-        dummy.create_dummy_crate(
+        let dummy = create_dummy_crate(
             &components[0],
             version.as_ref().map(|v| v.to_string()),
             None,
@@ -269,7 +438,7 @@ pub fn resolve_target(target: &str, offline: bool) -> Result<ResolvedTarget> {
             filter,
         }
     } else {
-        CargoPath::from_target(&target_str)?
+        CargoPath::from_target_str(&target_str)?
     };
 
     if !resolved.filter.is_empty() {
@@ -284,7 +453,7 @@ pub fn resolve_target(target: &str, offline: bool) -> Result<ResolvedTarget> {
     Ok(resolved)
 }
 
-pub fn parse_target(target: &str) -> Result<(String, Option<Version>)> {
+fn parse_target(target: &str) -> Result<(String, Option<Version>)> {
     let parts: Vec<&str> = target.rsplitn(2, '@').collect();
 
     match parts.len() {
@@ -305,11 +474,27 @@ pub fn parse_target(target: &str) -> Result<(String, Option<Version>)> {
     }
 }
 
+fn to_import_name(package_name: &str) -> String {
+    package_name.replace('-', "_")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_to_import_name() {
+        assert_eq!(to_import_name("serde"), "serde");
+        assert_eq!(to_import_name("serde-json"), "serde_json");
+        assert_eq!(to_import_name("tokio-util"), "tokio_util");
+        assert_eq!(
+            to_import_name("my-hyphenated-package"),
+            "my_hyphenated_package"
+        );
+    }
 
     #[test]
     fn test_parse_target() -> Result<()> {
@@ -357,19 +542,14 @@ mod tests {
 
     #[test]
     fn test_create_dummy_crate() -> Result<()> {
-        let temp_dir = tempdir()?;
-        let cargo_path = CargoPath::Path(temp_dir.path().to_path_buf());
+        let cargo_path = create_dummy_crate("serde", None, None)?;
+        let path = cargo_path.as_path();
 
-        cargo_path.create_dummy_crate("serde", None, None)?;
-        assert!(cargo_path.has_manifest());
+        assert!(path.join("Cargo.toml").exists());
 
-        let manifest_content = fs::read_to_string(cargo_path.manifest_path())?;
-        println!("{}", manifest_content);
+        let manifest_content = fs::read_to_string(path.join("Cargo.toml"))?;
         assert!(manifest_content.contains("[dependencies]"));
         assert!(manifest_content.contains("serde = { version = \"*\""));
-
-        // Ensure creating a second crate fails
-        assert!(cargo_path.create_dummy_crate("rand", None, None).is_err());
 
         Ok(())
     }
@@ -510,19 +690,205 @@ mod tests {
 
         // Test resolving a package in the workspace
         let resolved =
-            CargoPath::from_target(&format!("{}::pkg1::module", workspace_path.display()))?;
+            CargoPath::from_target_str(&format!("{}::pkg1::module", workspace_path.display()))?;
         assert_eq!(resolved.package_path.as_path(), workspace_path.join("pkg1"));
         assert_eq!(resolved.filter, "pkg1::module");
 
         // Test resolving another package in the workspace
-        let resolved = CargoPath::from_target(&format!("{}::pkg2", workspace_path.display()))?;
+        let resolved = CargoPath::from_target_str(&format!("{}::pkg2", workspace_path.display()))?;
         assert_eq!(resolved.package_path.as_path(), workspace_path.join("pkg2"));
         assert_eq!(resolved.filter, "pkg2");
 
         // Test resolving a non-existent package
-        let result = CargoPath::from_target(&format!("{}::non_existent", workspace_path.display()));
+        let result =
+            CargoPath::from_target_str(&format!("{}::non_existent", workspace_path.display()));
         assert!(result.is_err());
 
         Ok(())
+    }
+
+    #[test]
+    fn test_parse_targets() {
+        let test_cases = vec![
+            // Empty target (valid)
+            (
+                "",
+                Ok(Target {
+                    entrypoint: Entrypoint::Name {
+                        name: "".to_string(),
+                        version: None,
+                    },
+                    path: vec![],
+                }),
+            ),
+            // Double colon (::) should be treated as an error
+            (
+                "::",
+                Err(RuskelError::InvalidTarget(
+                    "Invalid name specification: empty name".to_string(),
+                )),
+            ),
+            // Paths
+            (
+                "src/lib.rs",
+                Ok(Target {
+                    entrypoint: Entrypoint::Path(PathBuf::from("src/lib.rs")),
+                    path: vec![],
+                }),
+            ),
+            (
+                "src/main.rs::my_module::MyStruct",
+                Ok(Target {
+                    entrypoint: Entrypoint::Path(PathBuf::from("src/main.rs")),
+                    path: vec!["my_module".to_string(), "MyStruct".to_string()],
+                }),
+            ),
+            (
+                "/path/to/my_project",
+                Ok(Target {
+                    entrypoint: Entrypoint::Path(PathBuf::from("/path/to/my_project")),
+                    path: vec![],
+                }),
+            ),
+            (
+                "/path/to/my_project::some_module::function",
+                Ok(Target {
+                    entrypoint: Entrypoint::Path(PathBuf::from("/path/to/my_project")),
+                    path: vec!["some_module".to_string(), "function".to_string()],
+                }),
+            ),
+            // Names (Modules or Packages)
+            (
+                "MyModule",
+                Ok(Target {
+                    entrypoint: Entrypoint::Name {
+                        name: "MyModule".to_string(),
+                        version: None,
+                    },
+                    path: vec![],
+                }),
+            ),
+            (
+                "MyModule::SubModule::function",
+                Ok(Target {
+                    entrypoint: Entrypoint::Name {
+                        name: "MyModule".to_string(),
+                        version: None,
+                    },
+                    path: vec!["SubModule".to_string(), "function".to_string()],
+                }),
+            ),
+            (
+                "serde",
+                Ok(Target {
+                    entrypoint: Entrypoint::Name {
+                        name: "serde".to_string(),
+                        version: None,
+                    },
+                    path: vec![],
+                }),
+            ),
+            (
+                "serde::Deserialize",
+                Ok(Target {
+                    entrypoint: Entrypoint::Name {
+                        name: "serde".to_string(),
+                        version: None,
+                    },
+                    path: vec!["Deserialize".to_string()],
+                }),
+            ),
+            (
+                "serde@1.0.104",
+                Ok(Target {
+                    entrypoint: Entrypoint::Name {
+                        name: "serde".to_string(),
+                        version: Some(Version::parse("1.0.104").unwrap()),
+                    },
+                    path: vec![],
+                }),
+            ),
+            (
+                "serde@1.0.104::Serialize",
+                Ok(Target {
+                    entrypoint: Entrypoint::Name {
+                        name: "serde".to_string(),
+                        version: Some(Version::parse("1.0.104").unwrap()),
+                    },
+                    path: vec!["Serialize".to_string()],
+                }),
+            ),
+            // Complex paths
+            (
+                "tokio::sync::Mutex",
+                Ok(Target {
+                    entrypoint: Entrypoint::Name {
+                        name: "tokio".to_string(),
+                        version: None,
+                    },
+                    path: vec!["sync".to_string(), "Mutex".to_string()],
+                }),
+            ),
+            (
+                "std::collections::HashMap",
+                Ok(Target {
+                    entrypoint: Entrypoint::Name {
+                        name: "std".to_string(),
+                        version: None,
+                    },
+                    path: vec!["collections".to_string(), "HashMap".to_string()],
+                }),
+            ),
+            (
+                "my_crate::utils::helper_function",
+                Ok(Target {
+                    entrypoint: Entrypoint::Name {
+                        name: "my_crate".to_string(),
+                        version: None,
+                    },
+                    path: vec!["utils".to_string(), "helper_function".to_string()],
+                }),
+            ),
+            // Invalid targets
+            (
+                "serde@",
+                Err(RuskelError::InvalidTarget("Invalid version: ".to_string())),
+            ),
+            (
+                "serde@invalid",
+                Err(RuskelError::InvalidTarget("Invalid version: ".to_string())),
+            ),
+        ];
+
+        for (input, expected_output) in test_cases {
+            let result = Target::parse(input);
+            match (&result, &expected_output) {
+                (Ok(target), Ok(expected_target)) => {
+                    assert_eq!(
+                        target, expected_target,
+                        "Mismatch for input '{}'. \nGot: {:?}\nExpected: {:?}",
+                        input, target, expected_target
+                    );
+                }
+                (Err(error), Err(expected_error)) => {
+                    assert!(error.to_string().starts_with(&expected_error.to_string()),
+                    "Error mismatch for input '{}'. \nGot: {}\nExpected error starting with: {}",
+                    input, error, expected_error
+                );
+                }
+                (Ok(target), Err(expected_error)) => {
+                    panic!(
+                    "Expected error but got success for input '{}'. \nGot: {:?}\nExpected error: {}",
+                    input, target, expected_error
+                );
+                }
+                (Err(error), Ok(expected_target)) => {
+                    panic!(
+                    "Expected success but got error for input '{}'. \nGot error: {}\nExpected: {:?}",
+                    input, error, expected_target
+                );
+                }
+            }
+        }
     }
 }

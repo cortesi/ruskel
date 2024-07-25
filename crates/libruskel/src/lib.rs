@@ -11,7 +11,6 @@
 //!
 //!
 //! You must have the nightly Rust toolchain installed to use (but not to install) RUskel.
-use std::fs;
 use syntect::{
     easy::HighlightLines,
     highlighting::ThemeSet,
@@ -39,7 +38,7 @@ use cargoutils::*;
 /// Rust toolchain installed and available.
 #[derive(Debug)]
 pub struct Ruskel {
-    /// The user's full target specification
+    /// The full target specification
     target: String,
 
     /// Whether to build without default features.
@@ -59,17 +58,20 @@ pub struct Ruskel {
 }
 
 impl Ruskel {
-    /// Creates a new Ruskel instance for the specified target.
+    /// Creates a new Ruskel instance for the specified target. A target specification is an
+    /// entrypoint, followed by an optional path, whith components separated by '::'.
     ///
-    /// The target can be:
+    ///   entrypoint[::path]
+    ///
+    /// A entrypoint can be:
+    ///
     /// - A path to a Rust file
     /// - A directory containing a Cargo.toml file
-    /// - A module name (with or without path)
-    /// - A package name (with or without path)
-    /// - A fully qualified path to an item within a module
-    /// - Blank, in which case we use the current directory
+    /// - A module name
+    /// - A package name. In this case the name can also include a version number, separated by an
+    ///   '@' symbol.
     ///
-    /// The method normalizes package names, converting hyphens to underscores for internal use.
+    /// The path is a fully qualified path within the entrypoint.
     ///
     /// # Examples of valid targets:
     ///
@@ -78,13 +80,9 @@ impl Ruskel {
     /// - serde
     /// - rustdoc-types
     /// - serde::Deserialize
+    /// - serde@1.0
     /// - rustdoc-types::Crate
     /// - rustdoc_types::Crate
-    ///
-    /// The method will attempt to locate the appropriate Cargo.toml file and set up
-    /// the filter for rendering based on the provided target.
-    ///
-    /// If offline is true, Ruskel will not attempt to fetch dependencies from the network.
     pub fn new(target: &str) -> Self {
         Ruskel {
             target: target.to_string(),
@@ -150,31 +148,24 @@ impl Ruskel {
         Ok(output)
     }
 
-    fn crate_from_package(&self, package_path: CargoPath) -> Result<Crate> {
-        let json_path = rustdoc_json::Builder::default()
-            .toolchain("nightly")
-            .manifest_path(package_path.manifest_path())
-            .document_private_items(true)
-            .no_default_features(self.no_default_features)
-            .all_features(self.all_features)
-            .features(&self.features)
-            .build()
-            .map_err(|e| RuskelError::Generate(e.to_string()))?;
-        let json_content = fs::read_to_string(&json_path)?;
-        let crate_data: Crate = serde_json::from_str(&json_content)?;
-        Ok(crate_data)
-    }
-
-    /// Generates and returns the parsed JSON representation of the crate's API.
-    pub fn make_crate(&self) -> Result<Crate> {
+    /// Returns the parsed representation of the crate's API.
+    pub fn inspect(&self) -> Result<Crate> {
         let rt = resolve_target(&self.target, self.offline)?;
-        self.crate_from_package(rt.package_path)
+        rt.read_crate(
+            self.no_default_features,
+            self.all_features,
+            self.features.clone(),
+        )
     }
 
     /// Generates a skeletonized version of the crate as a string of Rust code.
     pub fn render(&self, auto_impls: bool, private_items: bool) -> Result<String> {
         let rt = resolve_target(&self.target, self.offline)?;
-        let crate_data = self.crate_from_package(rt.package_path)?;
+        let crate_data = rt.read_crate(
+            self.no_default_features,
+            self.all_features,
+            self.features.clone(),
+        )?;
 
         let renderer = Renderer::default()
             .with_filter(&rt.filter)
@@ -192,6 +183,6 @@ impl Ruskel {
 
     /// Returns a pretty-printed version of the crate's JSON representation.
     pub fn raw_json(&self) -> Result<String> {
-        Ok(serde_json::to_string_pretty(&self.make_crate()?)?)
+        Ok(serde_json::to_string_pretty(&self.inspect()?)?)
     }
 }

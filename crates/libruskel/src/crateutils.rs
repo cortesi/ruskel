@@ -127,7 +127,7 @@ pub fn render_generic_param_def(param: &GenericParamDef) -> Option<String> {
 
 pub fn render_generic_bound(bound: &GenericBound) -> String {
     match bound {
-        GenericBound::Use(ty) => {
+        GenericBound::Use(_) => {
             // https://github.com/rust-lang/rust/issues/123432
             unimplemented!("unstable feature precise capturing not supported yet")
         }
