@@ -9,14 +9,6 @@ use tempfile::TempDir;
 
 use crate::error::{Result, RuskelError};
 
-fn is_path(s: &str) -> bool {
-    s.contains('.') || s.contains('/') || s.contains('\\') || s.contains(':')
-}
-
-fn join_components(components: &[String]) -> String {
-    components.join("::")
-}
-
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entrypoint {
     /// A path to a Rust file or directory.
@@ -295,56 +287,6 @@ impl CargoPath {
         };
         Ok(None)
     }
-
-    /// Splits a target specification into the CargoPath directory and the filter components. When
-    /// this returns, we know that there's always a valid package in the CargoPath directory.
-    /// Here are the valid ways to specify a target:
-    ///
-    /// - "/package/path"  matches a whole package directly
-    /// - "/package/path::module::path" matches a module and subpath in a package
-    /// - "/workspace/path::package" matches a whole package in the workspace
-    /// - "/workspace/path::package::modue::subpath" matches a subpath in a package in the workspace
-    /// - If the current directory is inside a workspace:
-    ///     - "package" matches a package in the workspace
-    ///     - "package::module::path" matches a module and subpath in a package in the workspace
-    /// - If the current directory is inside a package:
-    ///     - "module::path" matches a module and subpath in the package
-    ///     - "package" matches a dependency in the workspace
-    /// - Otherwise, the first component is retreived from cargo.io
-    pub fn from_target_str(target: &str) -> Result<ResolvedTarget> {
-        let components: Vec<String> = target.split("::").map(|x| x.into()).collect();
-        if components.is_empty() {
-            return Err(RuskelError::ModuleNotFound("empty target".to_string()));
-        }
-
-        if is_path(&components[0]) {
-            let root = CargoPath::Path(components[0].clone().into());
-            let subpath = components[1..].to_vec();
-            if let Some(resolved) = root.search_spec(&subpath)? {
-                return Ok(resolved);
-            } else if components.len() == 1 {
-                return Err(RuskelError::ModuleNotFound(format!(
-                    "no submodule specified, but {:?} is not a package",
-                    root.as_path().display(),
-                )));
-            } else {
-                return Err(RuskelError::ModuleNotFound(format!(
-                    "can't find path {} in directory {}",
-                    join_components(&components[1..]),
-                    root.as_path().display(),
-                )));
-            }
-        }
-
-        if let Some(root) = CargoPath::nearest_manifest(&PathBuf::from(".")) {
-            if let Some(resolved) = root.search_spec(&components)? {
-                return Ok(resolved);
-            }
-        }
-
-        let dummy = create_dummy_crate(&components[0], None, None)?;
-        Ok(ResolvedTarget::new(dummy, &components))
-    }
 }
 
 fn create_dummy_crate(
@@ -417,60 +359,137 @@ impl ResolvedTarget {
         self.package_path
             .read_crate(no_default_features, all_features, features)
     }
+
+    pub fn from_target(target: Target, offline: bool) -> Result<Self> {
+        match target.entrypoint {
+            Entrypoint::Path(path) => {
+                if path.is_file() && path.extension().map_or(false, |ext| ext == "rs") {
+                    Self::from_rust_file(path, &target.path)
+                } else {
+                    let cargo_path = CargoPath::Path(path.clone());
+                    if cargo_path.is_package() {
+                        Ok(ResolvedTarget::new(cargo_path, &target.path))
+                    } else if cargo_path.is_workspace() {
+                        if target.path.is_empty() {
+                            Err(RuskelError::InvalidTarget(
+                                "No package specified in workspace".to_string(),
+                            ))
+                        } else {
+                            let package_name = &target.path[0];
+                            if let Some(package) =
+                                cargo_path.find_workspace_package(package_name)?
+                            {
+                                Ok(ResolvedTarget::new(package.package_path, &target.path[1..]))
+                            } else {
+                                Err(RuskelError::ModuleNotFound(format!(
+                                    "Package '{}' not found in workspace",
+                                    package_name
+                                )))
+                            }
+                        }
+                    } else {
+                        Err(RuskelError::InvalidTarget(format!(
+                            "Path '{}' is neither a package nor a workspace",
+                            path.display()
+                        )))
+                    }
+                }
+            }
+            Entrypoint::Name { name, version } => {
+                let current_dir = std::env::current_dir()?;
+                match CargoPath::nearest_manifest(&current_dir) {
+                    Some(root) => {
+                        if let Some(dependency) = root.find_dependency(&name, offline)? {
+                            Ok(ResolvedTarget::new(dependency, &target.path))
+                        } else {
+                            Self::create_dummy_crate(&name, version, &target.path)
+                        }
+                    }
+                    None => Self::create_dummy_crate(&name, version, &target.path),
+                }
+            }
+        }
+    }
+
+    fn from_rust_file(file_path: PathBuf, additional_path: &[String]) -> Result<Self> {
+        let file_path = fs::canonicalize(file_path)?;
+        let mut current_dir = file_path
+            .parent()
+            .ok_or_else(|| RuskelError::InvalidTarget("Invalid file path".to_string()))?
+            .to_path_buf();
+
+        // Find the nearest Cargo.toml
+        while !current_dir.join("Cargo.toml").exists() {
+            if !current_dir.pop() {
+                return Err(RuskelError::ManifestNotFound);
+            }
+        }
+
+        let cargo_path = CargoPath::Path(current_dir.clone());
+        let relative_path = file_path.strip_prefix(&current_dir).map_err(|_| {
+            RuskelError::InvalidTarget("Failed to determine relative path".to_string())
+        })?;
+
+        // Convert the relative path to a module path
+        let mut module_path: Vec<String> = relative_path
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new(""))
+            .components()
+            .filter_map(|c| {
+                if let std::path::Component::Normal(os_str) = c {
+                    os_str.to_str().map(String::from)
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Add the file name without extension as the last module component
+        if let Some(file_name) = file_path.file_stem().and_then(|s| s.to_str()) {
+            module_path.push(file_name.to_string());
+        }
+
+        // Combine the module path with the additional path
+        module_path.extend_from_slice(additional_path);
+
+        Ok(ResolvedTarget::new(cargo_path, &module_path))
+    }
+
+    fn create_dummy_crate(name: &str, version: Option<Version>, path: &[String]) -> Result<Self> {
+        let version_str = version.map(|v| v.to_string());
+        let dummy = create_dummy_crate(name, version_str, None)?;
+        Ok(ResolvedTarget::new(dummy, path))
+    }
 }
 
 /// Resovles a target specification and returns a ResolvedTarget, pointing to the package
 /// directory. If necessary, construct temporary dummy crate to download packages from cargo.io.
-pub fn resolve_target(target: &str, offline: bool) -> Result<ResolvedTarget> {
-    let (target_str, version) = parse_target(target)?;
+pub fn resolve_target(target_str: &str, offline: bool) -> Result<ResolvedTarget> {
+    let target = Target::parse(target_str)?;
 
-    let mut resolved = if version.is_some() {
-        // If a version is specified, always create a dummy package
-        let components: Vec<String> = target_str.split("::").map(|x| x.into()).collect();
-        let dummy = create_dummy_crate(
-            &components[0],
-            version.as_ref().map(|v| v.to_string()),
-            None,
-        )?;
-        let filter = components.join("::");
-        ResolvedTarget {
-            package_path: dummy,
-            filter,
-        }
-    } else {
-        CargoPath::from_target_str(&target_str)?
-    };
-
-    if !resolved.filter.is_empty() {
-        let first_component = resolved.filter.split("::").next().unwrap().to_string();
-        if let Some(cp) = resolved
-            .package_path
-            .find_dependency(&first_component, offline)?
-        {
-            resolved.package_path = cp;
-        }
-    }
-    Ok(resolved)
-}
-
-fn parse_target(target: &str) -> Result<(String, Option<Version>)> {
-    let parts: Vec<&str> = target.rsplitn(2, '@').collect();
-
-    match parts.len() {
-        1 => Ok((target.to_string(), None)),
-        2 => {
-            if parts[1].contains('@') {
-                return Err(RuskelError::InvalidTarget(
-                    "Target contains multiple '@' characters".to_string(),
-                ));
+    match &target.entrypoint {
+        Entrypoint::Path(_) => ResolvedTarget::from_target(target, offline),
+        Entrypoint::Name { name, version } => {
+            if version.is_some() {
+                // If a version is specified, always create a dummy package
+                ResolvedTarget::create_dummy_crate(name, version.clone(), &target.path)
+            } else {
+                let resolved = ResolvedTarget::from_target(target.clone(), offline)?;
+                if !resolved.filter.is_empty() {
+                    let first_component = resolved.filter.split("::").next().unwrap().to_string();
+                    if let Some(cp) = resolved
+                        .package_path
+                        .find_dependency(&first_component, offline)?
+                    {
+                        Ok(ResolvedTarget::new(cp, &target.path))
+                    } else {
+                        Ok(resolved)
+                    }
+                } else {
+                    Ok(resolved)
+                }
             }
-            let version = Version::parse(parts[0].trim())
-                .map_err(|e| RuskelError::InvalidVersion(e.to_string()))?;
-            Ok((parts[1].to_string(), Some(version)))
         }
-        _ => Err(RuskelError::InvalidTarget(
-            "Invalid target format".to_string(),
-        )),
     }
 }
 
@@ -494,50 +513,6 @@ mod tests {
             to_import_name("my-hyphenated-package"),
             "my_hyphenated_package"
         );
-    }
-
-    #[test]
-    fn test_parse_target() -> Result<()> {
-        let test_cases = vec![
-            ("my/target::here", Ok(("my/target::here".to_string(), None))),
-            (
-                "my/target::here@1.2.3",
-                Ok(("my/target::here".to_string(), Some(Version::new(1, 2, 3)))),
-            ),
-            (
-                "my/target::here@1.2.3-alpha.1+build.456",
-                Ok((
-                    "my/target::here".to_string(),
-                    Some(Version::parse("1.2.3-alpha.1+build.456").unwrap()),
-                )),
-            ),
-            ("my/target::here@invalid", Err("Invalid version:")),
-            ("my/target::here@1.0.0@2.0.0", Err("Invalid target:")),
-            ("my/target::here@", Err("Invalid version:")),
-        ];
-
-        for (input, expected) in test_cases {
-            let result = parse_target(input);
-            match (result, expected) {
-                (Ok((target, version)), Ok((exp_target, exp_version))) => {
-                    assert_eq!(target, exp_target);
-                    assert_eq!(version, exp_version);
-                }
-                (Err(e), Err(exp_prefix)) => {
-                    let error_string = format!("{}", e);
-                    assert!(
-                        error_string.starts_with(exp_prefix),
-                        "Error '{}' does not start with expected prefix '{}'",
-                        error_string,
-                        exp_prefix
-                    );
-                }
-                (Ok(_), Err(_)) => panic!("Expected error, but got Ok for input: {}", input),
-                (Err(e), Ok(_)) => panic!("Expected Ok, but got error: {} for input: {}", e, input),
-            }
-        }
-
-        Ok(())
     }
 
     #[test]
@@ -638,71 +613,6 @@ mod tests {
         assert!(cargo_path
             .find_workspace_package("non-existent-package")?
             .is_none());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_from_target() -> Result<()> {
-        let temp_dir = tempdir()?;
-        let workspace_path = temp_dir.path().to_path_buf();
-
-        // Create a workspace with two packages
-        fs::create_dir_all(workspace_path.join("pkg1").join("src"))?;
-        fs::create_dir_all(workspace_path.join("pkg2").join("src"))?;
-
-        let workspace_manifest = r#"
-            [workspace]
-            members = ["pkg1", "pkg2"]
-        "#;
-        fs::write(workspace_path.join("Cargo.toml"), workspace_manifest)?;
-
-        let pkg1_manifest = r#"
-            [package]
-            name = "pkg1"
-            version = "0.1.0"
-
-            [features]
-            feature1 = []
-        "#;
-        fs::write(
-            workspace_path.join("pkg1").join("Cargo.toml"),
-            pkg1_manifest,
-        )?;
-        fs::write(
-            workspace_path.join("pkg1").join("src").join("lib.rs"),
-            "// pkg1 lib",
-        )?;
-
-        let pkg2_manifest = r#"
-            [package]
-            name = "pkg2"
-            version = "0.2.0"
-        "#;
-        fs::write(
-            workspace_path.join("pkg2").join("Cargo.toml"),
-            pkg2_manifest,
-        )?;
-        fs::write(
-            workspace_path.join("pkg2").join("src").join("lib.rs"),
-            "// pkg2 lib",
-        )?;
-
-        // Test resolving a package in the workspace
-        let resolved =
-            CargoPath::from_target_str(&format!("{}::pkg1::module", workspace_path.display()))?;
-        assert_eq!(resolved.package_path.as_path(), workspace_path.join("pkg1"));
-        assert_eq!(resolved.filter, "pkg1::module");
-
-        // Test resolving another package in the workspace
-        let resolved = CargoPath::from_target_str(&format!("{}::pkg2", workspace_path.display()))?;
-        assert_eq!(resolved.package_path.as_path(), workspace_path.join("pkg2"));
-        assert_eq!(resolved.filter, "pkg2");
-
-        // Test resolving a non-existent package
-        let result =
-            CargoPath::from_target_str(&format!("{}::non_existent", workspace_path.display()));
-        assert!(result.is_err());
 
         Ok(())
     }
@@ -887,6 +797,199 @@ mod tests {
                     "Expected success but got error for input '{}'. \nGot error: {}\nExpected: {:?}",
                     input, error, expected_target
                 );
+                }
+            }
+        }
+    }
+
+    fn setup_test_structure() -> TempDir {
+        let temp_dir = TempDir::new().unwrap();
+        let root = temp_dir.path();
+
+        // Create workspace structure
+        fs::create_dir_all(root.join("workspace/pkg1/src")).unwrap();
+        fs::create_dir_all(root.join("workspace/pkg2/src")).unwrap();
+        fs::write(
+            root.join("workspace/Cargo.toml"),
+            r#"
+            [workspace]
+            members = ["pkg1", "pkg2"]
+            "#,
+        )
+        .unwrap();
+
+        // Create pkg1
+        fs::write(
+            root.join("workspace/pkg1/Cargo.toml"),
+            r#"
+            [package]
+            name = "pkg1"
+            version = "0.1.0"
+            "#,
+        )
+        .unwrap();
+        fs::write(root.join("workspace/pkg1/src/lib.rs"), "// pkg1 lib").unwrap();
+        fs::write(root.join("workspace/pkg1/src/module.rs"), "// pkg1 module").unwrap();
+
+        // Create pkg2
+        fs::write(
+            root.join("workspace/pkg2/Cargo.toml"),
+            r#"
+            [package]
+            name = "pkg2"
+            version = "0.1.0"
+            [dependencies]
+            serde = "1.0"
+            "#,
+        )
+        .unwrap();
+        fs::write(root.join("workspace/pkg2/src/lib.rs"), "// pkg2 lib").unwrap();
+
+        // Create standalone package
+        fs::create_dir_all(root.join("standalone/src")).unwrap();
+        fs::write(
+            root.join("standalone/Cargo.toml"),
+            r#"
+            [package]
+            name = "standalone"
+            version = "0.1.0"
+            "#,
+        )
+        .unwrap();
+        fs::write(root.join("standalone/src/lib.rs"), "// standalone lib").unwrap();
+        fs::write(
+            root.join("standalone/src/module.rs"),
+            "// standalone module",
+        )
+        .unwrap();
+
+        temp_dir
+    }
+
+    enum ExpectedResult {
+        Path(PathBuf),
+        DummyCrate,
+        Error(String),
+    }
+
+    #[test]
+    fn test_from_target() {
+        let temp_dir = setup_test_structure();
+        let root = temp_dir.path();
+
+        let test_cases = vec![
+            (
+                Target {
+                    entrypoint: Entrypoint::Path(root.join("workspace/pkg1")),
+                    path: vec![],
+                },
+                ExpectedResult::Path(root.join("workspace/pkg1")),
+                vec![],
+            ),
+            (
+                Target {
+                    entrypoint: Entrypoint::Path(root.join("workspace/pkg1")),
+                    path: vec!["module".to_string()],
+                },
+                ExpectedResult::Path(root.join("workspace/pkg1")),
+                vec!["module".to_string()],
+            ),
+            (
+                Target {
+                    entrypoint: Entrypoint::Path(root.join("workspace")),
+                    path: vec!["pkg2".to_string()],
+                },
+                ExpectedResult::Path(root.join("workspace/pkg2")),
+                vec![],
+            ),
+            (
+                Target {
+                    entrypoint: Entrypoint::Path(root.join("workspace/pkg1/src/module.rs")),
+                    path: vec![],
+                },
+                ExpectedResult::Path(root.join("workspace/pkg1")),
+                vec!["src".to_string(), "module".to_string()],
+            ),
+            (
+                Target {
+                    entrypoint: Entrypoint::Path(root.join("standalone")),
+                    path: vec!["module".to_string()],
+                },
+                ExpectedResult::Path(root.join("standalone")),
+                vec!["module".to_string()],
+            ),
+            (
+                Target {
+                    entrypoint: Entrypoint::Name {
+                        name: "nonexistent".to_string(),
+                        version: None,
+                    },
+                    path: vec![],
+                },
+                ExpectedResult::DummyCrate,
+                vec![],
+            ),
+        ];
+
+        for (i, (target, expected_result, expected_filter)) in test_cases.into_iter().enumerate() {
+            let result = ResolvedTarget::from_target(target, true);
+
+            match (result, expected_result) {
+                (Ok(resolved), ExpectedResult::Path(expected)) => {
+                    match &resolved.package_path {
+                        CargoPath::Path(path) => {
+                            let resolved_path = fs::canonicalize(path).unwrap();
+                            let expected_path = fs::canonicalize(expected).unwrap();
+                            assert_eq!(
+                                resolved_path, expected_path,
+                                "Test case {} failed: package_path mismatch",
+                                i
+                            );
+                        }
+                        CargoPath::TempDir(_) => {
+                            panic!("Test case {} failed: expected CargoPath::Path, got CargoPath::TempDir", i);
+                        }
+                    }
+                    assert_eq!(
+                        resolved.filter,
+                        expected_filter.join("::"),
+                        "Test case {} failed: filter mismatch",
+                        i
+                    );
+                }
+                (Ok(resolved), ExpectedResult::DummyCrate) => {
+                    match resolved.package_path {
+                        CargoPath::TempDir(_) => {
+                            // This is correct, we expected a dummy crate
+                        }
+                        CargoPath::Path(_) => {
+                            panic!("Test case {} failed: expected CargoPath::TempDir, got CargoPath::Path", i);
+                        }
+                    }
+                    assert_eq!(
+                        resolved.filter,
+                        expected_filter.join("::"),
+                        "Test case {} failed: filter mismatch",
+                        i
+                    );
+                }
+                (Err(e), ExpectedResult::Error(expected_err)) => {
+                    assert!(
+                        e.to_string().contains(&expected_err),
+                        "Test case {} failed: error message mismatch. Expected '{}', got '{}'",
+                        i,
+                        expected_err,
+                        e
+                    );
+                }
+                (Ok(_), ExpectedResult::Error(expected_err)) => {
+                    panic!(
+                        "Test case {} failed: expected error '{}', but got Ok",
+                        i, expected_err
+                    );
+                }
+                (Err(e), _) => {
+                    panic!("Test case {} failed: expected Ok, but got error '{}'", i, e);
                 }
             }
         }
