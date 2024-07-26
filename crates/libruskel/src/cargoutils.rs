@@ -8,7 +8,7 @@ use semver::Version;
 use tempfile::TempDir;
 
 use super::target::{Entrypoint, Target};
-use crate::error::{Result, RuskelError};
+use crate::error::{convert_cargo_error, Result, RuskelError};
 
 /// A path to a crate. This can be a directory on the filesystem or a temporary directory.
 #[derive(Debug)]
@@ -70,7 +70,7 @@ impl CargoPath {
     }
 
     pub fn find_dependency(&self, dependency: &str, offline: bool) -> Result<Option<CargoPath>> {
-        let mut config = GlobalContext::default().map_err(|e| RuskelError::Cargo(e.to_string()))?;
+        let mut config = GlobalContext::default().map_err(convert_cargo_error)?;
         config
             .configure(
                 0,     // verbose
@@ -83,9 +83,10 @@ impl CargoPath {
                 &[],   // unstable_flags
                 &[],   // cli_config
             )
-            .map_err(|e| RuskelError::Cargo(e.to_string()))?;
-        let workspace = Workspace::new(&self.manifest_path(), &config)
-            .map_err(|e| RuskelError::Cargo(e.to_string()))?;
+            .map_err(convert_cargo_error)?;
+
+        let workspace =
+            Workspace::new(&self.manifest_path(), &config).map_err(convert_cargo_error)?;
 
         let (_, ps) = ops::fetch(
             &workspace,
@@ -94,7 +95,7 @@ impl CargoPath {
                 targets: vec![],
             },
         )
-        .map_err(|e| RuskelError::Cargo(e.to_string()))?;
+        .map_err(convert_cargo_error)?;
 
         for package in ps.packages() {
             if package.name().as_str() == dependency {
@@ -127,9 +128,10 @@ impl CargoPath {
         let original_name = module_name.replace('-', "_");
         let normalized_name = module_name.to_string();
 
-        let config = GlobalContext::default().map_err(|e| RuskelError::Cargo(e.to_string()))?;
-        let workspace = Workspace::new(&workspace_manifest_path, &config)
-            .map_err(|e| RuskelError::Cargo(e.to_string()))?;
+        let config = GlobalContext::default().map_err(convert_cargo_error)?;
+
+        let workspace =
+            Workspace::new(&workspace_manifest_path, &config).map_err(convert_cargo_error)?;
 
         for package in workspace.members() {
             if package.name().as_str() == normalized_name
@@ -549,7 +551,6 @@ mod tests {
 
     enum ExpectedResult {
         Path(PathBuf),
-        DummyCrate,
         Error(String),
     }
 
@@ -607,7 +608,7 @@ mod tests {
                     },
                     path: vec![],
                 },
-                ExpectedResult::DummyCrate,
+                ExpectedResult::Error("No matching".to_string()),
                 vec![],
             ),
         ];
@@ -629,22 +630,6 @@ mod tests {
                         }
                         CargoPath::TempDir(_) => {
                             panic!("Test case {} failed: expected CargoPath::Path, got CargoPath::TempDir", i);
-                        }
-                    }
-                    assert_eq!(
-                        resolved.filter,
-                        expected_filter.join("::"),
-                        "Test case {} failed: filter mismatch",
-                        i
-                    );
-                }
-                (Ok(resolved), ExpectedResult::DummyCrate) => {
-                    match resolved.package_path {
-                        CargoPath::TempDir(_) => {
-                            // This is correct, we expected a dummy crate
-                        }
-                        CargoPath::Path(_) => {
-                            panic!("Test case {} failed: expected CargoPath::TempDir, got CargoPath::Path", i);
                         }
                     }
                     assert_eq!(

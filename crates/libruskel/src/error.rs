@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+pub type Result<T> = std::result::Result<T, RuskelError>;
+
 #[derive(Error, Debug)]
 pub enum RuskelError {
     /// Indicates that a specified module could not be found.
@@ -45,6 +47,14 @@ pub enum RuskelError {
     /// Indicates an invalid target specification was provided.
     #[error("Invalid target: {0}")]
     InvalidTarget(String),
+
+    /// Indicates a dependency was not found in the registry.
+    #[error("No matching package")]
+    DependencyNotFound,
+
+    /// A catch-all for other Cargo-related errors.
+    #[error("Cargo error: {0}")]
+    CargoError(String),
 }
 
 impl From<syntect::Error> for RuskelError {
@@ -65,4 +75,12 @@ impl From<rust_format::Error> for RuskelError {
     }
 }
 
-pub type Result<T> = std::result::Result<T, RuskelError>;
+/// Converts anyhow::Error to our custom RuskelError type.
+pub fn convert_cargo_error(error: anyhow::Error) -> RuskelError {
+    let err_msg = error.to_string();
+    if err_msg.contains("no matching package") {
+        RuskelError::DependencyNotFound
+    } else {
+        RuskelError::CargoError(err_msg)
+    }
+}
