@@ -290,9 +290,7 @@ impl ResolvedTarget {
         })?;
 
         // Convert the relative path to a module path
-        let mut module_path: Vec<String> = relative_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new(""))
+        let mut components: Vec<_> = relative_path
             .components()
             .filter_map(|c| {
                 if let std::path::Component::Normal(os_str) = c {
@@ -303,15 +301,22 @@ impl ResolvedTarget {
             })
             .collect();
 
-        // Add the file name without extension as the last module component
-        if let Some(file_name) = file_path.file_stem().and_then(|s| s.to_str()) {
-            module_path.push(file_name.to_string());
+        // Remove "src" if it's the first component
+        if components.first().map_or(false, |c| c == "src") {
+            components.remove(0);
+        }
+
+        // Remove the last component (file name) and add it back without the extension
+        if let Some(file_name) = components.pop() {
+            if let Some(stem) = Path::new(&file_name).file_stem().and_then(|s| s.to_str()) {
+                components.push(stem.to_string());
+            }
         }
 
         // Combine the module path with the additional path
-        module_path.extend_from_slice(additional_path);
+        components.extend_from_slice(additional_path);
 
-        Ok(ResolvedTarget::new(cargo_path, &module_path))
+        Ok(ResolvedTarget::new(cargo_path, &components))
     }
 
     fn from_dummy_crate(name: &str, version: Option<Version>, path: &[String]) -> Result<Self> {
@@ -590,7 +595,7 @@ mod tests {
                     path: vec![],
                 },
                 ExpectedResult::Path(root.join("workspace/pkg1")),
-                vec!["src".to_string(), "module".to_string()],
+                vec!["module".to_string()],
             ),
             (
                 Target {

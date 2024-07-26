@@ -23,6 +23,7 @@ pub struct Renderer {
     render_auto_impls: bool,
     render_private_items: bool,
     render_blanket_impls: bool,
+    /// The filter is a path BELOW the outermost module.
     filter: String,
 }
 
@@ -50,21 +51,25 @@ impl Renderer {
         }
     }
 
+    /// Apply a filter to output. The filter is a path BELOW the outermost module.
     pub fn with_filter(mut self, filter: &str) -> Self {
         self.filter = filter.to_string();
         self
     }
 
+    /// Render impl blocks for traits implemented for all types?
     pub fn with_blanket_impls(mut self, render_blanket_impls: bool) -> Self {
         self.render_blanket_impls = render_blanket_impls;
         self
     }
 
+    /// Render impl blocks for auto traits like Send and Sync?
     pub fn with_auto_impls(mut self, render_auto_impls: bool) -> Self {
         self.render_auto_impls = render_auto_impls;
         self
     }
 
+    /// Render private items?
     pub fn with_private_items(mut self, render_private_items: bool) -> Self {
         self.render_private_items = render_private_items;
         self
@@ -153,7 +158,13 @@ impl<'a, 'b> RenderState<'a, 'b> {
         true
     }
 
+    /// Should we filter this item? If true, the item should not be rendered.
     fn should_filter(&mut self, module_path: &str, item: &Item) -> bool {
+        // We never filter the root module - filters operate under the root.
+        if item.id == self.crate_data.root {
+            return false;
+        }
+
         if self.config.filter.is_empty() {
             return false;
         }
@@ -167,6 +178,7 @@ impl<'a, 'b> RenderState<'a, 'b> {
         }
     }
 
+    /// Does this item match the filter?
     fn filter_match(&self, module_path: &str, item: &Item) -> FilterMatch {
         let item_path = if let Some(name) = &item.name {
             if module_path.is_empty() {
@@ -175,13 +187,13 @@ impl<'a, 'b> RenderState<'a, 'b> {
                 format!("{}::{}", module_path, name)
             }
         } else {
-            module_path.to_string()
+            return FilterMatch::Prefix;
         };
 
         let filter_components: Vec<&str> = self.config.filter.split("::").collect();
-        let item_components: Vec<&str> = item_path.split("::").collect();
+        let item_components: Vec<&str> = item_path.split("::").skip(1).collect();
 
-        if item_path == self.config.filter {
+        if filter_components == item_components {
             FilterMatch::Hit
         } else if filter_components.starts_with(&item_components) {
             FilterMatch::Prefix

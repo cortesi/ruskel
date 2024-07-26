@@ -10,7 +10,7 @@
 //! has syntax highlighting applied.
 //!
 //!
-//! You must have the nightly Rust toolchain installed to use (but not to install) RUskel.
+//! You must have the nightly Rust toolchain installed to use (but not to install) Ruskel.
 
 mod cargoutils;
 mod crateutils;
