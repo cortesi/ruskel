@@ -141,8 +141,6 @@ impl Ruskel {
     /// Generates a skeletonized version of the crate as a string of Rust code.
     pub fn render(&self, auto_impls: bool, private_items: bool) -> Result<String> {
         let rt = resolve_target(&self.target, self.offline)?;
-        println!("rt: {:?}", rt);
-        panic!();
         let crate_data = rt.read_crate(
             self.no_default_features,
             self.all_features,

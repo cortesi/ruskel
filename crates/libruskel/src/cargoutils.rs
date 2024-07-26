@@ -315,7 +315,16 @@ impl ResolvedTarget {
     fn from_dummy_crate(name: &str, version: Option<Version>, path: &[String]) -> Result<Self> {
         let version_str = version.map(|v| v.to_string());
         let dummy = create_dummy_crate(name, version_str, None)?;
-        Ok(ResolvedTarget::new(dummy, path))
+
+        // Find the dependency within the dummy crate
+        if let Some(dependency_path) = dummy.find_dependency(name, true)? {
+            Ok(ResolvedTarget::new(dependency_path, path))
+        } else {
+            Err(RuskelError::ModuleNotFound(format!(
+                "Dependency '{}' not found in dummy crate",
+                name
+            )))
+        }
     }
 }
 
