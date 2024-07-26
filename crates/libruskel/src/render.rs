@@ -10,6 +10,14 @@ fn must_get<'a>(crate_data: &'a Crate, id: &Id) -> &'a Item {
     crate_data.index.get(id).unwrap()
 }
 
+fn ppush(path_prefix: &str, name: &str) -> String {
+    if path_prefix.is_empty() {
+        name.to_string()
+    } else {
+        format!("{}::{}", path_prefix, name)
+    }
+}
+
 #[derive(Debug, PartialEq)]
 enum FilterMatch {
     Hit,
@@ -159,7 +167,7 @@ impl<'a, 'b> RenderState<'a, 'b> {
     }
 
     /// Should we filter this item? If true, the item should not be rendered.
-    fn should_filter(&mut self, module_path: &str, item: &Item) -> bool {
+    fn should_filter(&mut self, path_prefix: &str, item: &Item) -> bool {
         // We never filter the root module - filters operate under the root.
         if item.id == self.crate_data.root {
             return false;
@@ -168,7 +176,7 @@ impl<'a, 'b> RenderState<'a, 'b> {
         if self.config.filter.is_empty() {
             return false;
         }
-        match self.filter_match(module_path, item) {
+        match self.filter_match(path_prefix, item) {
             FilterMatch::Hit => {
                 self.filter_matched = true;
                 false
@@ -179,13 +187,9 @@ impl<'a, 'b> RenderState<'a, 'b> {
     }
 
     /// Does this item match the filter?
-    fn filter_match(&self, module_path: &str, item: &Item) -> FilterMatch {
+    fn filter_match(&self, path_prefix: &str, item: &Item) -> FilterMatch {
         let item_path = if let Some(name) = &item.name {
-            if module_path.is_empty() {
-                name.clone()
-            } else {
-                format!("{}::{}", module_path, name)
-            }
+            ppush(path_prefix, name)
         } else {
             return FilterMatch::Prefix;
         };
@@ -204,27 +208,27 @@ impl<'a, 'b> RenderState<'a, 'b> {
         }
     }
 
-    fn should_module_doc(&self, module_path: &str, item: &Item) -> bool {
+    fn should_module_doc(&self, path_prefix: &str, item: &Item) -> bool {
         if self.config.filter.is_empty() {
             return true;
         }
         matches!(
-            self.filter_match(module_path, item),
+            self.filter_match(path_prefix, item),
             FilterMatch::Hit | FilterMatch::Suffix
         )
     }
 
-    fn render_item(&mut self, module_path: &str, item: &Item, force_private: bool) -> String {
-        if self.should_filter(module_path, item) {
+    fn render_item(&mut self, path_prefix: &str, item: &Item, force_private: bool) -> String {
+        if self.should_filter(path_prefix, item) {
             return String::new();
         }
 
         let output = match &item.inner {
-            ItemEnum::Module(_) => self.render_module(module_path, item),
-            ItemEnum::Struct(_) => self.render_struct(item),
+            ItemEnum::Module(_) => self.render_module(path_prefix, item),
+            ItemEnum::Struct(_) => self.render_struct(path_prefix, item),
             ItemEnum::Enum(_) => self.render_enum(item),
             ItemEnum::Trait(_) => self.render_trait(item),
-            ItemEnum::Import(_) => self.render_import(module_path, item),
+            ItemEnum::Import(_) => self.render_import(path_prefix, item),
             ItemEnum::Function(_) => self.render_function(item, false),
             ItemEnum::Constant { .. } => self.render_constant(item),
             ItemEnum::TypeAlias(_) => self.render_type_alias(item),
@@ -309,7 +313,7 @@ impl<'a, 'b> RenderState<'a, 'b> {
         output
     }
 
-    fn render_import(&mut self, module_path: &str, item: &Item) -> String {
+    fn render_import(&mut self, path_prefix: &str, item: &Item) -> String {
         let import = extract_item!(item, ItemEnum::Import);
 
         if import.glob {
@@ -320,7 +324,7 @@ impl<'a, 'b> RenderState<'a, 'b> {
                     for item_id in &module.items {
                         if let Some(item) = self.crate_data.index.get(item_id) {
                             if self.is_visible(item) {
-                                output.push_str(&self.render_item(module_path, item, true));
+                                output.push_str(&self.render_item(path_prefix, item, true));
                             }
                         }
                     }
@@ -336,7 +340,7 @@ impl<'a, 'b> RenderState<'a, 'b> {
             .as_ref()
             .and_then(|id| self.crate_data.index.get(id))
         {
-            return self.render_item(module_path, imported_item, true);
+            return self.render_item(path_prefix, imported_item, true);
         }
 
         let mut output = docs(item);
@@ -349,7 +353,7 @@ impl<'a, 'b> RenderState<'a, 'b> {
         output
     }
 
-    fn render_impl(&self, item: &Item) -> String {
+    fn render_impl(&mut self, path_prefix: &str, item: &Item) -> String {
         let mut output = docs(item);
         let impl_ = extract_item!(item, ItemEnum::Impl);
 
@@ -392,11 +396,12 @@ impl<'a, 'b> RenderState<'a, 'b> {
 
         output.push_str(" {\n");
 
+        let path_prefix = ppush(path_prefix, &render_type(&impl_.for_));
         for item_id in &impl_.items {
             if let Some(item) = self.crate_data.index.get(item_id) {
                 let is_trait_impl = impl_.trait_.is_some();
                 if is_trait_impl || self.is_visible(item) {
-                    output.push_str(&self.render_impl_item(item));
+                    output.push_str(&self.render_impl_item(&path_prefix, item));
                 }
             }
         }
@@ -406,7 +411,11 @@ impl<'a, 'b> RenderState<'a, 'b> {
         output
     }
 
-    fn render_impl_item(&self, item: &Item) -> String {
+    fn render_impl_item(&mut self, path_prefix: &str, item: &Item) -> String {
+        if self.should_filter(path_prefix, item) {
+            return String::new();
+        }
+
         match &item.inner {
             ItemEnum::Function(_) => self.render_function(item, false),
             ItemEnum::Constant { .. } => self.render_constant(item),
@@ -561,7 +570,7 @@ impl<'a, 'b> RenderState<'a, 'b> {
         }
     }
 
-    fn render_struct(&self, item: &Item) -> String {
+    fn render_struct(&mut self, path_prefix: &str, item: &Item) -> String {
         let mut output = docs(item);
 
         let struct_ = extract_item!(item, ItemEnum::Struct);
@@ -625,7 +634,7 @@ impl<'a, 'b> RenderState<'a, 'b> {
             let impl_item = must_get(self.crate_data, impl_id);
             let impl_ = extract_item!(impl_item, ItemEnum::Impl);
             if self.should_render_impl(impl_) {
-                output.push_str(&self.render_impl(impl_item));
+                output.push_str(&self.render_impl(path_prefix, impl_item));
             }
         }
 
@@ -662,15 +671,11 @@ impl<'a, 'b> RenderState<'a, 'b> {
         output
     }
 
-    fn render_module(&mut self, module_path: &str, item: &Item) -> String {
-        let module_path = if module_path.is_empty() {
-            render_name(item).to_string()
-        } else {
-            format!("{}::{}", module_path, render_name(item))
-        };
+    fn render_module(&mut self, path_prefix: &str, item: &Item) -> String {
+        let path_prefix = ppush(path_prefix, &render_name(item));
         let mut output = format!("{}mod {} {{\n", render_vis(item), render_name(item));
         // Add module doc comment if present
-        if self.should_module_doc(&module_path, item) {
+        if self.should_module_doc(&path_prefix, item) {
             if let Some(docs) = &item.docs {
                 for line in docs.lines() {
                     output.push_str(&format!("    //! {}\n", line));
@@ -683,7 +688,7 @@ impl<'a, 'b> RenderState<'a, 'b> {
 
         for item_id in &module.items {
             let item = must_get(self.crate_data, item_id);
-            output.push_str(&self.render_item(&module_path, item, false));
+            output.push_str(&self.render_item(&path_prefix, item, false));
         }
 
         output.push_str("}\n\n");

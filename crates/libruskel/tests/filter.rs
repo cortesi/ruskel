@@ -156,7 +156,7 @@ gen_tests! {
                                 MyStruct
                             }
                         }
-                        
+
                         pub fn other_function() {}
                     }
                 "#,
@@ -165,6 +165,40 @@ gen_tests! {
                         /// MyStruct docs
                         pub struct MyStruct;
                         
+                        impl MyStruct {
+                            pub fn new() -> Self {}
+                        }
+                    }
+                "#
+            }
+        }
+        rt_custom {
+            filter_impl_fn: {
+                // Test filtering a struct with its impl
+                // Module docs should not be rendered when filtering a struct
+                renderer: Renderer::default().with_filter("my_module::MyStruct::new"),
+                input: r#"
+                    pub mod my_module {
+                        //! My module docs
+                        /// MyStruct docs
+                        pub struct MyStruct;
+
+                        impl MyStruct {
+                            pub fn new() -> Self {
+                                MyStruct
+                            }
+
+                            pub fn excluded() -> Self {
+                                MyStruct
+                            }
+                        }
+                    }
+                "#,
+                output: r#"
+                    pub mod my_module {
+                        /// MyStruct docs
+                        pub struct MyStruct;
+
                         impl MyStruct {
                             pub fn new() -> Self {}
                         }

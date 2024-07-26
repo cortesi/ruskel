@@ -41,7 +41,7 @@ impl Ruskel {
     /// Creates a new Ruskel instance for the specified target. A target specification is an
     /// entrypoint, followed by an optional path, whith components separated by '::'.
     ///
-    ///   entrypoint[::path]
+    ///   entrypoint::path
     ///
     /// A entrypoint can be:
     ///
