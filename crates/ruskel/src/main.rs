@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// Target to generate - a directory, file path, or a module name
-    #[arg(default_value = ".")]
+    #[arg(default_value = "./")]
     target: String,
 
     /// Output raw JSON instead of rendered Rust code

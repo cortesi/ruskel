@@ -70,6 +70,12 @@ impl CargoPath {
     }
 
     pub fn find_dependency(&self, dependency: &str, offline: bool) -> Result<Option<CargoPath>> {
+        println!(
+            "Finding dependency: {} in {} offline={}",
+            dependency,
+            self.manifest_path().display(),
+            offline,
+        );
         let mut config = GlobalContext::default().map_err(convert_cargo_error)?;
         config
             .configure(
@@ -261,10 +267,10 @@ impl ResolvedTarget {
                         if let Some(dependency) = root.find_dependency(&name, offline)? {
                             Ok(ResolvedTarget::new(dependency, &target.path))
                         } else {
-                            Self::from_dummy_crate(&name, version, &target.path)
+                            Self::from_dummy_crate(&name, version, &target.path, offline)
                         }
                     }
-                    None => Self::from_dummy_crate(&name, version, &target.path),
+                    None => Self::from_dummy_crate(&name, version, &target.path, offline),
                 }
             }
         }
@@ -319,12 +325,17 @@ impl ResolvedTarget {
         Ok(ResolvedTarget::new(cargo_path, &components))
     }
 
-    fn from_dummy_crate(name: &str, version: Option<Version>, path: &[String]) -> Result<Self> {
+    fn from_dummy_crate(
+        name: &str,
+        version: Option<Version>,
+        path: &[String],
+        offline: bool,
+    ) -> Result<Self> {
         let version_str = version.map(|v| v.to_string());
         let dummy = create_dummy_crate(name, version_str, None)?;
 
         // Find the dependency within the dummy crate
-        if let Some(dependency_path) = dummy.find_dependency(name, true)? {
+        if let Some(dependency_path) = dummy.find_dependency(name, offline)? {
             Ok(ResolvedTarget::new(dependency_path, path))
         } else {
             Err(RuskelError::ModuleNotFound(format!(
@@ -345,7 +356,7 @@ pub fn resolve_target(target_str: &str, offline: bool) -> Result<ResolvedTarget>
         Entrypoint::Name { name, version } => {
             if version.is_some() {
                 // If a version is specified, always create a dummy package
-                ResolvedTarget::from_dummy_crate(name, version.clone(), &target.path)
+                ResolvedTarget::from_dummy_crate(name, version.clone(), &target.path, offline)
             } else {
                 let resolved = ResolvedTarget::from_target(target.clone(), offline)?;
                 if !resolved.filter.is_empty() {
