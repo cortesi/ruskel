@@ -70,12 +70,6 @@ impl CargoPath {
     }
 
     pub fn find_dependency(&self, dependency: &str, offline: bool) -> Result<Option<CargoPath>> {
-        println!(
-            "Finding dependency: {} in {} offline={}",
-            dependency,
-            self.manifest_path().display(),
-            offline,
-        );
         let mut config = GlobalContext::default().map_err(convert_cargo_error)?;
         config
             .configure(
