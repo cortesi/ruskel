@@ -6,6 +6,7 @@ description = "Generates skeletonized outlines of Rust crates"
 license = "MIT"
 repository = "https://github.com/cortesi/ruskel"
 readme = "README.md"
+keywords = ["docs", "documentation", "outline", "cli"]
 
 [workspace]
 resolver = "2"

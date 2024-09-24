@@ -10,11 +10,11 @@ readme.workspace = true
 
 [dependencies]
 anyhow = "1.0.86"
-cargo = "0.80.0"
+cargo = "0.82.0"
 cargo_toml = "0.20.3"
 rust-format = "0.3.4"
 rustdoc-json = "0.9.1"
-rustdoc-types = "0.28.0"
+rustdoc-types = "0.29.0"
 semver = "1.0.23"
 serde_json = "1.0.120"
 syntect = { version = "5.2.0", default-features = false, features = ["default-syntaxes", "default-themes", "parsing", "regex-onig"] }
