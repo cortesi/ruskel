@@ -4,17 +4,14 @@
 [![Documentation](https://docs.rs/libruskel/badge.svg)](https://docs.rs/libruskel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Ruskel generates skeletonized outlines of Rust crates. It renders a
-single-page representation of a crate's public API with all implementation
-omitted, while still producing syntactically correct Rust. 
+Ruskel renders a single-page representation of a crate's public API with all
+implementation omitted, while still producing syntactically correct Rust. 
 
-Ruskel has two main uses:
+It has two main uses:
 
 - To provide quick access to Rust documentation from the command line.
 - To export the full public API of a crate as a single file to pass to LLMs and
   other tools.
-
-
 
 
 ## Features
@@ -59,6 +56,7 @@ Where `TARGET` can be a directory, file path, or a module name. If omitted, it d
 - `--no-page`: Disable paging
 - `--offline`: Don't fetch from crates.io
 - `--private`: Render private items
+- `--quiet`: Suppress output while building docs
 
 For full details, see:
 
