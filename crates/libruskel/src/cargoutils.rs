@@ -38,6 +38,8 @@ impl CargoPath {
             .no_default_features(no_default_features)
             .all_features(all_features)
             .features(&features)
+            .quiet(true)
+            .silent(true)
             .build()
             .map_err(|e| RuskelError::Generate(e.to_string()))?;
         let json_content = fs::read_to_string(&json_path)?;

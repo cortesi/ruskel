@@ -1,4 +1,8 @@
 
+# v0.0.7
+
+- Adapt to rustdoc JSON format changes
+
 # v0.0.6
 
 - More robust output paging
