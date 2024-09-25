@@ -129,22 +129,25 @@ impl Ruskel {
     }
 
     /// Returns the parsed representation of the crate's API.
-    pub fn inspect(&self) -> Result<Crate> {
+    /// silent: if true, no output is printed
+    pub fn inspect(&self, silent: bool) -> Result<Crate> {
         let rt = resolve_target(&self.target, self.offline)?;
         rt.read_crate(
             self.no_default_features,
             self.all_features,
             self.features.clone(),
+            silent,
         )
     }
 
     /// Generates a skeletonized version of the crate as a string of Rust code.
-    pub fn render(&self, auto_impls: bool, private_items: bool) -> Result<String> {
+    pub fn render(&self, auto_impls: bool, private_items: bool, silent: bool) -> Result<String> {
         let rt = resolve_target(&self.target, self.offline)?;
         let crate_data = rt.read_crate(
             self.no_default_features,
             self.all_features,
             self.features.clone(),
+            silent,
         )?;
 
         let renderer = Renderer::default()
@@ -163,6 +166,6 @@ impl Ruskel {
 
     /// Returns a pretty-printed version of the crate's JSON representation.
     pub fn raw_json(&self) -> Result<String> {
-        Ok(serde_json::to_string_pretty(&self.inspect()?)?)
+        Ok(serde_json::to_string_pretty(&self.inspect(true)?)?)
     }
 }

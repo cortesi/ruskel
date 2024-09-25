@@ -30,6 +30,7 @@ impl CargoPath {
         no_default_features: bool,
         all_features: bool,
         features: Vec<String>,
+        silent: bool,
     ) -> Result<Crate> {
         let json_path = rustdoc_json::Builder::default()
             .toolchain("nightly")
@@ -38,8 +39,8 @@ impl CargoPath {
             .no_default_features(no_default_features)
             .all_features(all_features)
             .features(&features)
-            .quiet(true)
-            .silent(true)
+            .quiet(silent)
+            .silent(silent)
             .build()
             .map_err(|e| RuskelError::Generate(e.to_string()))?;
         let json_content = fs::read_to_string(&json_path)?;
@@ -216,9 +217,10 @@ impl ResolvedTarget {
         no_default_features: bool,
         all_features: bool,
         features: Vec<String>,
+        silent: bool,
     ) -> Result<Crate> {
         self.package_path
-            .read_crate(no_default_features, all_features, features)
+            .read_crate(no_default_features, all_features, features, silent)
     }
 
     pub fn from_target(target: Target, offline: bool) -> Result<Self> {

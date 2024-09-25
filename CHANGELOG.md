@@ -1,6 +1,7 @@
 
 # v0.0.7
 
+- Add --quiet flag, and corresponding arguments to libruskel
 - Adapt to rustdoc JSON format changes
 
 # v0.0.6

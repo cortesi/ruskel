@@ -85,7 +85,7 @@ pub fn render(renderer: Renderer, source: &str, expected_output: &str, is_proc_m
 
     // Parse the crate using Ruskel
     let ruskel = Ruskel::new(temp_dir.path().to_str().unwrap()).with_offline(true);
-    let crate_data = ruskel.inspect().unwrap();
+    let crate_data = ruskel.inspect(true).unwrap();
 
     // Render the crate data
     let normalized_rendered = normalize_whitespace(&strip_module_declaration(
@@ -153,7 +153,7 @@ pub fn render_err(renderer: Renderer, source: &str, expected_error: &str) {
 
     // Parse the crate using Ruskel
     let ruskel = Ruskel::new(temp_dir.path().to_str().unwrap()).with_offline(true);
-    let crate_data = ruskel.inspect().unwrap();
+    let crate_data = ruskel.inspect(true).unwrap();
 
     // Render the crate data
     let result = renderer.render(&crate_data);

@@ -49,6 +49,10 @@ struct Cli {
     /// Enable offline mode, ensuring Cargo will not use the network
     #[arg(long, default_value_t = false)]
     offline: bool,
+
+    /// Enable quiet mode, disabling output while rendering docs
+    #[arg(long, default_value_t = false)]
+    quiet: bool,
 }
 
 fn main() {
@@ -77,7 +81,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let output = if cli.raw {
         rs.raw_json()?
     } else {
-        rs.render(cli.auto_impls, cli.private)?
+        rs.render(cli.auto_impls, cli.private, cli.quiet)?
     };
 
     if io::stdout().is_terminal() && !cli.no_page {
