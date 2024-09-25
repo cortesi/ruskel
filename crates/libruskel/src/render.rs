@@ -110,7 +110,7 @@ impl<'a, 'b> RenderState<'a, 'b> {
     }
 
     fn should_render_impl(&self, impl_: &Impl) -> bool {
-        if impl_.synthetic && !self.config.render_auto_impls {
+        if impl_.is_synthetic && !self.config.render_auto_impls {
             return false;
         }
 
@@ -228,7 +228,7 @@ impl<'a, 'b> RenderState<'a, 'b> {
             ItemEnum::Struct(_) => self.render_struct(path_prefix, item),
             ItemEnum::Enum(_) => self.render_enum(item),
             ItemEnum::Trait(_) => self.render_trait(item),
-            ItemEnum::Import(_) => self.render_import(path_prefix, item),
+            ItemEnum::Use(_) => self.render_use(path_prefix, item),
             ItemEnum::Function(_) => self.render_function(item, false),
             ItemEnum::Constant { .. } => self.render_constant(item),
             ItemEnum::TypeAlias(_) => self.render_type_alias(item),
@@ -313,10 +313,10 @@ impl<'a, 'b> RenderState<'a, 'b> {
         output
     }
 
-    fn render_import(&mut self, path_prefix: &str, item: &Item) -> String {
-        let import = extract_item!(item, ItemEnum::Import);
+    fn render_use(&mut self, path_prefix: &str, item: &Item) -> String {
+        let import = extract_item!(item, ItemEnum::Use);
 
-        if import.glob {
+        if import.is_glob {
             if let Some(source_id) = &import.id {
                 if let Some(source_item) = self.crate_data.index.get(source_id) {
                     let module = extract_item!(source_item, ItemEnum::Module);
@@ -531,8 +531,8 @@ impl<'a, 'b> RenderState<'a, 'b> {
     fn render_trait_item(&self, item: &Item) -> String {
         match &item.inner {
             ItemEnum::Function(_) => self.render_function(item, true),
-            ItemEnum::AssocConst { type_, default } => {
-                let default_str = default
+            ItemEnum::AssocConst { type_, value } => {
+                let default_str = value
                     .as_ref()
                     .map(|d| format!(" = {}", d))
                     .unwrap_or_default();
@@ -546,7 +546,7 @@ impl<'a, 'b> RenderState<'a, 'b> {
             ItemEnum::AssocType {
                 bounds,
                 generics,
-                default,
+                type_,
             } => {
                 let bounds_str = if !bounds.is_empty() {
                     format!(": {}", render_generic_bounds(bounds))
@@ -554,7 +554,7 @@ impl<'a, 'b> RenderState<'a, 'b> {
                     String::new()
                 };
                 let generics_str = render_generics(generics);
-                let default_str = default
+                let default_str = type_
                     .as_ref()
                     .map(|d| format!(" = {}", render_type(d)))
                     .unwrap_or_default();
@@ -701,13 +701,13 @@ impl<'a, 'b> RenderState<'a, 'b> {
 
         // Handle const, async, and unsafe keywords in the correct order
         let mut prefixes = Vec::new();
-        if function.header.const_ {
+        if function.header.is_const {
             prefixes.push("const");
         }
-        if function.header.async_ {
+        if function.header.is_async {
             prefixes.push("async");
         }
-        if function.header.unsafe_ {
+        if function.header.is_unsafe {
             prefixes.push("unsafe");
         }
 
@@ -717,8 +717,8 @@ impl<'a, 'b> RenderState<'a, 'b> {
             prefixes.join(" "),
             render_name(item),
             render_generics(&function.generics),
-            render_function_args(&function.decl),
-            render_return_type(&function.decl),
+            render_function_args(&function.sig),
+            render_return_type(&function.sig),
             render_where_clause(&function.generics)
         ));
 

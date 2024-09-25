@@ -1,7 +1,7 @@
 use rustdoc_types::{
-    FnDecl, FunctionPointer, GenericArg, GenericArgs, GenericBound, GenericParamDef,
-    GenericParamDefKind, Generics, Item, ItemEnum, Path, PolyTrait, Term, TraitBoundModifier, Type,
-    TypeBinding, TypeBindingKind, Visibility, WherePredicate,
+    AssocItemConstraint, AssocItemConstraintKind, FunctionPointer, FunctionSignature, GenericArg,
+    GenericArgs, GenericBound, GenericParamDef, GenericParamDefKind, Generics, Item, ItemEnum,
+    Path, PolyTrait, Term, TraitBoundModifier, Type, Visibility, WherePredicate,
 };
 
 macro_rules! extract_item {
@@ -86,9 +86,9 @@ pub fn render_generic_param_def(param: &GenericParamDef) -> Option<String> {
         GenericParamDefKind::Type {
             bounds,
             default,
-            synthetic,
+            is_synthetic,
         } => {
-            if *synthetic {
+            if *is_synthetic {
                 None
             } else {
                 let bounds = if bounds.is_empty() {
@@ -200,20 +200,20 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
             format!("impl {}", render_generic_bounds(bounds))
         }
         Type::Infer => "_".to_string(),
-        Type::RawPointer { mutable, type_ } => {
-            let mutability = if *mutable { "mut" } else { "const" };
+        Type::RawPointer { is_mutable, type_ } => {
+            let mutability = if *is_mutable { "mut" } else { "const" };
             format!("*{} {}", mutability, render_type_inner(type_, true))
         }
         Type::BorrowedRef {
             lifetime,
-            mutable,
+            is_mutable,
             type_,
         } => {
             let lifetime = lifetime
                 .as_ref()
                 .map(|lt| format!("{} ", lt))
                 .unwrap_or_default();
-            let mutability = if *mutable { "mut " } else { "" };
+            let mutability = if *is_mutable { "mut " } else { "" };
             format!(
                 "&{}{}{}",
                 lifetime,
@@ -283,18 +283,18 @@ pub fn render_path(path: &Path) -> String {
 }
 
 fn render_function_pointer(f: &FunctionPointer) -> String {
-    let args = render_function_args(&f.decl);
-    format!("fn({}) {}", args, render_return_type(&f.decl))
+    let args = render_function_args(&f.sig);
+    format!("fn({}) {}", args, render_return_type(&f.sig))
 }
 
-pub fn render_function_args(decl: &FnDecl) -> String {
+pub fn render_function_args(decl: &FunctionSignature) -> String {
     decl.inputs
         .iter()
         .map(|(name, ty)| {
             if name == "self" {
                 match ty {
-                    Type::BorrowedRef { mutable, .. } => {
-                        if *mutable {
+                    Type::BorrowedRef { is_mutable, .. } => {
+                        if *is_mutable {
                             "&mut self".to_string()
                         } else {
                             "&self".to_string()
@@ -324,7 +324,7 @@ pub fn render_function_args(decl: &FnDecl) -> String {
         .join(", ")
 }
 
-pub fn render_return_type(decl: &FnDecl) -> String {
+pub fn render_return_type(decl: &FunctionSignature) -> String {
     match &decl.output {
         Some(ty) => format!("-> {}", render_type(ty)),
         None => String::new(),
@@ -333,8 +333,8 @@ pub fn render_return_type(decl: &FnDecl) -> String {
 
 pub fn render_generic_args(args: &GenericArgs) -> String {
     match args {
-        GenericArgs::AngleBracketed { args, bindings } => {
-            if args.is_empty() && bindings.is_empty() {
+        GenericArgs::AngleBracketed { args, constraints } => {
+            if args.is_empty() && constraints.is_empty() {
                 String::new()
             } else {
                 let args = args
@@ -342,9 +342,9 @@ pub fn render_generic_args(args: &GenericArgs) -> String {
                     .map(render_generic_arg)
                     .collect::<Vec<_>>()
                     .join(", ");
-                let bindings = bindings
+                let bindings = constraints
                     .iter()
-                    .map(render_type_binding)
+                    .map(render_type_constraint)
                     .collect::<Vec<_>>()
                     .join(", ");
                 let all = if args.is_empty() {
@@ -389,10 +389,10 @@ pub fn render_generic_bounds(bounds: &[GenericBound]) -> String {
         .join(" + ")
 }
 
-fn render_type_binding(binding: &TypeBinding) -> String {
-    let binding_kind = match &binding.binding {
-        TypeBindingKind::Equality(term) => format!(" = {}", render_term(term)),
-        TypeBindingKind::Constraint(bounds) => {
+fn render_type_constraint(constraint: &AssocItemConstraint) -> String {
+    let binding_kind = match &constraint.binding {
+        AssocItemConstraintKind::Equality(term) => format!(" = {}", render_term(term)),
+        AssocItemConstraintKind::Constraint(bounds) => {
             let bounds = bounds
                 .iter()
                 .map(render_generic_bound)
@@ -401,7 +401,7 @@ fn render_type_binding(binding: &TypeBinding) -> String {
             format!(": {}", bounds)
         }
     };
-    format!("{}{}", binding.name, binding_kind)
+    format!("{}{}", constraint.name, binding_kind)
 }
 
 fn render_term(term: &Term) -> String {
@@ -434,7 +434,7 @@ pub fn render_where_predicate(pred: &WherePredicate) -> Option<String> {
             // Check if this is a synthetic type
             if let Type::Generic(_name) = type_ {
                 if generic_params.iter().any(|param| {
-                    matches!(&param.kind, GenericParamDefKind::Type { synthetic, .. } if *synthetic)
+                    matches!(&param.kind, GenericParamDefKind::Type { is_synthetic, .. } if *is_synthetic)
                 }) {
                     return None;
                 }
@@ -477,7 +477,7 @@ pub fn render_where_predicate(pred: &WherePredicate) -> Option<String> {
 }
 
 pub fn render_associated_type(item: &Item) -> String {
-    let (bounds, default) = extract_item!(item, ItemEnum::AssocType { bounds, default });
+    let (bounds, default) = extract_item!(item, ItemEnum::AssocType { bounds, type_ });
 
     let bounds_str = if !bounds.is_empty() {
         format!(": {}", render_generic_bounds(bounds))
