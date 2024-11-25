@@ -27,7 +27,7 @@ It has two main uses:
 
 ## Command
 
-Here is the output of ruskel rendering the skeleton for its own library:
+Here is an example of of ruskel rendering the skeleton for its own library.
 
 ```bash
 ruskel libruskel
