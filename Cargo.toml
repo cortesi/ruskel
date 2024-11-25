@@ -13,4 +13,4 @@ resolver = "2"
 members = ["crates/*"]
 
 [workspace.dependencies]
-libruskel = { version = "0.0.7", path = "crates/libruskel" }
+libruskel = { version = "0.0.8", path = "crates/libruskel" }
