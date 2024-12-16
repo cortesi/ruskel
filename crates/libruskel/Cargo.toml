@@ -10,16 +10,16 @@ readme.workspace = true
 
 [dependencies]
 anyhow = "1.0.86"
-cargo = "0.83.0"
-cargo_toml = "0.20.3"
+cargo = "0.84.0"
+cargo_toml = "0.21.0"
 rust-format = "0.3.4"
 rustdoc-json = "0.9.1"
-rustdoc-types = "0.32.2"
+rustdoc-types = "0.33.0"
 semver = "1.0.23"
 serde_json = "1.0.120"
 syntect = { version = "5.2.0", default-features = false, features = ["default-syntaxes", "default-themes", "parsing", "regex-onig"] }
 tempfile = "3.10.1"
-thiserror = "1.0.61"
+thiserror = "2.0.7"
 
 [dev-dependencies]
 pretty_assertions = "1.4.0"
