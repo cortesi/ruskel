@@ -34,13 +34,9 @@ struct Cli {
     #[arg(long, value_delimiter = ',')]
     features: Vec<String>,
 
-    /// Enable syntax highlighting
-    #[arg(long, default_value_t = false)]
-    highlight: bool,
-
-    /// Disable syntax highlighting
-    #[arg(long, default_value_t = false, conflicts_with = "highlight")]
-    no_highlight: bool,
+    /// Colorize output
+    #[arg(long, default_value = "auto", value_parser = ["auto", "always", "never"], env = "RUSKEL_COLOR")]
+    color: String,
 
     /// Disable paging
     #[arg(long, default_value_t = false)]
@@ -65,10 +61,11 @@ fn main() {
 }
 
 fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
-    let should_highlight = if cli.no_highlight {
-        false
-    } else {
-        cli.highlight || io::stdout().is_terminal()
+    let should_highlight = match cli.color.as_str() {
+        "never" => false,
+        "always" => true,
+        "auto" => io::stdout().is_terminal(),
+        _ => unreachable!(),
     };
 
     let rs = Ruskel::new(&cli.target)

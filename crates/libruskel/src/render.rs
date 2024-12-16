@@ -747,4 +747,3 @@ impl RenderState<'_, '_> {
         output
     }
 }
-
