@@ -6,6 +6,53 @@ use rustdoc_types::{
 use crate::crateutils::*;
 use crate::error::{Result, RuskelError};
 
+// List of traits that we want to render inline, above a struct declaration
+const INLINE_TRAITS: &[&str] = &[
+    "Clone",
+    "Send",
+    "Sync",
+    "PartialEq",
+    "Eq",
+    "PartialOrd",
+    "Ord",
+    "Hash",
+    "Default",
+    // These are not built-in but are "well known" enough to treat specially
+    "Serialize",
+    "Deserialize",
+];
+
+// List of traits that we don't want to render by default
+const FILTERED_TRAITS: &[&str] = &[
+    "Any",
+    "Send",
+    "Sync",
+    "Unpin",
+    "UnwindSafe",
+    "RefUnwindSafe",
+    "Borrow",
+    "BorrowMut",
+    "From",
+    "Into",
+    "TryFrom",
+    "TryInto",
+    "AsRef",
+    "AsMut",
+    "Default",
+    "Debug",
+    "PartialEq",
+    "Eq",
+    "PartialOrd",
+    "Ord",
+    "Hash",
+    "Deref",
+    "DerefMut",
+    "Drop",
+    "IntoIterator",
+    "CloneToUninit",
+    "ToOwned",
+];
+
 fn must_get<'a>(crate_data: &'a Crate, id: &Id) -> &'a Item {
     crate_data.index.get(id).unwrap()
 }
@@ -93,7 +140,7 @@ impl Renderer {
     }
 }
 
-impl<'a, 'b> RenderState<'a, 'b> {
+impl RenderState<'_, '_> {
     pub fn render(&mut self) -> Result<String> {
         // The root item is always a module
         let output = self.render_item("", must_get(self.crate_data, &self.crate_data.root), false);
@@ -120,37 +167,6 @@ impl<'a, 'b> RenderState<'a, 'b> {
         }
 
         if !self.config.render_auto_impls {
-            // List of traits that we don't want to render by default
-            const FILTERED_TRAITS: &[&str] = &[
-                "Any",
-                "Send",
-                "Sync",
-                "Unpin",
-                "UnwindSafe",
-                "RefUnwindSafe",
-                "Borrow",
-                "BorrowMut",
-                "From",
-                "Into",
-                "TryFrom",
-                "TryInto",
-                "AsRef",
-                "AsMut",
-                "Default",
-                "Debug",
-                "PartialEq",
-                "Eq",
-                "PartialOrd",
-                "Ord",
-                "Hash",
-                "Deref",
-                "DerefMut",
-                "Drop",
-                "IntoIterator",
-                "CloneToUninit",
-                "ToOwned",
-            ];
-
             if let Some(trait_path) = &impl_.trait_ {
                 let trait_name = trait_path
                     .name
@@ -356,10 +372,6 @@ impl<'a, 'b> RenderState<'a, 'b> {
     fn render_impl(&mut self, path_prefix: &str, item: &Item) -> String {
         let mut output = docs(item);
         let impl_ = extract_item!(item, ItemEnum::Impl);
-
-        if !self.should_render_impl(impl_) {
-            return String::new();
-        }
 
         if let Some(trait_) = &impl_.trait_ {
             if let Some(trait_item) = self.crate_data.index.get(&trait_.id) {
