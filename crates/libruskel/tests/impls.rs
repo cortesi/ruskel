@@ -125,28 +125,45 @@ gen_tests! {
                 }
             "#
         }
-        idemp {
-            deserialize: r#"
-            pub trait Deserialize<'de>: Sized {
-                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-                where
-                    D: Deserializer<'de>;
-            }
+        rt {
+            deserialize: {
+                input:
+                    r#"
+                    pub trait Deserialize<'de>: Sized {
+                        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                        where
+                            D: Deserializer<'de>;
+                    }
 
-            pub trait Deserializer<'de>: Sized {
-                type Error;
-            }
+                    pub trait Deserializer<'de>: Sized {
+                        type Error;
+                    }
 
-            pub struct Message;
+                    pub struct Message;
 
-            impl<'de> Deserialize<'de> for Message {
-                fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-                where
-                    D: Deserializer<'de>
-                {
-                }
+                    impl<'de> Deserialize<'de> for Message {
+                        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                        where
+                            D: Deserializer<'de>
+                        {
+                        }
+                    }
+                "#,
+                output: r#"
+                    pub trait Deserialize<'de>: Sized {
+                        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+                        where
+                            D: Deserializer<'de>;
+                    }
+
+                    pub trait Deserializer<'de>: Sized {
+                        type Error;
+                    }
+
+                    #[derive(Deserialize)]
+                    pub struct Message;
+                "#
             }
-            "#
         }
         // FIXME: This appears to be a bug in rustdoc - unsafe is not set on the unsafe impl block.
         rt {
@@ -255,6 +272,7 @@ gen_tests! {
                         fn trait_method(&self);
                     }
 
+                    #[derive(Clone)] 
                     pub struct MyStruct;
 
                     impl<T> MyTrait for MyStruct
@@ -263,9 +281,65 @@ gen_tests! {
                     {
                         fn trait_method(&self) {}
                     }
-
-                    impl Clone for MyStruct {
-                        fn clone(&self) -> Self {}
+                    impl<T> Borrow<T> for MyStruct
+                    where
+                        T: ?Sized,
+                    {
+                        fn borrow(&self) -> &T {}
+                    }
+                    impl<T> BorrowMut<T> for MyStruct
+                    where
+                        T: ?Sized,
+                    {
+                        fn borrow_mut(&mut self) -> &mut T {}
+                    }
+                    impl<T> CloneToUninit for MyStruct
+                    where
+                        T: Clone,
+                    {
+                        unsafe fn clone_to_uninit(&self, dst: *mut u8) {}
+                    }
+                    impl<T, U> Into<U> for MyStruct
+                    where
+                        U: From<T>,
+                    {
+                        /// Calls `U::from(self)`.
+                        ///
+                        /// That is, this conversion is whatever the implementation of
+                        /// <code>[From]&lt;T&gt; for U</code> chooses to do.
+                        fn into(self) -> U {}
+                    }
+                    impl<T> From<T> for MyStruct {
+                        /// Returns the argument unchanged.
+                        fn from(t: T) -> T {}
+                    }
+                    impl<T, U> TryInto<U> for MyStruct
+                    where
+                        U: TryFrom<T>,
+                    {
+                        type Error = <U as TryFrom<T>>::Error;
+                        fn try_into(self) -> Result<U, <U as TryFrom<T>>::Error> {}
+                    }
+                    impl<T, U> TryFrom<U> for MyStruct
+                    where
+                        U: Into<T>,
+                    {
+                        type Error = Infallible;
+                        fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> {}
+                    }
+                    impl<T> Any for MyStruct
+                    where
+                        T: 'static + ?Sized,
+                    {
+                        fn type_id(&self) -> TypeId {}
+                    }
+                    impl<T> ToOwned for MyStruct
+                    where
+                        T: Clone,
+                    {
+                        type Owned = T;
+                        fn to_owned(&self) -> T {}
+                        fn clone_into(&self, target: &mut T) {}
                     }
                 "#
             }

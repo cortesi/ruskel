@@ -6,51 +6,26 @@ use rustdoc_types::{
 use crate::crateutils::*;
 use crate::error::{Result, RuskelError};
 
-// List of traits that we want to render inline, above a struct declaration
-const INLINE_TRAITS: &[&str] = &[
+// List of traits that we want to render as a derive inline, above a struct declaration
+const DERIVE_TRAITS: &[&str] = &[
     "Clone",
-    "Send",
-    "Sync",
-    "PartialEq",
-    "Eq",
-    "PartialOrd",
-    "Ord",
-    "Hash",
+    "Copy",
+    "Debug",
     "Default",
+    "Display",
+    "Eq",
+    "Error",
+    "FromStr",
+    "Hash",
+    "Ord",
+    "PartialEq",
+    "PartialOrd",
+    "Send",
+    "StructuralPartialEq",
+    "Sync",
     // These are not built-in but are "well known" enough to treat specially
     "Serialize",
     "Deserialize",
-];
-
-// List of traits that we don't want to render by default
-const FILTERED_TRAITS: &[&str] = &[
-    "Any",
-    "Send",
-    "Sync",
-    "Unpin",
-    "UnwindSafe",
-    "RefUnwindSafe",
-    "Borrow",
-    "BorrowMut",
-    "From",
-    "Into",
-    "TryFrom",
-    "TryInto",
-    "AsRef",
-    "AsMut",
-    "Default",
-    "Debug",
-    "PartialEq",
-    "Eq",
-    "PartialOrd",
-    "Ord",
-    "Hash",
-    "Deref",
-    "DerefMut",
-    "Drop",
-    "IntoIterator",
-    "CloneToUninit",
-    "ToOwned",
 ];
 
 fn must_get<'a>(crate_data: &'a Crate, id: &Id) -> &'a Item {
@@ -156,8 +131,13 @@ impl RenderState<'_, '_> {
         self.config.render_private_items || matches!(item.visibility, Visibility::Public)
     }
 
+    /// Should an impl be rendered in full?
     fn should_render_impl(&self, impl_: &Impl) -> bool {
         if impl_.is_synthetic && !self.config.render_auto_impls {
+            return false;
+        }
+
+        if DERIVE_TRAITS.contains(&impl_.trait_.as_ref().map_or("", |t| t.name.as_str())) {
             return false;
         }
 
@@ -166,18 +146,18 @@ impl RenderState<'_, '_> {
             return false;
         }
 
-        if !self.config.render_auto_impls {
-            if let Some(trait_path) = &impl_.trait_ {
-                let trait_name = trait_path
-                    .name
-                    .split("::")
-                    .last()
-                    .unwrap_or(&trait_path.name);
-                if FILTERED_TRAITS.contains(&trait_name) && is_blanket {
-                    return false;
-                }
-            }
-        }
+        // if !self.config.render_auto_impls {
+        //     if let Some(trait_path) = &impl_.trait_ {
+        //         let trait_name = trait_path
+        //             .name
+        //             .split("::")
+        //             .last()
+        //             .unwrap_or(&trait_path.name);
+        //         if FILTERED_AUTO_TRAITS.contains(&trait_name) && is_blanket {
+        //             return false;
+        //         }
+        //     }
+        // }
 
         true
     }
@@ -587,6 +567,29 @@ impl RenderState<'_, '_> {
 
         let struct_ = extract_item!(item, ItemEnum::Struct);
 
+        // Collect inline traits
+        let mut inline_traits = Vec::new();
+        for impl_id in &struct_.impls {
+            let impl_item = must_get(self.crate_data, impl_id);
+            let impl_ = extract_item!(impl_item, ItemEnum::Impl);
+            if impl_.is_synthetic {
+                continue;
+            }
+
+            if let Some(trait_) = &impl_.trait_ {
+                if let Some(name) = trait_.name.split("::").last() {
+                    if DERIVE_TRAITS.contains(&name) {
+                        inline_traits.push(name);
+                    }
+                }
+            }
+        }
+
+        // Add derive attribute if we found any inline traits
+        if !inline_traits.is_empty() {
+            output.push_str(&format!("#[derive({})]\n", inline_traits.join(", ")));
+        }
+
         let generics = render_generics(&struct_.generics);
         let where_clause = render_where_clause(&struct_.generics);
 
@@ -744,3 +747,4 @@ impl RenderState<'_, '_> {
         output
     }
 }
+
