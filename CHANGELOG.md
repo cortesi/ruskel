@@ -1,3 +1,8 @@
+# v0.0.9
+
+- Simplify handling of auto traits - they are now all included or not 
+based on based on the `--auto-impls` flag.
+- Render some trait implementations as derives, rather than impl blocks.
 
 # v0.0.8
 
