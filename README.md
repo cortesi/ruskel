@@ -72,6 +72,12 @@ Basic usage:
 ruskel [TARGET]
 ```
 
+See the help output for all options:
+
+```sh
+ruskel --help
+```
+
 Ruskel has a flexible target specification that tries to do the right thing in
 a wide set of circumstances.
 
@@ -99,11 +105,6 @@ ruskel serde@1.0.0
 ```
 
 
-The canonical reference is the help output - see for all options:
-
-```sh
-ruskel --help
-```
 
 ## libruskel library
 
