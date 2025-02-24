@@ -1,3 +1,7 @@
+# v0.0.10
+
+- Update dependencies for Rust 1.85.0
+
 # v0.0.9
 
 - Simplify handling of auto traits - they are now all included or not 
