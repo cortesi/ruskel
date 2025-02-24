@@ -137,7 +137,7 @@ impl RenderState<'_, '_> {
             return false;
         }
 
-        if DERIVE_TRAITS.contains(&impl_.trait_.as_ref().map_or("", |t| t.name.as_str())) {
+        if DERIVE_TRAITS.contains(&impl_.trait_.as_ref().map_or("", |t| t.path.as_str())) {
             return false;
         }
 
@@ -577,7 +577,7 @@ impl RenderState<'_, '_> {
             }
 
             if let Some(trait_) = &impl_.trait_ {
-                if let Some(name) = trait_.name.split("::").last() {
+                if let Some(name) = trait_.path.split("::").last() {
                     if DERIVE_TRAITS.contains(&name) {
                         inline_traits.push(name);
                     }

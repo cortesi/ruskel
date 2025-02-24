@@ -159,7 +159,7 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
                 .as_ref()
                 .map(|args| render_generic_args(args))
                 .unwrap_or_default();
-            format!("{}{}", path.name.replace("$crate::", ""), args)
+            format!("{}{}", path.path.replace("$crate::", ""), args)
         }
         Type::DynTrait(dyn_trait) => {
             let traits = dyn_trait
@@ -279,7 +279,7 @@ pub fn render_path(path: &Path) -> String {
         .as_ref()
         .map(|args| render_generic_args(args))
         .unwrap_or_default();
-    format!("{}{}", path.name.replace("$crate::", ""), args)
+    format!("{}{}", path.path.replace("$crate::", ""), args)
 }
 
 fn render_function_pointer(f: &FunctionPointer) -> String {
@@ -301,7 +301,7 @@ pub fn render_function_args(decl: &FunctionSignature) -> String {
                         }
                     }
                     Type::ResolvedPath(path) => {
-                        if path.name == "Self" && path.args.is_none() {
+                        if path.path == "Self" && path.args.is_none() {
                             "self".to_string()
                         } else {
                             format!("self: {}", render_type(ty))
