@@ -2236,7 +2236,7 @@ dependencies = [
 
 [[package]]
 name = "libruskel"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "anyhow",
  "cargo",
@@ -2794,7 +2794,7 @@ dependencies = [
 
 [[package]]
 name = "ruskel"
-version = "0.0.9"
+version = "0.0.10"
 dependencies = [
  "clap",
  "libruskel",
