@@ -70,13 +70,9 @@ pub struct Target {
 impl Target {
     pub fn parse(spec: &str) -> Result<Self> {
         if spec.is_empty() {
-            return Ok(Target {
-                entrypoint: Entrypoint::Name {
-                    name: String::new(),
-                    version: None,
-                },
-                path: vec![],
-            });
+            return Err(RuskelError::InvalidTarget(
+                "Invalid target specification: empty string".to_string(),
+            ));
         }
 
         let parts: Vec<&str> = spec.split("::").collect();
@@ -130,16 +126,12 @@ mod tests {
     #[test]
     fn test_parse_targets() {
         let test_cases = vec![
-            // Empty target (valid)
+            // Empty target (invalid)
             (
                 "",
-                Ok(Target {
-                    entrypoint: Entrypoint::Name {
-                        name: "".to_string(),
-                        version: None,
-                    },
-                    path: vec![],
-                }),
+                Err(RuskelError::InvalidTarget(
+                    "Invalid target specification: empty string".to_string(),
+                )),
             ),
             // Double colon (::) should be treated as an error
             (
