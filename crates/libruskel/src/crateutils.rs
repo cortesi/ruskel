@@ -369,6 +369,7 @@ pub fn render_generic_args(args: &GenericArgs) -> String {
                 .unwrap_or_default();
             format!("({}){}", inputs, output)
         }
+        GenericArgs::ReturnTypeNotation => String::new(),
     }
 }
 

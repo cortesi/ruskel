@@ -297,7 +297,7 @@ gen_tests! {
                     where
                         T: Clone,
                     {
-                        unsafe fn clone_to_uninit(&self, dst: *mut u8) {}
+                        unsafe fn clone_to_uninit(&self, dest: *mut u8) {}
                     }
                     impl<T, U> Into<U> for MyStruct
                     where
