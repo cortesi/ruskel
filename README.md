@@ -1,5 +1,6 @@
 # ruskel
 
+![Discord](https://img.shields.io/discord/1381424110831145070?style=flat-square&logo=rust&link=https%3A%2F%2Fdiscord.gg%2FfHmRmuBDxF)
 [![Crates.io](https://img.shields.io/crates/v/libruskel.svg)](https://crates.io/crates/libruskel)
 [![Documentation](https://docs.rs/libruskel/badge.svg)](https://docs.rs/libruskel)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -42,6 +43,17 @@ pub mod termsize {
 ````
 
 
+---
+
+## Community
+
+Want to contribute? Have ideas or feature requests? Come tell us about it on
+[Discord](https://discord.gg/fHmRmuBDxF). 
+
+
+---
+
+
 ## Features
 
 - Generate a skeletonized view of any Rust crate
@@ -50,6 +62,7 @@ pub mod termsize {
 - Optionally include private items and auto-implemented traits
 - Support for custom feature flags and version specification
 
+---
 
 ## Installation
 
@@ -59,6 +72,7 @@ To install Ruskel, run:
 cargo install ruskel
 ```
 
+---
 
 ## Usage
 
@@ -105,6 +119,7 @@ ruskel serde@1.0.0
 ```
 
 
+---
 
 ## libruskel library
 
