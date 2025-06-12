@@ -69,7 +69,7 @@ impl CargoPath {
             .ok();
         manifest
             .as_ref()
-            .map_or(false, |m| m.workspace.is_some() && m.package.is_none())
+            .is_some_and(|m| m.workspace.is_some() && m.package.is_none())
     }
 
     pub fn find_dependency(&self, dependency: &str, offline: bool) -> Result<Option<CargoPath>> {
@@ -168,16 +168,15 @@ fn create_dummy_crate(
     writeln!(file, "// Dummy crate")?;
 
     let version_str = version.map_or("*".to_string(), |v| v.to_string());
-    let features_str = features.map_or(String::new(), |f| format!(", features = {:?}", f));
+    let features_str = features.map_or(String::new(), |f| format!(", features = {f:?}"));
     let manifest = format!(
         r#"[package]
         name = "dummy-crate"
         version = "0.1.0"
 
         [dependencies]
-        {} = {{ version = "{}"{}}}
-        "#,
-        dependency, version_str, features_str
+        {dependency} = {{ version = "{version_str}"{features_str}}}
+        "#
     );
     fs::write(manifest_path, manifest)?;
 
@@ -226,7 +225,7 @@ impl ResolvedTarget {
     pub fn from_target(target: Target, offline: bool) -> Result<Self> {
         match target.entrypoint {
             Entrypoint::Path(path) => {
-                if path.is_file() && path.extension().map_or(false, |ext| ext == "rs") {
+                if path.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
                     Self::from_rust_file(path, &target.path)
                 } else {
                     let cargo_path = CargoPath::Path(path.clone());
@@ -245,8 +244,7 @@ impl ResolvedTarget {
                                 Ok(ResolvedTarget::new(package.package_path, &target.path[1..]))
                             } else {
                                 Err(RuskelError::ModuleNotFound(format!(
-                                    "Package '{}' not found in workspace",
-                                    package_name
+                                    "Package '{package_name}' not found in workspace"
                                 )))
                             }
                         }
@@ -306,7 +304,7 @@ impl ResolvedTarget {
             .collect();
 
         // Remove "src" if it's the first component
-        if components.first().map_or(false, |c| c == "src") {
+        if components.first().is_some_and(|c| c == "src") {
             components.remove(0);
         }
 
@@ -337,8 +335,7 @@ impl ResolvedTarget {
             Ok(ResolvedTarget::new(dependency_path, path))
         } else {
             Err(RuskelError::ModuleNotFound(format!(
-                "Dependency '{}' not found in dummy crate",
-                name
+                "Dependency '{name}' not found in dummy crate"
             )))
         }
     }
@@ -643,7 +640,7 @@ mod tests {
                             );
                         }
                         CargoPath::TempDir(_) => {
-                            panic!("Test case {} failed: expected CargoPath::Path, got CargoPath::TempDir", i);
+                            panic!("Test case {i} failed: expected CargoPath::Path, got CargoPath::TempDir");
                         }
                     }
                     assert_eq!(
@@ -656,20 +653,16 @@ mod tests {
                 (Err(e), ExpectedResult::Error(expected_err)) => {
                     assert!(
                         e.to_string().contains(&expected_err),
-                        "Test case {} failed: error message mismatch. Expected '{}', got '{}'",
-                        i,
-                        expected_err,
-                        e
+                        "Test case {i} failed: error message mismatch. Expected '{expected_err}', got '{e}'"
                     );
                 }
                 (Ok(_), ExpectedResult::Error(expected_err)) => {
                     panic!(
-                        "Test case {} failed: expected error '{}', but got Ok",
-                        i, expected_err
+                        "Test case {i} failed: expected error '{expected_err}', but got Ok"
                     );
                 }
                 (Err(e), _) => {
-                    panic!("Test case {} failed: expected Ok, but got error '{}'", i, e);
+                    panic!("Test case {i} failed: expected Ok, but got error '{e}'");
                 }
             }
         }

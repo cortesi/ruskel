@@ -55,7 +55,7 @@ fn main() {
     let cli = Cli::parse();
 
     if let Err(e) = run(cli) {
-        eprintln!("{}", e);
+        eprintln!("{e}");
         std::process::exit(1);
     }
 }
@@ -84,7 +84,7 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     if io::stdout().is_terminal() && !cli.no_page {
         page_output(output)?;
     } else {
-        println!("{}", output);
+        println!("{output}");
     }
 
     Ok(())
@@ -97,7 +97,7 @@ fn page_output(content: String) -> Result<(), Box<dyn std::error::Error>> {
     let mut stdin = child
         .stdin
         .take()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::Other, "Failed to open stdin for pager"))?;
+        .ok_or_else(|| io::Error::other("Failed to open stdin for pager"))?;
 
     std::thread::spawn(move || {
         stdin.write_all(content.as_bytes()).ok();
@@ -109,13 +109,12 @@ fn page_output(content: String) -> Result<(), Box<dyn std::error::Error>> {
     match child.wait() {
         Ok(status) => {
             if !status.success() {
-                eprintln!("Pager exited with non-zero status: {}", status);
+                eprintln!("Pager exited with non-zero status: {status}");
             }
             Ok(())
         }
-        Err(e) => Err(Box::new(io::Error::new(
-            io::ErrorKind::Other,
-            format!("Failed to wait for pager: {}", e),
+        Err(e) => Err(Box::new(io::Error::other(
+            format!("Failed to wait for pager: {e}"),
         ))),
     }
 }

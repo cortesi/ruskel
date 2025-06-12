@@ -36,7 +36,7 @@ fn ppush(path_prefix: &str, name: &str) -> String {
     if path_prefix.is_empty() {
         name.to_string()
     } else {
-        format!("{}::{}", path_prefix, name)
+        format!("{path_prefix}::{name}")
     }
 }
 
@@ -255,7 +255,7 @@ impl RenderState<'_, '_> {
                         proc_macro.helpers.join(", ")
                     ));
                 } else {
-                    output.push_str(&format!("#[proc_macro_derive({})]\n", fn_name));
+                    output.push_str(&format!("#[proc_macro_derive({fn_name})]\n"));
                 }
             }
             MacroKind::Attr => {
@@ -274,8 +274,7 @@ impl RenderState<'_, '_> {
         };
 
         output.push_str(&format!(
-            "pub fn {}({}) -> {} {{}}\n",
-            fn_name, args, return_type
+            "pub fn {fn_name}({args}) -> {return_type} {{}}\n"
         ));
 
         output
@@ -287,7 +286,7 @@ impl RenderState<'_, '_> {
         let macro_def = extract_item!(item, ItemEnum::Macro);
         // Add #[macro_export] for public macros
         output.push_str("#[macro_export]\n");
-        output.push_str(&format!("{}\n", macro_def));
+        output.push_str(&format!("{macro_def}\n"));
 
         output
     }
@@ -366,7 +365,7 @@ impl RenderState<'_, '_> {
         let trait_part = if let Some(trait_) = &impl_.trait_ {
             let trait_path = render_path(trait_);
             if !trait_path.is_empty() {
-                format!("{} for ", trait_path)
+                format!("{trait_path} for ")
             } else {
                 String::new()
             }
@@ -383,7 +382,7 @@ impl RenderState<'_, '_> {
         ));
 
         if !where_clause.is_empty() {
-            output.push_str(&format!("\n{}", where_clause));
+            output.push_str(&format!("\n{where_clause}"));
         }
 
         output.push_str(" {\n");
@@ -464,7 +463,7 @@ impl RenderState<'_, '_> {
                     })
                     .collect::<Vec<_>>()
                     .join(", ");
-                output.push_str(&format!("({})", fields_str));
+                output.push_str(&format!("({fields_str})"));
             }
             VariantKind::Struct { fields, .. } => {
                 output.push_str(" {\n");
@@ -526,7 +525,7 @@ impl RenderState<'_, '_> {
             ItemEnum::AssocConst { type_, value } => {
                 let default_str = value
                     .as_ref()
-                    .map(|d| format!(" = {}", d))
+                    .map(|d| format!(" = {d}"))
                     .unwrap_or_default();
                 format!(
                     "const {}: {}{};\n",
@@ -693,7 +692,7 @@ impl RenderState<'_, '_> {
         if self.should_module_doc(&path_prefix, item) {
             if let Some(docs) = &item.docs {
                 for line in docs.lines() {
-                    output.push_str(&format!("    //! {}\n", line));
+                    output.push_str(&format!("    //! {line}\n"));
                 }
                 output.push('\n');
             }

@@ -25,7 +25,7 @@ pub fn docs(item: &Item) -> String {
     let mut output = String::new();
     if let Some(docs) = &item.docs {
         for line in docs.lines() {
-            output.push_str(&format!("/// {}\n", line));
+            output.push_str(&format!("/// {line}\n"));
         }
     }
     output
@@ -51,7 +51,7 @@ pub fn render_name(item: &Item) -> String {
         || "?".to_string(),
         |n| {
             if RESERVED_WORDS.contains(&n) {
-                format!("r#{}", n)
+                format!("r#{n}")
             } else {
                 n.to_string()
             }
@@ -81,7 +81,7 @@ pub fn render_generic_param_def(param: &GenericParamDef) -> Option<String> {
             } else {
                 format!(": {}", outlives.join(" + "))
             };
-            Some(format!("{}{}", param.name, outlives))
+            Some(format!("{}{outlives}", param.name))
         }
         GenericParamDefKind::Type {
             bounds,
@@ -107,19 +107,18 @@ pub fn render_generic_param_def(param: &GenericParamDef) -> Option<String> {
                     .as_ref()
                     .map(|ty| format!(" = {}", render_type(ty)))
                     .unwrap_or_default();
-                Some(format!("{}{}{}", param.name, bounds, default))
+                Some(format!("{}{bounds}{default}", param.name))
             }
         }
         GenericParamDefKind::Const { type_, default } => {
             let default = default
                 .as_ref()
-                .map(|expr| format!(" = {}", expr))
+                .map(|expr| format!(" = {expr}"))
                 .unwrap_or_default();
             Some(format!(
-                "const {}: {}{}",
+                "const {}: {}{default}",
                 param.name,
-                render_type(type_),
-                default
+                render_type(type_)
             ))
         }
     }
@@ -145,7 +144,7 @@ pub fn render_generic_bound(bound: &GenericBound) -> String {
                 trait_: trait_.clone(),
                 generic_params: generic_params.clone(),
             };
-            format!("{}{}", modifier, render_poly_trait(&poly_trait))
+            format!("{modifier}{}", render_poly_trait(&poly_trait))
         }
         GenericBound::Outlives(lifetime) => lifetime.clone(),
     }
@@ -171,12 +170,12 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
             let lifetime = dyn_trait
                 .lifetime
                 .as_ref()
-                .map(|lt| format!(" + {}", lt))
+                .map(|lt| format!(" + {lt}"))
                 .unwrap_or_default();
 
-            let inner = format!("dyn {}{}", traits, lifetime);
+            let inner = format!("dyn {traits}{lifetime}");
             if nested && dyn_trait.lifetime.is_some() {
-                format!("({})", inner)
+                format!("({inner})")
             } else {
                 inner
             }
@@ -190,11 +189,11 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
                 .map(|ty| render_type_inner(ty, true))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("({})", inner)
+            format!("({inner})")
         }
         Type::Slice(ty) => format!("[{}]", render_type_inner(ty, true)),
         Type::Array { type_, len } => {
-            format!("[{}; {}]", render_type_inner(type_, true), len)
+            format!("[{}; {len}]", render_type_inner(type_, true))
         }
         Type::ImplTrait(bounds) => {
             format!("impl {}", render_generic_bounds(bounds))
@@ -202,7 +201,7 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
         Type::Infer => "_".to_string(),
         Type::RawPointer { is_mutable, type_ } => {
             let mutability = if *is_mutable { "mut" } else { "const" };
-            format!("*{} {}", mutability, render_type_inner(type_, true))
+            format!("*{mutability} {}", render_type_inner(type_, true))
         }
         Type::BorrowedRef {
             lifetime,
@@ -211,13 +210,11 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
         } => {
             let lifetime = lifetime
                 .as_ref()
-                .map(|lt| format!("{} ", lt))
+                .map(|lt| format!("{lt} "))
                 .unwrap_or_default();
             let mutability = if *is_mutable { "mut " } else { "" };
             format!(
-                "&{}{}{}",
-                lifetime,
-                mutability,
+                "&{lifetime}{mutability}{}",
                 render_type_inner(type_, true)
             )
         }
@@ -234,14 +231,13 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
                 let trait_path = render_path(trait_);
                 if !trait_path.is_empty() {
                     format!(
-                        "<{} as {}>::{}{}",
-                        self_type_str, trait_path, name, args_str
+                        "<{self_type_str} as {trait_path}>::{name}{args_str}"
                     )
                 } else {
-                    format!("{}::{}{}", self_type_str, name, args_str)
+                    format!("{self_type_str}::{name}{args_str}")
                 }
             } else {
-                format!("{}::{}{}", self_type_str, name, args_str)
+                format!("{self_type_str}::{name}{args_str}")
             }
         }
         Type::Pat { .. } => "/* pattern */".to_string(),
@@ -270,7 +266,7 @@ pub fn render_poly_trait(poly_trait: &PolyTrait) -> String {
         }
     };
 
-    format!("{}{}", generic_params, render_path(&poly_trait.trait_))
+    format!("{generic_params}{}", render_path(&poly_trait.trait_))
 }
 
 pub fn render_path(path: &Path) -> String {
@@ -317,7 +313,7 @@ pub fn render_function_args(decl: &FunctionSignature) -> String {
                     _ => format!("self: {}", render_type(ty)),
                 }
             } else {
-                format!("{}: {}", name, render_type(ty))
+                format!("{name}: {}", render_type(ty))
             }
         })
         .collect::<Vec<_>>()
@@ -352,9 +348,9 @@ pub fn render_generic_args(args: &GenericArgs) -> String {
                 } else if bindings.is_empty() {
                     args
                 } else {
-                    format!("{}, {}", args, bindings)
+                    format!("{args}, {bindings}")
                 };
-                format!("<{}>", all)
+                format!("<{all}>")
             }
         }
         GenericArgs::Parenthesized { inputs, output } => {
@@ -367,7 +363,7 @@ pub fn render_generic_args(args: &GenericArgs) -> String {
                 .as_ref()
                 .map(|ty| format!(" -> {}", render_type(ty)))
                 .unwrap_or_default();
-            format!("({}){}", inputs, output)
+            format!("({inputs}){output}")
         }
         GenericArgs::ReturnTypeNotation => String::new(),
     }
@@ -399,10 +395,10 @@ fn render_type_constraint(constraint: &AssocItemConstraint) -> String {
                 .map(render_generic_bound)
                 .collect::<Vec<_>>()
                 .join(" + ");
-            format!(": {}", bounds)
+            format!(": {bounds}")
         }
     };
-    format!("{}{}", constraint.name, binding_kind)
+    format!("{}{binding_kind}", constraint.name)
 }
 
 fn render_term(term: &Term) -> String {
@@ -450,7 +446,7 @@ pub fn render_where_predicate(pred: &WherePredicate) -> Option<String> {
                 if params.is_empty() {
                     String::new()
                 } else {
-                    format!("for<{}> ", params)
+                    format!("for<{params}> ")
                 }
             } else {
                 String::new()
@@ -462,13 +458,13 @@ pub fn render_where_predicate(pred: &WherePredicate) -> Option<String> {
                 .collect::<Vec<_>>()
                 .join(" + ");
 
-            Some(format!("{}{}: {}", hrtb, render_type(type_), bounds_str))
+            Some(format!("{hrtb}{}: {bounds_str}", render_type(type_)))
         }
         WherePredicate::LifetimePredicate { lifetime, outlives } => {
             if outlives.is_empty() {
                 Some(lifetime.clone())
             } else {
-                Some(format!("{}: {}", lifetime, outlives.join(" + ")))
+                Some(format!("{lifetime}: {}", outlives.join(" + ")))
             }
         }
         WherePredicate::EqPredicate { lhs, rhs } => {
@@ -489,5 +485,5 @@ pub fn render_associated_type(item: &Item) -> String {
         .as_ref()
         .map(|d| format!(" = {}", render_type(d)))
         .unwrap_or_default();
-    format!("type {}{}{};\n", render_name(item), bounds_str, default_str)
+    format!("type {}{bounds_str}{default_str};\n", render_name(item))
 }

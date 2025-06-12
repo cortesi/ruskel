@@ -102,13 +102,12 @@ impl Target {
             let name_parts: Vec<&str> = entrypoint.split('@').collect();
             if name_parts.len() != 2 {
                 return Err(RuskelError::InvalidTarget(format!(
-                    "Invalid name specification: {}",
-                    entrypoint
+                    "Invalid name specification: {entrypoint}"
                 )));
             }
             let name = name_parts[0].to_string();
             let version = Version::parse(name_parts[1])
-                .map_err(|e| RuskelError::InvalidTarget(format!("Invalid version: {}", e)))?;
+                .map_err(|e| RuskelError::InvalidTarget(format!("Invalid version: {e}")))?;
             Entrypoint::Name {
                 name,
                 version: Some(version),
@@ -317,26 +316,22 @@ mod tests {
                 (Ok(target), Ok(expected_target)) => {
                     assert_eq!(
                         target, expected_target,
-                        "Mismatch for input '{}'. \nGot: {:?}\nExpected: {:?}",
-                        input, target, expected_target
+                        "Mismatch for input '{input}'. \nGot: {target:?}\nExpected: {expected_target:?}"
                     );
                 }
                 (Err(error), Err(expected_error)) => {
                     assert!(error.to_string().starts_with(&expected_error.to_string()),
-                    "Error mismatch for input '{}'. \nGot: {}\nExpected error starting with: {}",
-                    input, error, expected_error
+                    "Error mismatch for input '{input}'. \nGot: {error}\nExpected error starting with: {expected_error}"
                 );
                 }
                 (Ok(target), Err(expected_error)) => {
                     panic!(
-                    "Expected error but got success for input '{}'. \nGot: {:?}\nExpected error: {}",
-                    input, target, expected_error
+                    "Expected error but got success for input '{input}'. \nGot: {target:?}\nExpected error: {expected_error}"
                 );
                 }
                 (Err(error), Ok(expected_target)) => {
                     panic!(
-                    "Expected success but got error for input '{}'. \nGot error: {}\nExpected: {:?}",
-                    input, error, expected_target
+                    "Expected success but got error for input '{input}'. \nGot error: {error}\nExpected: {expected_target:?}"
                 );
                 }
             }
