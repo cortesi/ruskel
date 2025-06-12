@@ -273,9 +273,7 @@ impl RenderState<'_, '_> {
             _ => ("input: proc_macro::TokenStream", "proc_macro::TokenStream"),
         };
 
-        output.push_str(&format!(
-            "pub fn {fn_name}({args}) -> {return_type} {{}}\n"
-        ));
+        output.push_str(&format!("pub fn {fn_name}({args}) -> {return_type} {{}}\n"));
 
         output
     }

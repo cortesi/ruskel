@@ -88,9 +88,10 @@ impl Target {
         // Check for empty path components
         for (i, component) in path.iter().enumerate() {
             if component.is_empty() {
-                return Err(RuskelError::InvalidTarget(
-                    format!("Invalid target specification: empty path component at position {}", i + 1),
-                ));
+                return Err(RuskelError::InvalidTarget(format!(
+                    "Invalid target specification: empty path component at position {}",
+                    i + 1
+                )));
             }
         }
 

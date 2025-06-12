@@ -213,10 +213,7 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
                 .map(|lt| format!("{lt} "))
                 .unwrap_or_default();
             let mutability = if *is_mutable { "mut " } else { "" };
-            format!(
-                "&{lifetime}{mutability}{}",
-                render_type_inner(type_, true)
-            )
+            format!("&{lifetime}{mutability}{}", render_type_inner(type_, true))
         }
         Type::QualifiedPath {
             name,
@@ -230,9 +227,7 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
             if let Some(trait_) = trait_ {
                 let trait_path = render_path(trait_);
                 if !trait_path.is_empty() {
-                    format!(
-                        "<{self_type_str} as {trait_path}>::{name}{args_str}"
-                    )
+                    format!("<{self_type_str} as {trait_path}>::{name}{args_str}")
                 } else {
                     format!("{self_type_str}::{name}{args_str}")
                 }

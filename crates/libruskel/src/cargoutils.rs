@@ -151,6 +151,31 @@ impl CargoPath {
     }
 }
 
+fn generate_dummy_manifest(
+    dependency: &str,
+    version: Option<String>,
+    features: Option<&[&str]>,
+) -> String {
+    let version_str = version.map_or("*".to_string(), |v| v.to_string());
+    let features_str = features.map_or(String::new(), |f| {
+        let feature_list = f
+            .iter()
+            .map(|feat| format!("\"{}\"", feat))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(", features = [{}]", feature_list)
+    });
+    format!(
+        r#"[package]
+name = "dummy-crate"
+version = "0.1.0"
+
+[dependencies]
+{dependency} = {{ version = "{version_str}"{features_str} }}
+"#
+    )
+}
+
 fn create_dummy_crate(
     dependency: &str,
     version: Option<String>,
@@ -167,17 +192,7 @@ fn create_dummy_crate(
     let mut file = fs::File::create(lib_rs)?;
     writeln!(file, "// Dummy crate")?;
 
-    let version_str = version.map_or("*".to_string(), |v| v.to_string());
-    let features_str = features.map_or(String::new(), |f| format!(", features = {f:?}"));
-    let manifest = format!(
-        r#"[package]
-        name = "dummy-crate"
-        version = "0.1.0"
-
-        [dependencies]
-        {dependency} = {{ version = "{version_str}"{features_str}}}
-        "#
-    );
+    let manifest = generate_dummy_manifest(dependency, version, features);
     fs::write(manifest_path, manifest)?;
 
     Ok(CargoPath::TempDir(temp_dir))
@@ -395,6 +410,30 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_dummy_manifest() {
+        // Test without features
+        let manifest = generate_dummy_manifest("serde", None, None);
+        assert!(manifest.contains("serde = { version = \"*\" }"));
+        assert!(!manifest.contains("features"));
+
+        // Test with single feature
+        let manifest = generate_dummy_manifest("tokio", Some("1.0".to_string()), Some(&["rt"]));
+        assert!(manifest.contains("tokio = { version = \"1.0\", features = [\"rt\"] }"));
+
+        // Test with multiple features
+        let manifest = generate_dummy_manifest("tokio", None, Some(&["rt", "macros", "test-util"]));
+        assert!(manifest.contains(
+            "tokio = { version = \"*\", features = [\"rt\", \"macros\", \"test-util\"] }"
+        ));
+
+        // Validate TOML syntax by parsing
+        let manifest = generate_dummy_manifest("serde", None, Some(&["derive", "std"]));
+        // Just verify the manifest contains the expected strings, since we don't have toml crate in tests
+        assert!(manifest.contains("[dependencies]"));
+        assert!(manifest.contains("serde = { version = \"*\", features = [\"derive\", \"std\"] }"));
+    }
+
+    #[test]
     fn test_create_dummy_crate() -> Result<()> {
         let cargo_path = create_dummy_crate("serde", None, None)?;
         let path = cargo_path.as_path();
@@ -404,6 +443,22 @@ mod tests {
         let manifest_content = fs::read_to_string(path.join("Cargo.toml"))?;
         assert!(manifest_content.contains("[dependencies]"));
         assert!(manifest_content.contains("serde = { version = \"*\""));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_dummy_crate_with_features() -> Result<()> {
+        let cargo_path = create_dummy_crate("serde", Some("1.0".to_string()), Some(&["derive"]))?;
+        let path = cargo_path.as_path();
+
+        assert!(path.join("Cargo.toml").exists());
+
+        let manifest_content = fs::read_to_string(path.join("Cargo.toml"))?;
+
+        // Validate that the manifest contains the expected content
+        assert!(manifest_content.contains("[dependencies]"));
+        assert!(manifest_content.contains("serde = { version = \"1.0\", features = [\"derive\"] }"));
 
         Ok(())
     }
@@ -657,9 +712,7 @@ mod tests {
                     );
                 }
                 (Ok(_), ExpectedResult::Error(expected_err)) => {
-                    panic!(
-                        "Test case {i} failed: expected error '{expected_err}', but got Ok"
-                    );
+                    panic!("Test case {i} failed: expected error '{expected_err}', but got Ok");
                 }
                 (Err(e), _) => {
                     panic!("Test case {i} failed: expected Ok, but got error '{e}'");

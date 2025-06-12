@@ -113,8 +113,8 @@ fn page_output(content: String) -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
-        Err(e) => Err(Box::new(io::Error::other(
-            format!("Failed to wait for pager: {e}"),
-        ))),
+        Err(e) => Err(Box::new(io::Error::other(format!(
+            "Failed to wait for pager: {e}"
+        )))),
     }
 }
