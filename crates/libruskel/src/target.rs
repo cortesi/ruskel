@@ -85,6 +85,15 @@ impl Target {
 
         let (entrypoint, path) = parts.split_first().unwrap();
 
+        // Check for empty path components
+        for (i, component) in path.iter().enumerate() {
+            if component.is_empty() {
+                return Err(RuskelError::InvalidTarget(
+                    format!("Invalid target specification: empty path component at position {}", i + 1),
+                ));
+            }
+        }
+
         let entrypoint = if entrypoint.contains('/') || entrypoint.contains('\\') {
             // It's a file or directory path
             Entrypoint::Path(PathBuf::from(entrypoint))
@@ -279,6 +288,26 @@ mod tests {
             (
                 "serde@invalid",
                 Err(RuskelError::InvalidTarget("Invalid version: ".to_string())),
+            ),
+            // Trailing :: should be an error
+            (
+                "foo::",
+                Err(RuskelError::InvalidTarget(
+                    "Invalid target specification: empty path component at position 1".to_string(),
+                )),
+            ),
+            (
+                "foo::bar::",
+                Err(RuskelError::InvalidTarget(
+                    "Invalid target specification: empty path component at position 2".to_string(),
+                )),
+            ),
+            // Multiple consecutive :: should also be errors
+            (
+                "foo::::bar",
+                Err(RuskelError::InvalidTarget(
+                    "Invalid target specification: empty path component at position 1".to_string(),
+                )),
             ),
         ];
 
