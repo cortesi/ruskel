@@ -95,7 +95,7 @@ impl Target {
             }
         }
 
-        let entrypoint = if entrypoint.contains('/') || entrypoint.contains('\\') {
+        let entrypoint = if entrypoint.contains('/') || entrypoint.contains('\\') || *entrypoint == "." || *entrypoint == ".." {
             // It's a file or directory path
             Entrypoint::Path(PathBuf::from(entrypoint))
         } else if entrypoint.contains('@') {
@@ -308,6 +308,21 @@ mod tests {
                 Err(RuskelError::InvalidTarget(
                     "Invalid target specification: empty path component at position 1".to_string(),
                 )),
+            ),
+            // Current directory and parent directory
+            (
+                ".",
+                Ok(Target {
+                    entrypoint: Entrypoint::Path(PathBuf::from(".")),
+                    path: vec![],
+                }),
+            ),
+            (
+                "..",
+                Ok(Target {
+                    entrypoint: Entrypoint::Path(PathBuf::from("..")),
+                    path: vec![],
+                }),
             ),
         ];
 
