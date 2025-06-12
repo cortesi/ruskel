@@ -13,7 +13,7 @@ pub enum RuskelError {
     FileRead(#[from] std::io::Error),
 
     /// Indicates a failure in the code generation process.
-    #[error("Failed to generate: {0}")]
+    #[error("{0}")]
     Generate(String),
 
     /// Indicates an error occurred while executing a Cargo command.

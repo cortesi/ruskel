@@ -32,6 +32,21 @@ impl CargoPath {
         features: Vec<String>,
         silent: bool,
     ) -> Result<Crate> {
+        // First check if this crate has a library target by reading Cargo.toml
+        let manifest_path = self.manifest_path();
+        let manifest_content = fs::read_to_string(&manifest_path)?;
+        let manifest: cargo_toml::Manifest = cargo_toml::Manifest::from_str(&manifest_content)
+            .map_err(|e| RuskelError::ManifestParse(e.to_string()))?;
+
+        // Check if there's a [lib] section or if src/lib.rs exists
+        let has_lib = manifest.lib.is_some() || self.as_path().join("src/lib.rs").exists();
+
+        if !has_lib {
+            return Err(RuskelError::Generate(
+                "error: no library targets found in package".to_string(),
+            ));
+        }
+
         let json_path = rustdoc_json::Builder::default()
             .toolchain("nightly")
             .manifest_path(self.manifest_path())
@@ -42,7 +57,17 @@ impl CargoPath {
             .quiet(silent)
             .silent(silent)
             .build()
-            .map_err(|e| RuskelError::Generate(e.to_string()))?;
+            .map_err(|e| {
+                let err_msg = e.to_string();
+                if err_msg.contains("no library targets found in package") {
+                    // Return just the error without the "Failed to build" wrapper
+                    RuskelError::Generate("error: no library targets found in package".to_string())
+                } else if err_msg.contains("Failed to build rustdoc JSON") {
+                    RuskelError::Generate(err_msg)
+                } else {
+                    RuskelError::Generate(format!("Failed to build rustdoc JSON: {err_msg}"))
+                }
+            })?;
         let json_content = fs::read_to_string(&json_path)?;
         let crate_data: Crate = serde_json::from_str(&json_content)?;
         Ok(crate_data)
@@ -160,10 +185,10 @@ fn generate_dummy_manifest(
     let features_str = features.map_or(String::new(), |f| {
         let feature_list = f
             .iter()
-            .map(|feat| format!("\"{}\"", feat))
+            .map(|feat| format!("\"{feat}\""))
             .collect::<Vec<_>>()
             .join(", ");
-        format!(", features = [{}]", feature_list)
+        format!(", features = [{feature_list}]")
     });
     format!(
         r#"[package]
