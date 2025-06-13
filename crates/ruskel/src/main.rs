@@ -51,7 +51,27 @@ struct Cli {
     quiet: bool,
 }
 
+fn check_nightly_toolchain() -> Result<(), String> {
+    let output = Command::new("rustup")
+        .args(["run", "nightly", "rustc", "--version"])
+        .stderr(Stdio::null())  // Suppress stderr to avoid rustup's error message
+        .output()
+        .map_err(|e| format!("Failed to run rustup: {e}"))?;
+
+    if !output.status.success() {
+        return Err("ruskel requires the nightly toolchain to be installed - run 'rustup toolchain install nightly'".to_string());
+    }
+
+    Ok(())
+}
+
 fn main() {
+    // Check for nightly toolchain before parsing args
+    if let Err(e) = check_nightly_toolchain() {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
+
     let cli = Cli::parse();
 
     if let Err(e) = run(cli) {

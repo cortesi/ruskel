@@ -72,13 +72,15 @@ To install Ruskel, run:
 cargo install ruskel
 ```
 
+***Ruskel requires nightly-only features on `cargo doc` for document
+generation. You need to have the nightly toolchain installed to run ruskel, but
+not to install it.***
+
+
 ---
 
 ## Usage
 
-
-Ruskel uses nightly-only features on `cargo doc` for document generation, so you
-need to have the nightly toolchain installed to run it, but not to install it.
 
 Basic usage:
 

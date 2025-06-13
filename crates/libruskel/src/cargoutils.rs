@@ -62,6 +62,12 @@ impl CargoPath {
                 if err_msg.contains("no library targets found in package") {
                     // Return just the error without the "Failed to build" wrapper
                     RuskelError::Generate("error: no library targets found in package".to_string())
+                } else if err_msg.contains("toolchain") && err_msg.contains("is not installed") {
+                    // Handle nightly toolchain not installed error
+                    RuskelError::Generate("ruskel requires the nightly toolchain to be installed - run 'rustup toolchain install nightly'".to_string())
+                } else if err_msg.contains("Failed to build rustdoc JSON") && err_msg.contains("see stderr") {
+                    // This is the generic error when rustdoc_json fails, likely due to missing nightly
+                    RuskelError::Generate("ruskel requires the nightly toolchain to be installed - run 'rustup toolchain install nightly'".to_string())
                 } else if err_msg.contains("Failed to build rustdoc JSON") {
                     RuskelError::Generate(err_msg)
                 } else {
