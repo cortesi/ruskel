@@ -1,10 +1,3 @@
-use syntect::{
-    easy::HighlightLines,
-    highlighting::ThemeSet,
-    parsing::SyntaxSet,
-    util::{as_24_bit_terminal_escaped, LinesWithEndings},
-};
-
 use rustdoc_types::Crate;
 
 use super::{cargoutils::*, error::*, render::*};
@@ -18,9 +11,6 @@ use super::{cargoutils::*, error::*, render::*};
 /// Rust toolchain installed and available.
 #[derive(Debug, Default)]
 pub struct Ruskel {
-    /// Whether to apply syntax highlighting to the output.
-    highlight: bool,
-
     /// In offline mode Ruskell will not attempt to fetch dependencies from the network.
     offline: bool,
 
@@ -63,7 +53,6 @@ impl Ruskel {
     /// - rustdoc_types::Crate
     pub fn new() -> Self {
         Ruskel {
-            highlight: false,
             offline: false,
             auto_impls: false,
             silent: false,
@@ -77,12 +66,6 @@ impl Ruskel {
         self
     }
 
-    /// Enables or disables syntax highlighting in the output.
-    pub fn with_highlighting(mut self, highlight: bool) -> Self {
-        self.highlight = highlight;
-        self
-    }
-
     /// Enables or disables rendering of auto-implemented traits.
     pub fn with_auto_impls(mut self, auto_impls: bool) -> Self {
         self.auto_impls = auto_impls;
@@ -93,23 +76,6 @@ impl Ruskel {
     pub fn with_silent(mut self, silent: bool) -> Self {
         self.silent = silent;
         self
-    }
-
-    fn highlight_code(&self, code: &str) -> Result<String> {
-        let ss = SyntaxSet::load_defaults_newlines();
-        let ts = ThemeSet::load_defaults();
-
-        let syntax = ss.find_syntax_by_extension("rs").unwrap();
-        let mut h = HighlightLines::new(syntax, &ts.themes["Solarized (dark)"]);
-
-        let mut output = String::new();
-        for line in LinesWithEndings::from(code) {
-            let ranges: Vec<(syntect::highlighting::Style, &str)> = h.highlight_line(line, &ss)?;
-            let escaped = as_24_bit_terminal_escaped(&ranges[..], false);
-            output.push_str(&escaped);
-        }
-
-        Ok(output)
     }
 
     /// Returns the parsed representation of the crate's API.
@@ -158,11 +124,7 @@ impl Ruskel {
 
         let rendered = renderer.render(&crate_data)?;
 
-        if self.highlight {
-            self.highlight_code(&rendered)
-        } else {
-            Ok(rendered)
-        }
+        Ok(rendered)
     }
 
     /// Returns a pretty-printed version of the crate's JSON representation.

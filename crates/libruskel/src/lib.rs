@@ -15,6 +15,7 @@
 mod cargoutils;
 mod crateutils;
 mod error;
+pub mod highlight;
 mod render;
 mod ruskel;
 mod target;

@@ -1,5 +1,5 @@
 use clap::Parser;
-use libruskel::Ruskel;
+use libruskel::{highlight, Ruskel};
 use std::io::{self, IsTerminal, Write};
 use std::process::{Command, Stdio};
 
@@ -87,7 +87,6 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     // Create configured Ruskel instance from CLI args
     let ruskel = Ruskel::new()
         .with_offline(cli.offline)
-        .with_highlighting(false) // No highlighting for MCP output
         .with_auto_impls(cli.auto_impls)
         .with_silent(cli.quiet);
 
@@ -108,11 +107,10 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     let rs = Ruskel::new()
         .with_offline(cli.offline)
-        .with_highlighting(should_highlight)
         .with_auto_impls(cli.auto_impls)
         .with_silent(cli.quiet);
 
-    let output = if cli.raw {
+    let mut output = if cli.raw {
         rs.raw_json(
             &cli.target,
             cli.no_default_features,
@@ -129,6 +127,11 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             cli.private,
         )?
     };
+
+    // Apply highlighting if enabled and not raw output
+    if should_highlight && !cli.raw {
+        output = highlight::highlight_code(&output)?;
+    }
 
     if io::stdout().is_terminal() && !cli.no_page {
         page_output(output)?;
