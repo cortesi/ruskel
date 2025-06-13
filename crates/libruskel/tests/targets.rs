@@ -25,9 +25,8 @@ fn test_render_specific_struct() -> Result<()> {
     )?;
 
     let target = format!("{}::DummyStruct", foo_path.display());
-    let ruskel = Ruskel::new()
-        .with_silent(true);
-    let output = ruskel.render(&target, false, false, Vec::new())?;
+    let ruskel = Ruskel::new().with_silent(true);
+    let output = ruskel.render(&target, false, false, Vec::new(), false)?;
 
     assert!(output.contains("pub struct DummyStruct;"));
 

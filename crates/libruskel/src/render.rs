@@ -50,8 +50,8 @@ enum FilterMatch {
 
 pub struct Renderer {
     formatter: RustFmt,
-    render_auto_impls: bool,
-    render_private_items: bool,
+    pub render_auto_impls: bool,
+    pub render_private_items: bool,
     render_blanket_impls: bool,
     /// The filter is a path BELOW the outermost module.
     filter: String,

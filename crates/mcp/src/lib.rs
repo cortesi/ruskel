@@ -15,10 +15,10 @@ mod tests {
             "no_default_features": true,
             "all_features": false
         });
-        
+
         let result: Result<RuskelSkeletonTool, _> = serde_json::from_value(params);
         assert!(result.is_ok());
-        
+
         let tool = result.unwrap();
         assert_eq!(tool.target, "serde");
         assert!(tool.no_default_features);
@@ -30,10 +30,10 @@ mod tests {
         let params = json!({
             "target": "tokio"
         });
-        
+
         let result: Result<RuskelSkeletonTool, _> = serde_json::from_value(params);
         assert!(result.is_ok());
-        
+
         let tool = result.unwrap();
         assert_eq!(tool.target, "tokio");
         assert!(!tool.no_default_features);
@@ -41,17 +41,17 @@ mod tests {
         assert_eq!(tool.features.len(), 0);
     }
 
-    #[test] 
+    #[test]
     fn test_tool_params_with_features() {
         let params = json!({
             "target": "tokio",
             "features": ["macros", "rt-multi-thread"],
             "no_default_features": true
         });
-        
+
         let result: Result<RuskelSkeletonTool, _> = serde_json::from_value(params);
         assert!(result.is_ok());
-        
+
         let tool = result.unwrap();
         assert_eq!(tool.target, "tokio");
         assert_eq!(tool.features, vec!["macros", "rt-multi-thread"]);
@@ -63,7 +63,7 @@ mod tests {
         let params = json!({
             "auto_impls": true
         });
-        
+
         let result: Result<RuskelSkeletonTool, _> = serde_json::from_value(params);
         assert!(result.is_err());
     }

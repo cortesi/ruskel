@@ -118,9 +118,7 @@ fn test_mcp_server_initialize() {
             if let Some(mut stderr) = child.stderr.take() {
                 let mut err_output = String::new();
                 std::io::Read::read_to_string(&mut stderr, &mut err_output).ok();
-                panic!(
-                    "Server exited with status: {status:?}, stderr: {err_output}"
-                );
+                panic!("Server exited with status: {status:?}, stderr: {err_output}");
             } else {
                 panic!("Server exited with status: {status:?}");
             }
@@ -799,4 +797,3 @@ fn test_mcp_server_error_recovery() {
     child.kill().expect("Failed to kill server");
     let _ = child.wait();
 }
-

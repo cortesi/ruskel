@@ -95,7 +95,11 @@ impl Target {
             }
         }
 
-        let entrypoint = if entrypoint.contains('/') || entrypoint.contains('\\') || *entrypoint == "." || *entrypoint == ".." {
+        let entrypoint = if entrypoint.contains('/')
+            || entrypoint.contains('\\')
+            || *entrypoint == "."
+            || *entrypoint == ".."
+        {
             // It's a file or directory path
             Entrypoint::Path(PathBuf::from(entrypoint))
         } else if entrypoint.contains('@') {

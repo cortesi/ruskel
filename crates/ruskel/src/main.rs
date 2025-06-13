@@ -89,7 +89,6 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         .with_offline(cli.offline)
         .with_highlighting(false) // No highlighting for MCP output
         .with_auto_impls(cli.auto_impls)
-        .with_private_items(cli.private)
         .with_silent(cli.quiet);
 
     // Run the MCP server
@@ -111,7 +110,6 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         .with_offline(cli.offline)
         .with_highlighting(should_highlight)
         .with_auto_impls(cli.auto_impls)
-        .with_private_items(cli.private)
         .with_silent(cli.quiet);
 
     let output = if cli.raw {
@@ -120,6 +118,7 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             cli.no_default_features,
             cli.all_features,
             cli.features.clone(),
+            cli.private,
         )?
     } else {
         rs.render(
@@ -127,6 +126,7 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
             cli.no_default_features,
             cli.all_features,
             cli.features.clone(),
+            cli.private,
         )?
     };
 

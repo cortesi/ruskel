@@ -27,9 +27,6 @@ pub struct Ruskel {
     /// Whether to render auto-implemented traits.
     auto_impls: bool,
 
-    /// Whether to render private items.
-    private_items: bool,
-
     /// Whether to suppress output during processing.
     silent: bool,
 }
@@ -39,7 +36,7 @@ impl Ruskel {
     ///
     /// # Target Format
     ///
-    /// A target specification is an entrypoint, followed by an optional path, with components 
+    /// A target specification is an entrypoint, followed by an optional path, with components
     /// separated by '::'.
     ///
     ///   entrypoint::path
@@ -69,7 +66,6 @@ impl Ruskel {
             highlight: false,
             offline: false,
             auto_impls: false,
-            private_items: false,
             silent: false,
         }
     }
@@ -90,12 +86,6 @@ impl Ruskel {
     /// Enables or disables rendering of auto-implemented traits.
     pub fn with_auto_impls(mut self, auto_impls: bool) -> Self {
         self.auto_impls = auto_impls;
-        self
-    }
-
-    /// Enables or disables rendering of private items.
-    pub fn with_private_items(mut self, private_items: bool) -> Self {
-        self.private_items = private_items;
         self
     }
 
@@ -129,12 +119,14 @@ impl Ruskel {
     /// * `no_default_features` - Whether to build without default features
     /// * `all_features` - Whether to build with all features
     /// * `features` - List of specific features to enable
+    /// * `private_items` - Whether to include private items in the output
     pub fn inspect(
         &self,
         target: &str,
         no_default_features: bool,
         all_features: bool,
         features: Vec<String>,
+        _private_items: bool,
     ) -> Result<Crate> {
         let rt = resolve_target(target, self.offline)?;
         rt.read_crate(no_default_features, all_features, features, self.silent)
@@ -147,12 +139,14 @@ impl Ruskel {
     /// * `no_default_features` - Whether to build without default features
     /// * `all_features` - Whether to build with all features
     /// * `features` - List of specific features to enable
+    /// * `private_items` - Whether to include private items in the rendered output
     pub fn render(
         &self,
         target: &str,
         no_default_features: bool,
         all_features: bool,
         features: Vec<String>,
+        private_items: bool,
     ) -> Result<String> {
         let rt = resolve_target(target, self.offline)?;
         let crate_data = rt.read_crate(no_default_features, all_features, features, self.silent)?;
@@ -160,7 +154,7 @@ impl Ruskel {
         let renderer = Renderer::default()
             .with_filter(&rt.filter)
             .with_auto_impls(self.auto_impls)
-            .with_private_items(self.private_items);
+            .with_private_items(private_items);
 
         let rendered = renderer.render(&crate_data)?;
 
@@ -178,18 +172,21 @@ impl Ruskel {
     /// * `no_default_features` - Whether to build without default features
     /// * `all_features` - Whether to build with all features
     /// * `features` - List of specific features to enable
+    /// * `private_items` - Whether to include private items in the JSON output
     pub fn raw_json(
         &self,
         target: &str,
         no_default_features: bool,
         all_features: bool,
         features: Vec<String>,
+        private_items: bool,
     ) -> Result<String> {
         Ok(serde_json::to_string_pretty(&self.inspect(
             target,
             no_default_features,
             all_features,
             features,
+            private_items,
         )?)?)
     }
 }

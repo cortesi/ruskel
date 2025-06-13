@@ -65,6 +65,7 @@ impl ServerHandler for RuskelServerHandler {
             tool_params.no_default_features,
             tool_params.all_features,
             tool_params.features,
+            tool_params.private_items,
         ) {
             Ok(output) => Ok(CallToolResult::text_content(output, None)),
             Err(e) => {
