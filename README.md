@@ -45,6 +45,64 @@ pub mod termsize {
 
 ---
 
+## MCP Server Mode
+
+Ruskel can run as a Model Context Protocol (MCP) server, allowing it to be used as a tool by AI assistants and other MCP clients.
+
+### Running as MCP Server
+
+To start Ruskel in MCP server mode:
+
+```bash
+ruskel --mcp
+```
+
+This starts the MCP server on stdout, ready to accept requests. The server exposes a single tool called `ruskel_skeleton` that generates skeletonized outlines of Rust crates.
+
+### MCP Configuration
+
+To use Ruskel with Claude Desktop or other MCP clients, add this configuration:
+
+```json
+{
+  "mcpServers": {
+    "ruskel": {
+      "command": "ruskel",
+      "args": ["--mcp"]
+    }
+  }
+}
+```
+
+Or if running from source:
+
+```json
+{
+  "mcpServers": {
+    "ruskel": {
+      "command": "cargo",
+      "args": ["run", "--", "--mcp"],
+      "cwd": "/path/to/ruskel"
+    }
+  }
+}
+```
+
+### Tool Parameters
+
+The `ruskel_skeleton` tool accepts the following parameters:
+
+- `target` (required): The crate/module to generate a skeleton for
+- `auto_impls`: Include auto-implemented traits (default: false)
+- `private`: Include private items (default: false)
+- `no_default_features`: Disable default features (default: false)
+- `all_features`: Enable all features (default: false)
+- `features`: Array of features to enable (default: [])
+- `quiet`: Enable quiet mode (default: false)
+- `offline`: Enable offline mode (default: false)
+
+---
+
 ## Community
 
 Want to contribute? Have ideas or feature requests? Come tell us about it on

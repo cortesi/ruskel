@@ -49,6 +49,10 @@ struct Cli {
     /// Enable quiet mode, disabling output while rendering docs
     #[arg(long, default_value_t = false)]
     quiet: bool,
+
+    /// Run as an MCP server on stdout
+    #[arg(long, default_value_t = false)]
+    mcp: bool,
 }
 
 fn check_nightly_toolchain() -> Result<(), String> {
@@ -66,13 +70,32 @@ fn check_nightly_toolchain() -> Result<(), String> {
 }
 
 fn main() {
-    // Check for nightly toolchain before parsing args
+    let cli = Cli::parse();
+
+    // Handle MCP mode separately
+    if cli.mcp {
+        // Validate that no other arguments are provided with --mcp
+        if cli.target != "./" || cli.raw || cli.auto_impls || cli.private || 
+           cli.no_default_features || cli.all_features || !cli.features.is_empty() ||
+           cli.color != "auto" || cli.no_page || cli.offline || cli.quiet {
+            eprintln!("Error: --mcp cannot be used with other arguments");
+            std::process::exit(1);
+        }
+
+        // Run the MCP server
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        if let Err(e) = runtime.block_on(ruskel_mcp::run_mcp_server()) {
+            eprintln!("MCP server error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    // Check for nightly toolchain for normal operation
     if let Err(e) = check_nightly_toolchain() {
         eprintln!("{e}");
         std::process::exit(1);
     }
-
-    let cli = Cli::parse();
 
     if let Err(e) = run(cli) {
         eprintln!("{e}");
