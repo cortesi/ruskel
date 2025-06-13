@@ -111,17 +111,27 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         _ => unreachable!(),
     };
 
-    let rs = Ruskel::new(&cli.target)
+    let rs = Ruskel::new()
         .with_offline(cli.offline)
-        .with_no_default_features(cli.no_default_features)
-        .with_all_features(cli.all_features)
-        .with_features(cli.features)
-        .with_highlighting(should_highlight);
+        .with_highlighting(should_highlight)
+        .with_auto_impls(cli.auto_impls)
+        .with_private_items(cli.private)
+        .with_silent(cli.quiet);
 
     let output = if cli.raw {
-        rs.raw_json()?
+        rs.raw_json(
+            &cli.target,
+            cli.no_default_features,
+            cli.all_features,
+            cli.features,
+        )?
     } else {
-        rs.render(cli.auto_impls, cli.private, cli.quiet)?
+        rs.render(
+            &cli.target,
+            cli.no_default_features,
+            cli.all_features,
+            cli.features,
+        )?
     };
 
     if io::stdout().is_terminal() && !cli.no_page {

@@ -17,7 +17,6 @@ pub struct RuskelServerHandler;
 
 #[async_trait]
 impl ServerHandler for RuskelServerHandler {
-    // Override to prevent "Server started successfully" message
     async fn on_server_started(&self, _runtime: &dyn MCPServer) {
         // Do nothing - no output
     }
@@ -59,22 +58,20 @@ impl ServerHandler for RuskelServerHandler {
         ))
         .map_err(CallToolError::new)?;
 
-
-        let ruskel = Ruskel::new(&tool_params.target)
+        let ruskel = Ruskel::new()
             .with_offline(tool_params.offline)
-            .with_no_default_features(tool_params.no_default_features)
-            .with_all_features(tool_params.all_features)
-            .with_features(tool_params.features)
-            .with_highlighting(false); // No highlighting for MCP output
+            .with_highlighting(false) // No highlighting for MCP output
+            .with_auto_impls(tool_params.auto_impls)
+            .with_private_items(tool_params.private)
+            .with_silent(tool_params.quiet);
 
         match ruskel.render(
-            tool_params.auto_impls,
-            tool_params.private,
-            tool_params.quiet,
+            &tool_params.target,
+            tool_params.no_default_features,
+            tool_params.all_features,
+            tool_params.features,
         ) {
-            Ok(output) => {
-                Ok(CallToolResult::text_content(output, None))
-            }
+            Ok(output) => Ok(CallToolResult::text_content(output, None)),
             Err(e) => {
                 error!("Failed to generate skeleton: {}", e);
                 Err(CallToolError::new(e))
@@ -121,4 +118,3 @@ pub async fn run_mcp_server() -> SdkResult<()> {
 
     Ok(())
 }
-

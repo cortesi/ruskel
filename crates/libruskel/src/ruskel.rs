@@ -16,34 +16,35 @@ use super::{cargoutils::*, error::*, render::*};
 /// then uses 'cargo doc' with the nightly toolchain to generate JSON output. This JSON
 /// is parsed and used to render the skeletonized code. Users must have the nightly
 /// Rust toolchain installed and available.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Ruskel {
-    /// The full target specification
-    target: String,
-
-    /// Whether to build without default features.
-    no_default_features: bool,
-
-    /// Whether to build with all features.
-    all_features: bool,
-
-    /// List of specific features to enable.
-    features: Vec<String>,
-
     /// Whether to apply syntax highlighting to the output.
     highlight: bool,
 
     /// In offline mode Ruskell will not attempt to fetch dependencies from the network.
     offline: bool,
+
+    /// Whether to render auto-implemented traits.
+    auto_impls: bool,
+
+    /// Whether to render private items.
+    private_items: bool,
+
+    /// Whether to suppress output during processing.
+    silent: bool,
 }
 
 impl Ruskel {
-    /// Creates a new Ruskel instance for the specified target. A target specification is an
-    /// entrypoint, followed by an optional path, whith components separated by '::'.
+    /// Creates a new Ruskel instance with default configuration.
+    ///
+    /// # Target Format
+    ///
+    /// A target specification is an entrypoint, followed by an optional path, with components 
+    /// separated by '::'.
     ///
     ///   entrypoint::path
     ///
-    /// A entrypoint can be:
+    /// An entrypoint can be:
     ///
     /// - A path to a Rust file
     /// - A directory containing a Cargo.toml file
@@ -63,14 +64,13 @@ impl Ruskel {
     /// - serde@1.0
     /// - rustdoc-types::Crate
     /// - rustdoc_types::Crate
-    pub fn new(target: &str) -> Self {
+    pub fn new() -> Self {
         Ruskel {
-            target: target.to_string(),
-            no_default_features: false,
-            all_features: false,
-            features: Vec::new(),
             highlight: false,
             offline: false,
+            auto_impls: false,
+            private_items: false,
+            silent: false,
         }
     }
 
@@ -87,27 +87,21 @@ impl Ruskel {
         self
     }
 
-    /// Disables default features when building the target crate.
-    pub fn with_no_default_features(mut self, value: bool) -> Self {
-        self.no_default_features = value;
+    /// Enables or disables rendering of auto-implemented traits.
+    pub fn with_auto_impls(mut self, auto_impls: bool) -> Self {
+        self.auto_impls = auto_impls;
         self
     }
 
-    /// Enables all features when building the target crate.
-    pub fn with_all_features(mut self, value: bool) -> Self {
-        self.all_features = value;
+    /// Enables or disables rendering of private items.
+    pub fn with_private_items(mut self, private_items: bool) -> Self {
+        self.private_items = private_items;
         self
     }
 
-    /// Enables a specific feature when building the target crate.
-    pub fn with_feature(mut self, feature: String) -> Self {
-        self.features.push(feature);
-        self
-    }
-
-    /// Enables multiple specific features when building the target crate.
-    pub fn with_features(mut self, features: Vec<String>) -> Self {
-        self.features = features;
+    /// Enables or disables silent mode, which suppresses output during processing.
+    pub fn with_silent(mut self, silent: bool) -> Self {
+        self.silent = silent;
         self
     }
 
@@ -129,31 +123,44 @@ impl Ruskel {
     }
 
     /// Returns the parsed representation of the crate's API.
-    /// silent: if true, no output is printed
-    pub fn inspect(&self, silent: bool) -> Result<Crate> {
-        let rt = resolve_target(&self.target, self.offline)?;
-        rt.read_crate(
-            self.no_default_features,
-            self.all_features,
-            self.features.clone(),
-            silent,
-        )
+    ///
+    /// # Arguments
+    /// * `target` - The target specification (see new() documentation for format)
+    /// * `no_default_features` - Whether to build without default features
+    /// * `all_features` - Whether to build with all features
+    /// * `features` - List of specific features to enable
+    pub fn inspect(
+        &self,
+        target: &str,
+        no_default_features: bool,
+        all_features: bool,
+        features: Vec<String>,
+    ) -> Result<Crate> {
+        let rt = resolve_target(target, self.offline)?;
+        rt.read_crate(no_default_features, all_features, features, self.silent)
     }
 
     /// Generates a skeletonized version of the crate as a string of Rust code.
-    pub fn render(&self, auto_impls: bool, private_items: bool, silent: bool) -> Result<String> {
-        let rt = resolve_target(&self.target, self.offline)?;
-        let crate_data = rt.read_crate(
-            self.no_default_features,
-            self.all_features,
-            self.features.clone(),
-            silent,
-        )?;
+    ///
+    /// # Arguments
+    /// * `target` - The target specification (see new() documentation for format)
+    /// * `no_default_features` - Whether to build without default features
+    /// * `all_features` - Whether to build with all features
+    /// * `features` - List of specific features to enable
+    pub fn render(
+        &self,
+        target: &str,
+        no_default_features: bool,
+        all_features: bool,
+        features: Vec<String>,
+    ) -> Result<String> {
+        let rt = resolve_target(target, self.offline)?;
+        let crate_data = rt.read_crate(no_default_features, all_features, features, self.silent)?;
 
         let renderer = Renderer::default()
             .with_filter(&rt.filter)
-            .with_auto_impls(auto_impls)
-            .with_private_items(private_items);
+            .with_auto_impls(self.auto_impls)
+            .with_private_items(self.private_items);
 
         let rendered = renderer.render(&crate_data)?;
 
@@ -165,7 +172,24 @@ impl Ruskel {
     }
 
     /// Returns a pretty-printed version of the crate's JSON representation.
-    pub fn raw_json(&self) -> Result<String> {
-        Ok(serde_json::to_string_pretty(&self.inspect(true)?)?)
+    ///
+    /// # Arguments
+    /// * `target` - The target specification (see new() documentation for format)
+    /// * `no_default_features` - Whether to build without default features
+    /// * `all_features` - Whether to build with all features
+    /// * `features` - List of specific features to enable
+    pub fn raw_json(
+        &self,
+        target: &str,
+        no_default_features: bool,
+        all_features: bool,
+        features: Vec<String>,
+    ) -> Result<String> {
+        Ok(serde_json::to_string_pretty(&self.inspect(
+            target,
+            no_default_features,
+            all_features,
+            features,
+        )?)?)
     }
 }

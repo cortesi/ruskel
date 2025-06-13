@@ -47,7 +47,8 @@ pub mod termsize {
 
 ## MCP Server Mode
 
-Ruskel can run as a Model Context Protocol (MCP) server, allowing it to be used as a tool by AI assistants and other MCP clients.
+Ruskel can run as a Model Context Protocol (MCP) server, allowing it to be used
+as a tool by AI assistants and other MCP clients.
 
 ### Running as MCP Server
 
@@ -57,7 +58,9 @@ To start Ruskel in MCP server mode:
 ruskel --mcp
 ```
 
-This starts the MCP server on stdout, ready to accept requests. The server exposes a single tool called `ruskel_skeleton` that generates skeletonized outlines of Rust crates.
+This starts the MCP server on stdout, ready to accept requests. The server
+exposes a single tool called `ruskel_skeleton` that generates skeletonized
+outlines of Rust crates.
 
 ### MCP Configuration
 
