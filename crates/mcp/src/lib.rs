@@ -21,8 +21,8 @@ mod tests {
         
         let tool = result.unwrap();
         assert_eq!(tool.target, "serde");
-        assert_eq!(tool.auto_impls, true);
-        assert_eq!(tool.private, false);
+        assert!(tool.auto_impls);
+        assert!(!tool.private);
     }
 
     #[test]
@@ -36,13 +36,13 @@ mod tests {
         
         let tool = result.unwrap();
         assert_eq!(tool.target, "tokio");
-        assert_eq!(tool.auto_impls, false);
-        assert_eq!(tool.private, false);
-        assert_eq!(tool.no_default_features, false);
-        assert_eq!(tool.all_features, false);
+        assert!(!tool.auto_impls);
+        assert!(!tool.private);
+        assert!(!tool.no_default_features);
+        assert!(!tool.all_features);
         assert_eq!(tool.features.len(), 0);
-        assert_eq!(tool.quiet, false);
-        assert_eq!(tool.offline, false);
+        assert!(!tool.quiet);
+        assert!(!tool.offline);
     }
 
     #[test] 
@@ -59,7 +59,7 @@ mod tests {
         let tool = result.unwrap();
         assert_eq!(tool.target, "tokio");
         assert_eq!(tool.features, vec!["macros", "rt-multi-thread"]);
-        assert_eq!(tool.no_default_features, true);
+        assert!(tool.no_default_features);
     }
 
     #[test]

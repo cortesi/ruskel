@@ -119,18 +119,17 @@ fn test_mcp_server_initialize() {
                 let mut err_output = String::new();
                 std::io::Read::read_to_string(&mut stderr, &mut err_output).ok();
                 panic!(
-                    "Server exited with status: {:?}, stderr: {}",
-                    status, err_output
+                    "Server exited with status: {status:?}, stderr: {err_output}"
                 );
             } else {
-                panic!("Server exited with status: {:?}", status);
+                panic!("Server exited with status: {status:?}");
             }
         }
         Ok(None) => {
             // Process is still running
         }
         Err(e) => {
-            panic!("Error checking process status: {}", e);
+            panic!("Error checking process status: {e}");
         }
     }
 
@@ -183,6 +182,7 @@ fn test_mcp_server_initialize() {
 
     // Clean up
     child.kill().expect("Failed to kill server");
+    let _ = child.wait();
 }
 
 #[test]
@@ -250,6 +250,7 @@ fn test_mcp_server_list_tools() {
 
     // Clean up
     child.kill().expect("Failed to kill server");
+    let _ = child.wait();
 }
 
 #[test]
@@ -334,7 +335,7 @@ fn test_mcp_server_call_tool() {
         assert!(text.contains("Vec"));
     } else if let Some(error) = response.get("error") {
         // If we get an error, it might be due to missing nightly toolchain
-        eprintln!("Tool call returned error: {:?}", error);
+        eprintln!("Tool call returned error: {error:?}");
         // Don't fail the test in this case
     } else {
         panic!("Response has neither result nor error");
@@ -342,6 +343,7 @@ fn test_mcp_server_call_tool() {
 
     // Clean up
     child.kill().expect("Failed to kill server");
+    let _ = child.wait();
 }
 
 #[test]
@@ -404,6 +406,7 @@ fn test_mcp_server_invalid_tool() {
 
     // Clean up
     child.kill().expect("Failed to kill server");
+    let _ = child.wait();
 }
 
 #[test]
@@ -469,6 +472,7 @@ fn test_mcp_server_invalid_arguments() {
 
     // Clean up
     child.kill().expect("Failed to kill server");
+    let _ = child.wait();
 }
 
 #[test]
@@ -509,7 +513,7 @@ fn test_mcp_server_multiple_requests() {
     send_message(stdin, &initialized);
 
     // Test multiple sequential requests
-    let test_targets = vec!["std::vec", "std::option", "std::result"];
+    let test_targets = ["std::vec", "std::option", "std::result"];
 
     for (idx, target) in test_targets.iter().enumerate() {
         // List tools request
@@ -522,10 +526,8 @@ fn test_mcp_server_multiple_requests() {
 
         send_message(stdin, &list_tools);
 
-        let response = read_message_timeout(&mut reader, Duration::from_secs(5)).expect(&format!(
-            "Failed to read list tools response for iteration {}",
-            idx
-        ));
+        let response = read_message_timeout(&mut reader, Duration::from_secs(5))
+            .unwrap_or_else(|_| panic!("Failed to read list tools response for iteration {idx}"));
 
         assert_eq!(response["jsonrpc"], "2.0");
         assert_eq!(response["id"], (idx * 2) + 2);
@@ -547,10 +549,8 @@ fn test_mcp_server_multiple_requests() {
 
         send_message(stdin, &call_tool);
 
-        let response = read_message_timeout(&mut reader, Duration::from_secs(30)).expect(&format!(
-            "Failed to read tool call response for target {}",
-            target
-        ));
+        let response = read_message_timeout(&mut reader, Duration::from_secs(30))
+            .unwrap_or_else(|_| panic!("Failed to read tool call response for target {target}"));
 
         assert_eq!(response["jsonrpc"], "2.0");
         assert_eq!(response["id"], (idx * 2) + 3);
@@ -565,6 +565,7 @@ fn test_mcp_server_multiple_requests() {
 
     // Clean up
     child.kill().expect("Failed to kill server");
+    let _ = child.wait();
 }
 
 #[test]
@@ -656,6 +657,7 @@ fn test_mcp_server_concurrent_requests() {
 
     // Clean up
     child.kill().expect("Failed to kill server");
+    let _ = child.wait();
 }
 
 #[test]
@@ -795,5 +797,6 @@ fn test_mcp_server_error_recovery() {
 
     // Clean up
     child.kill().expect("Failed to kill server");
+    let _ = child.wait();
 }
 
