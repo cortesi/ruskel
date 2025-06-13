@@ -13,7 +13,9 @@ use tracing::error;
 
 use crate::tools::RuskelSkeletonTool;
 
-pub struct RuskelServerHandler;
+pub struct RuskelServerHandler {
+    ruskel: Ruskel,
+}
 
 #[async_trait]
 impl ServerHandler for RuskelServerHandler {
@@ -58,14 +60,7 @@ impl ServerHandler for RuskelServerHandler {
         ))
         .map_err(CallToolError::new)?;
 
-        let ruskel = Ruskel::new()
-            .with_offline(tool_params.offline)
-            .with_highlighting(false) // No highlighting for MCP output
-            .with_auto_impls(tool_params.auto_impls)
-            .with_private_items(tool_params.private)
-            .with_silent(tool_params.quiet);
-
-        match ruskel.render(
+        match self.ruskel.render(
             &tool_params.target,
             tool_params.no_default_features,
             tool_params.all_features,
@@ -80,7 +75,7 @@ impl ServerHandler for RuskelServerHandler {
     }
 }
 
-pub async fn run_mcp_server() -> SdkResult<()> {
+pub async fn run_mcp_server(ruskel: Ruskel) -> SdkResult<()> {
     // Only initialize tracing if RUST_LOG is set
     if std::env::var("RUST_LOG").is_ok() {
         tracing_subscriber::fmt()
@@ -110,7 +105,7 @@ pub async fn run_mcp_server() -> SdkResult<()> {
     };
 
     let transport = StdioTransport::new(TransportOptions::default())?;
-    let handler = RuskelServerHandler;
+    let handler = RuskelServerHandler { ruskel };
 
     let server: ServerRuntime = server_runtime::create_server(server_details, transport, handler);
 

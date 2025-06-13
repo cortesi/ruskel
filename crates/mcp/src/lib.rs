@@ -12,8 +12,8 @@ mod tests {
     fn test_tool_params_deserialization() {
         let params = json!({
             "target": "serde",
-            "auto_impls": true,
-            "private": false
+            "no_default_features": true,
+            "all_features": false
         });
         
         let result: Result<RuskelSkeletonTool, _> = serde_json::from_value(params);
@@ -21,8 +21,8 @@ mod tests {
         
         let tool = result.unwrap();
         assert_eq!(tool.target, "serde");
-        assert!(tool.auto_impls);
-        assert!(!tool.private);
+        assert!(tool.no_default_features);
+        assert!(!tool.all_features);
     }
 
     #[test]
@@ -36,13 +36,9 @@ mod tests {
         
         let tool = result.unwrap();
         assert_eq!(tool.target, "tokio");
-        assert!(!tool.auto_impls);
-        assert!(!tool.private);
         assert!(!tool.no_default_features);
         assert!(!tool.all_features);
         assert_eq!(tool.features.len(), 0);
-        assert!(!tool.quiet);
-        assert!(!tool.offline);
     }
 
     #[test] 

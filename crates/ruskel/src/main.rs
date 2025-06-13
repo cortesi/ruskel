@@ -58,7 +58,7 @@ struct Cli {
 fn check_nightly_toolchain() -> Result<(), String> {
     let output = Command::new("rustup")
         .args(["run", "nightly", "rustc", "--version"])
-        .stderr(Stdio::null())  // Suppress stderr to avoid rustup's error message
+        .stderr(Stdio::null()) // Suppress stderr to avoid rustup's error message
         .output()
         .map_err(|e| format!("Failed to run rustup: {e}"))?;
 
@@ -69,41 +69,37 @@ fn check_nightly_toolchain() -> Result<(), String> {
     Ok(())
 }
 
-fn main() {
-    let cli = Cli::parse();
-
-    // Handle MCP mode separately
-    if cli.mcp {
-        // Validate that no other arguments are provided with --mcp
-        if cli.target != "./" || cli.raw || cli.auto_impls || cli.private || 
-           cli.no_default_features || cli.all_features || !cli.features.is_empty() ||
-           cli.color != "auto" || cli.no_page || cli.offline || cli.quiet {
-            eprintln!("Error: --mcp cannot be used with other arguments");
-            std::process::exit(1);
-        }
-
-        // Run the MCP server
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        if let Err(e) = runtime.block_on(ruskel_mcp::run_mcp_server()) {
-            eprintln!("MCP server error: {e}");
-            std::process::exit(1);
-        }
-        return;
+fn run_mcp(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
+    // Validate that only configuration arguments are provided with --mcp
+    if cli.target != "./"
+        || cli.raw
+        || cli.no_default_features
+        || cli.all_features
+        || !cli.features.is_empty()
+        || cli.color != "auto"
+        || cli.no_page
+    {
+        return Err(
+            "--mcp can only be used with --auto-impls, --private, --offline, and --quiet".into(),
+        );
     }
 
-    // Check for nightly toolchain for normal operation
-    if let Err(e) = check_nightly_toolchain() {
-        eprintln!("{e}");
-        std::process::exit(1);
-    }
+    // Create configured Ruskel instance from CLI args
+    let ruskel = Ruskel::new()
+        .with_offline(cli.offline)
+        .with_highlighting(false) // No highlighting for MCP output
+        .with_auto_impls(cli.auto_impls)
+        .with_private_items(cli.private)
+        .with_silent(cli.quiet);
 
-    if let Err(e) = run(cli) {
-        eprintln!("{e}");
-        std::process::exit(1);
-    }
+    // Run the MCP server
+    let runtime = tokio::runtime::Runtime::new()?;
+    runtime.block_on(ruskel_mcp::run_mcp_server(ruskel))?;
+
+    Ok(())
 }
 
-fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let should_highlight = match cli.color.as_str() {
         "never" => false,
         "always" => true,
@@ -123,14 +119,14 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             &cli.target,
             cli.no_default_features,
             cli.all_features,
-            cli.features,
+            cli.features.clone(),
         )?
     } else {
         rs.render(
             &cli.target,
             cli.no_default_features,
             cli.all_features,
-            cli.features,
+            cli.features.clone(),
         )?
     };
 
@@ -141,6 +137,25 @@ fn run(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+fn main() {
+    let cli = Cli::parse();
+
+    let result = if cli.mcp {
+        run_mcp(&cli)
+    } else {
+        if let Err(e) = check_nightly_toolchain() {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+        run_cmdline(&cli)
+    };
+
+    if let Err(e) = result {
+        eprintln!("{e}");
+        std::process::exit(1);
+    }
 }
 
 fn page_output(content: String) -> Result<(), Box<dyn std::error::Error>> {
