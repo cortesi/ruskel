@@ -19,5 +19,5 @@ pub struct RuskelSkeletonTool {
 
     /// Render private items
     #[serde(default)]
-    pub private_items: bool,
+    pub private: bool,
 }

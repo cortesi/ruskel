@@ -30,12 +30,62 @@ impl ServerHandler for RuskelServerHandler {
     ) -> Result<ListToolsResult, RpcError> {
         Ok(ListToolsResult {
             tools: vec![Tool {
-                name: "ruskel_skeleton".to_string(),
-                description: Some("Generate a skeletonized outline of a Rust crate".to_string()),
-                input_schema: rust_mcp_schema::ToolInputSchema::new(
-                    vec!["target".to_string()],
-                    None,
-                ),
+                name: "ruskel".to_string(),
+                description: Some(include_str!("../ruskel-description.txt").to_string()),
+                input_schema: {
+                    let mut properties = std::collections::HashMap::new();
+
+                    let mut target_schema = serde_json::Map::new();
+                    target_schema.insert("type".to_string(), serde_json::json!("string"));
+                    target_schema.insert("description".to_string(), serde_json::json!("Crate, module path, or filesystem path (optionally with @<semver>) whose API skeleton should be produced."));
+                    properties.insert("target".to_string(), target_schema);
+
+                    let mut private_schema = serde_json::Map::new();
+                    private_schema.insert("type".to_string(), serde_json::json!("boolean"));
+                    private_schema.insert(
+                        "description".to_string(),
+                        serde_json::json!("Include non‑public (private / crate‑private) items."),
+                    );
+                    private_schema.insert("default".to_string(), serde_json::json!(false));
+                    properties.insert("private".to_string(), private_schema);
+
+                    let mut no_default_features_schema = serde_json::Map::new();
+                    no_default_features_schema
+                        .insert("type".to_string(), serde_json::json!("boolean"));
+                    no_default_features_schema.insert(
+                        "description".to_string(),
+                        serde_json::json!("Disable the crate's default Cargo features."),
+                    );
+                    no_default_features_schema
+                        .insert("default".to_string(), serde_json::json!(false));
+                    properties.insert(
+                        "no_default_features".to_string(),
+                        no_default_features_schema,
+                    );
+
+                    let mut all_features_schema = serde_json::Map::new();
+                    all_features_schema.insert("type".to_string(), serde_json::json!("boolean"));
+                    all_features_schema.insert(
+                        "description".to_string(),
+                        serde_json::json!("Enable every optional Cargo feature."),
+                    );
+                    all_features_schema.insert("default".to_string(), serde_json::json!(false));
+                    properties.insert("all_features".to_string(), all_features_schema);
+
+                    let mut features_schema = serde_json::Map::new();
+                    features_schema.insert("type".to_string(), serde_json::json!("array"));
+                    let mut items = serde_json::Map::new();
+                    items.insert("type".to_string(), serde_json::json!("string"));
+                    features_schema.insert("items".to_string(), serde_json::json!(items));
+                    features_schema.insert("description".to_string(), serde_json::json!("Exact list of Cargo features to enable (ignored if all_features=true)."));
+                    features_schema.insert("default".to_string(), serde_json::json!([]));
+                    properties.insert("features".to_string(), features_schema);
+
+                    rust_mcp_schema::ToolInputSchema::new(
+                        vec!["target".to_string()],
+                        Some(properties),
+                    )
+                },
             }],
             meta: None,
             next_cursor: None,
@@ -49,7 +99,7 @@ impl ServerHandler for RuskelServerHandler {
     ) -> Result<CallToolResult, CallToolError> {
         let params = &request.params;
 
-        if params.name != "ruskel_skeleton" {
+        if params.name != "ruskel" {
             return Err(CallToolError::new(
                 rust_mcp_schema::schema_utils::UnknownTool(params.name.clone()),
             ));
@@ -65,7 +115,7 @@ impl ServerHandler for RuskelServerHandler {
             tool_params.no_default_features,
             tool_params.all_features,
             tool_params.features,
-            tool_params.private_items,
+            tool_params.private,
         ) {
             Ok(output) => Ok(CallToolResult::text_content(output, None)),
             Err(e) => {
