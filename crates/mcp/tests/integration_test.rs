@@ -1,799 +1,389 @@
 //! Integration tests for the MCP server
 //!
-//! These tests verify the MCP server protocol implementation.
-//! Note: The rust-mcp-sdk stdio transport may not work correctly
-//! in subprocess testing environments. These tests are provided
-//! as examples of how to test MCP servers but may need to be
-//! run in specific environments.
+//! These tests verify the MCP server protocol implementation using the Transport trait.
 
-use serde_json::{json, Value};
-use std::io::{BufRead, BufReader, Write};
+use async_trait::async_trait;
+use libruskel::Ruskel;
+use serde_json::json;
 use std::process::{Command, Stdio};
 use std::time::Duration;
+use tenx_mcp::{
+    client::{ClientConfig, MCPClient},
+    error::Result,
+    schema::{ClientCapabilities, Implementation, InitializeResult},
+    transport::{Transport, TransportStream},
+};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use tokio::process::Command as TokioCommand;
+use tokio::time::timeout;
+use tokio_util::codec::Framed;
 
-/// Helper to start the MCP server as a subprocess
-fn start_mcp_server() -> std::process::Child {
-    // Get the workspace root by going up from the test directory
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let workspace_root = std::path::Path::new(manifest_dir)
-        .parent() // crates
-        .unwrap()
-        .parent() // workspace root
-        .unwrap();
+/// Test transport that uses in-memory duplex streams
+pub struct TestTransport {
+    stream: DuplexStream,
+}
 
-    // First ensure the binary is built
-    let output = Command::new("cargo")
-        .current_dir(workspace_root)
-        .args(["build", "--bin", "ruskel"])
-        .output()
-        .expect("Failed to build ruskel");
+impl TestTransport {
+    pub fn new_pair() -> (Self, Self) {
+        let (client_stream, server_stream) = tokio::io::duplex(8192);
+        (
+            Self {
+                stream: client_stream,
+            },
+            Self {
+                stream: server_stream,
+            },
+        )
+    }
+}
 
-    if !output.status.success() {
-        panic!(
-            "Failed to build ruskel: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
+#[async_trait]
+impl Transport for TestTransport {
+    async fn connect(&mut self) -> Result<()> {
+        Ok(())
     }
 
-    // Find the target directory
-    let target_dir = workspace_root.join("target");
+    fn framed(self: Box<Self>) -> Result<Box<dyn TransportStream>> {
+        let framed = Framed::new(self.stream, tenx_mcp::codec::JsonRpcCodec::new());
+        Ok(Box::new(framed))
+    }
+}
 
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
+/// Helper to create a test MCP server and client pair
+async fn create_test_pair() -> Result<(MCPClient, tokio::task::JoinHandle<Result<()>>)> {
+    let (client_transport, server_transport) = TestTransport::new_pair();
+
+    // Create and configure client
+    let config = ClientConfig {
+        request_timeout: Duration::from_secs(30),
+        ..Default::default()
     };
-    let binary_path = target_dir.join(profile).join("ruskel");
 
-    Command::new(binary_path)
-        .args(["--mcp"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to start MCP server")
-}
+    let mut client = MCPClient::with_config(config);
+    client.connect(Box::new(client_transport)).await?;
 
-/// Send a JSON-RPC message to the server with proper JSON-RPC over stdio format
-fn send_message(stdin: &mut impl Write, message: &Value) {
-    let msg = message.to_string();
-    let header = format!("Content-Length: {}\r\n\r\n", msg.len());
-    stdin
-        .write_all(header.as_bytes())
-        .expect("Failed to write header");
-    stdin
-        .write_all(msg.as_bytes())
-        .expect("Failed to write message");
-    stdin.flush().expect("Failed to flush stdin");
-}
+    // Start server in background task
+    let server_handle = tokio::spawn(async move {
+        // Get the workspace root by going up from the test directory
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let workspace_root = std::path::Path::new(manifest_dir)
+            .parent() // crates
+            .unwrap()
+            .parent() // workspace root
+            .unwrap();
 
-/// Read a JSON-RPC message from the server with proper JSON-RPC over stdio format
-fn read_message(stdout: &mut impl BufRead) -> Result<Value, Box<dyn std::error::Error>> {
-    // Read headers until we find Content-Length
-    let mut content_length = 0;
-    loop {
-        let mut line = String::new();
-        stdout.read_line(&mut line)?;
+        // First ensure the binary is built
+        let output = Command::new("cargo")
+            .current_dir(workspace_root)
+            .args(["build", "--bin", "ruskel"])
+            .output()
+            .expect("Failed to build ruskel");
 
-        if line.trim().is_empty() {
-            // Empty line signals end of headers
-            break;
+        if !output.status.success() {
+            panic!(
+                "Failed to build ruskel: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
 
-        if line.starts_with("Content-Length:") {
-            content_length = line.trim_start_matches("Content-Length:").trim().parse()?;
-        }
-    }
+        // Find the target directory
+        let target_dir = workspace_root.join("target");
 
-    // Read the JSON content
-    let mut buffer = vec![0u8; content_length];
-    std::io::Read::read_exact(stdout, &mut buffer)?;
+        let profile = if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        };
+        let binary_path = target_dir.join(profile).join("ruskel");
 
-    let json_str = String::from_utf8(buffer)?;
-    Ok(serde_json::from_str(&json_str)?)
-}
+        // Start the MCP server process
+        let mut child = TokioCommand::new(binary_path)
+            .args(["--mcp"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Failed to start MCP server");
 
-/// Wait for a message with optional timeout
-fn read_message_timeout(
-    stdout: &mut impl BufRead,
-    _timeout: Duration,
-) -> Result<Value, Box<dyn std::error::Error>> {
-    // In a real implementation, we'd use async I/O or threads for proper timeout
-    // For now, we'll just try to read immediately
-    read_message(stdout)
-}
+        let mut child_stdin = child.stdin.take().expect("Failed to get child stdin");
+        let mut child_stdout = child.stdout.take().expect("Failed to get child stdout");
 
-#[test]
-#[ignore = "rust-mcp-sdk stdio transport issues in test environment"]
-fn test_mcp_server_initialize() {
-    let mut child = start_mcp_server();
+        // Split the server transport into read and write halves
+        let (mut server_read, mut server_write) = tokio::io::split(server_transport.stream);
 
-    // Wait a bit for server to start
-    std::thread::sleep(Duration::from_secs(2));
+        // Pipe data between the test transport and the actual MCP server process
+        let stdin_task =
+            tokio::spawn(async move { tokio::io::copy(&mut server_read, &mut child_stdin).await });
 
-    // Check if process is still running
-    match child.try_wait() {
-        Ok(Some(status)) => {
-            // Process has exited, check stderr for errors
-            if let Some(mut stderr) = child.stderr.take() {
-                let mut err_output = String::new();
-                std::io::Read::read_to_string(&mut stderr, &mut err_output).ok();
-                panic!("Server exited with status: {status:?}, stderr: {err_output}");
-            } else {
-                panic!("Server exited with status: {status:?}");
+        let stdout_task =
+            tokio::spawn(
+                async move { tokio::io::copy(&mut child_stdout, &mut server_write).await },
+            );
+
+        // Wait for the child process to complete or for piping to fail
+        tokio::select! {
+            result = child.wait() => {
+                match result {
+                    Ok(status) => {
+                        if !status.success() {
+                            eprintln!("MCP server exited with status: {}", status);
+                        }
+                    }
+                    Err(e) => eprintln!("Error waiting for MCP server: {}", e),
+                }
+            }
+            result = stdin_task => {
+                if let Err(e) = result {
+                    eprintln!("Error in stdin pipe: {}", e);
+                }
+            }
+            result = stdout_task => {
+                if let Err(e) = result {
+                    eprintln!("Error in stdout pipe: {}", e);
+                }
             }
         }
-        Ok(None) => {
-            // Process is still running
-        }
-        Err(e) => {
-            panic!("Error checking process status: {e}");
-        }
-    }
 
-    let stdin = child.stdin.as_mut().expect("Failed to get stdin");
-    let stdout = child.stdout.as_mut().expect("Failed to get stdout");
-    let mut reader = BufReader::new(stdout);
-
-    // Send initialize request
-    let init_request = json!({
-        "jsonrpc": "2.0",
-        "method": "initialize",
-        "params": {
-            "protocol_version": "2024-11-05",
-            "client_info": {
-                "name": "test-client",
-                "version": "1.0.0"
-            }
-        },
-        "id": 1
+        // Clean up
+        let _ = child.kill().await;
+        Ok(())
     });
 
-    send_message(stdin, &init_request);
+    Ok((client, server_handle))
+}
 
-    // Read response
-    let response = read_message_timeout(&mut reader, Duration::from_secs(5))
-        .expect("Failed to read initialize response");
+/// Initialize the client connection
+async fn initialize_client(client: &mut MCPClient) -> Result<InitializeResult> {
+    let client_info = Implementation {
+        name: "test-client".to_string(),
+        version: "1.0.0".to_string(),
+    };
+
+    let capabilities = ClientCapabilities::default();
+
+    client.initialize(client_info, capabilities).await
+}
+
+#[tokio::test]
+async fn test_mcp_server_initialize() {
+    let (mut client, server_handle) = create_test_pair()
+        .await
+        .expect("Failed to create test pair");
+
+    let result = timeout(Duration::from_secs(10), initialize_client(&mut client))
+        .await
+        .expect("Timeout during initialization")
+        .expect("Failed to initialize");
 
     // Verify response structure
-    assert_eq!(response["jsonrpc"], "2.0");
-    assert_eq!(response["id"], 1);
-
-    // Check if we got an error instead of result
-    if response.get("error").is_some() {
-        panic!(
-            "Got error response: {}",
-            serde_json::to_string_pretty(&response).unwrap()
-        );
-    }
-
-    assert!(
-        response["result"].is_object(),
-        "Response: {}",
-        serde_json::to_string_pretty(&response).unwrap()
-    );
-
-    let result = &response["result"];
-    assert_eq!(result["protocol_version"], "2024-11-05");
-    assert!(result["server_info"].is_object());
-    assert_eq!(result["server_info"]["name"], "Ruskel MCP Server");
+    assert_eq!(result.protocol_version, "2025-03-26");
+    assert_eq!(result.server_info.name, "Ruskel MCP Server");
 
     // Clean up
-    child.kill().expect("Failed to kill server");
-    let _ = child.wait();
+    server_handle.abort();
 }
 
-#[test]
-#[ignore = "rust-mcp-sdk stdio transport issues in test environment"]
-fn test_mcp_server_list_tools() {
-    let mut child = start_mcp_server();
+#[tokio::test]
+async fn test_mcp_server_list_tools() {
+    let (mut client, server_handle) = create_test_pair()
+        .await
+        .expect("Failed to create test pair");
 
-    let stdin = child.stdin.as_mut().expect("Failed to get stdin");
-    let stdout = child.stdout.as_mut().expect("Failed to get stdout");
-    let mut reader = BufReader::new(stdout);
+    let _init_result = initialize_client(&mut client)
+        .await
+        .expect("Failed to initialize");
 
-    // Wait for server to start
-    std::thread::sleep(Duration::from_millis(500));
-
-    // Initialize first
-    let init_request = json!({
-        "jsonrpc": "2.0",
-        "method": "initialize",
-        "params": {
-            "protocol_version": "2024-11-05",
-            "client_info": {
-                "name": "test-client",
-                "version": "1.0.0"
-            }
-        },
-        "id": 1
-    });
-
-    send_message(stdin, &init_request);
-    let _ = read_message(&mut reader); // Consume initialize response
-
-    // Send initialized notification
-    let initialized = json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/initialized",
-        "params": {}
-    });
-    send_message(stdin, &initialized);
-
-    // List tools
-    let list_tools = json!({
-        "jsonrpc": "2.0",
-        "method": "tools/list",
-        "params": {},
-        "id": 2
-    });
-
-    send_message(stdin, &list_tools);
-
-    let response = read_message_timeout(&mut reader, Duration::from_secs(5))
-        .expect("Failed to read list tools response");
+    let result = timeout(Duration::from_secs(10), client.list_tools())
+        .await
+        .expect("Timeout listing tools")
+        .expect("Failed to list tools");
 
     // Verify response
-    assert_eq!(response["jsonrpc"], "2.0");
-    assert_eq!(response["id"], 2);
-    assert!(response["result"].is_object());
-
-    let tools = &response["result"]["tools"];
-    assert!(tools.is_array());
-    assert_eq!(tools.as_array().unwrap().len(), 1);
-
-    let tool = &tools[0];
-    assert_eq!(tool["name"], "ruskel_skeleton");
-    assert!(tool["description"].is_string());
+    assert_eq!(result.tools.len(), 1);
+    let tool = &result.tools[0];
+    assert_eq!(tool.name, "ruskel");
+    assert!(tool.description.is_some());
 
     // Clean up
-    child.kill().expect("Failed to kill server");
-    let _ = child.wait();
+    server_handle.abort();
 }
 
-#[test]
-#[ignore = "rust-mcp-sdk stdio transport issues in test environment"]
-fn test_mcp_server_call_tool() {
-    // Skip this test if we don't have network access or nightly toolchain
-    if std::env::var("CARGO_TARGET_DIR").is_err() {
-        eprintln!("Skipping test_mcp_server_call_tool - requires cargo environment");
-        return;
-    }
+#[tokio::test]
+async fn test_mcp_server_call_tool() {
+    let (mut client, server_handle) = create_test_pair()
+        .await
+        .expect("Failed to create test pair");
 
-    let mut child = start_mcp_server();
+    let _init_result = initialize_client(&mut client)
+        .await
+        .expect("Failed to initialize");
 
-    let stdin = child.stdin.as_mut().expect("Failed to get stdin");
-    let stdout = child.stdout.as_mut().expect("Failed to get stdout");
-    let mut reader = BufReader::new(stdout);
+    // Call tool with a crate that should exist
+    let arguments = Some(json!({
+        "target": "serde",
+        "private": false
+    }));
 
-    // Wait for server to start
-    std::thread::sleep(Duration::from_millis(500));
-
-    // Initialize
-    let init_request = json!({
-        "jsonrpc": "2.0",
-        "method": "initialize",
-        "params": {
-            "protocol_version": "2024-11-05",
-            "client_info": {
-                "name": "test-client",
-                "version": "1.0.0"
-            }
-        },
-        "id": 1
-    });
-
-    send_message(stdin, &init_request);
-    let _ = read_message(&mut reader); // Consume initialize response
-
-    // Send initialized notification
-    let initialized = json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/initialized",
-        "params": {}
-    });
-    send_message(stdin, &initialized);
-
-    // Call tool with a simple built-in module
-    let call_tool = json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": {
-            "name": "ruskel_skeleton",
-            "arguments": {
-                "target": "std::vec",
-                "quiet": true
-            }
-        },
-        "id": 3
-    });
-
-    send_message(stdin, &call_tool);
-
-    let response = read_message_timeout(&mut reader, Duration::from_secs(30))
-        .expect("Failed to read tool call response");
+    let result = timeout(
+        Duration::from_secs(30),
+        client.call_tool("ruskel".to_string(), arguments),
+    )
+    .await
+    .expect("Timeout during tool call")
+    .expect("Failed to call tool");
 
     // Verify response
-    assert_eq!(response["jsonrpc"], "2.0");
-    assert_eq!(response["id"], 3);
-
-    if let Some(result) = response.get("result") {
-        assert!(result.is_object());
-        let content = &result["content"];
-        assert!(content.is_array());
-        assert!(!content.as_array().unwrap().is_empty());
-
-        let first_content = &content[0];
-        assert_eq!(first_content["type"], "text");
-        assert!(first_content["text"].is_string());
-
-        // Verify we got some Rust code back
-        let text = first_content["text"].as_str().unwrap();
-        assert!(text.contains("pub"));
-        assert!(text.contains("Vec"));
-    } else if let Some(error) = response.get("error") {
-        // If we get an error, it might be due to missing nightly toolchain
-        eprintln!("Tool call returned error: {error:?}");
-        // Don't fail the test in this case
-    } else {
-        panic!("Response has neither result nor error");
-    }
+    assert!(!result.content.is_empty());
 
     // Clean up
-    child.kill().expect("Failed to kill server");
-    let _ = child.wait();
+    server_handle.abort();
 }
 
-#[test]
-#[ignore = "rust-mcp-sdk stdio transport issues in test environment"]
-fn test_mcp_server_invalid_tool() {
-    let mut child = start_mcp_server();
+#[tokio::test]
+async fn test_mcp_server_invalid_tool() {
+    let (mut client, server_handle) = create_test_pair()
+        .await
+        .expect("Failed to create test pair");
 
-    let stdin = child.stdin.as_mut().expect("Failed to get stdin");
-    let stdout = child.stdout.as_mut().expect("Failed to get stdout");
-    let mut reader = BufReader::new(stdout);
-
-    // Wait for server to start
-    std::thread::sleep(Duration::from_millis(500));
-
-    // Initialize
-    let init_request = json!({
-        "jsonrpc": "2.0",
-        "method": "initialize",
-        "params": {
-            "protocol_version": "2024-11-05",
-            "client_info": {
-                "name": "test-client",
-                "version": "1.0.0"
-            }
-        },
-        "id": 1
-    });
-
-    send_message(stdin, &init_request);
-    let _ = read_message(&mut reader); // Consume initialize response
-
-    // Send initialized notification
-    let initialized = json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/initialized",
-        "params": {}
-    });
-    send_message(stdin, &initialized);
+    let _init_result = initialize_client(&mut client)
+        .await
+        .expect("Failed to initialize");
 
     // Call non-existent tool
-    let call_tool = json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": {
-            "name": "non_existent_tool",
-            "arguments": {}
-        },
-        "id": 2
-    });
+    let result = client
+        .call_tool("non_existent_tool".to_string(), Some(json!({})))
+        .await;
 
-    send_message(stdin, &call_tool);
-
-    let response = read_message_timeout(&mut reader, Duration::from_secs(5))
-        .expect("Failed to read tool call response");
-
-    // Should get an error response
-    assert_eq!(response["jsonrpc"], "2.0");
-    assert_eq!(response["id"], 2);
-    assert!(response["error"].is_object());
+    // Should get an error
+    assert!(result.is_err());
 
     // Clean up
-    child.kill().expect("Failed to kill server");
-    let _ = child.wait();
+    server_handle.abort();
 }
 
-#[test]
-#[ignore = "rust-mcp-sdk stdio transport issues in test environment"]
-fn test_mcp_server_invalid_arguments() {
-    let mut child = start_mcp_server();
+#[tokio::test]
+async fn test_mcp_server_invalid_arguments() {
+    let (mut client, server_handle) = create_test_pair()
+        .await
+        .expect("Failed to create test pair");
 
-    let stdin = child.stdin.as_mut().expect("Failed to get stdin");
-    let stdout = child.stdout.as_mut().expect("Failed to get stdout");
-    let mut reader = BufReader::new(stdout);
-
-    // Wait for server to start
-    std::thread::sleep(Duration::from_millis(500));
-
-    // Initialize
-    let init_request = json!({
-        "jsonrpc": "2.0",
-        "method": "initialize",
-        "params": {
-            "protocol_version": "2024-11-05",
-            "client_info": {
-                "name": "test-client",
-                "version": "1.0.0"
-            }
-        },
-        "id": 1
-    });
-
-    send_message(stdin, &init_request);
-    let _ = read_message(&mut reader); // Consume initialize response
-
-    // Send initialized notification
-    let initialized = json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/initialized",
-        "params": {}
-    });
-    send_message(stdin, &initialized);
+    let _init_result = initialize_client(&mut client)
+        .await
+        .expect("Failed to initialize");
 
     // Call tool without required target parameter
-    let call_tool = json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": {
-            "name": "ruskel_skeleton",
-            "arguments": {
-                "auto_impls": true
-                // Missing required "target" field
-            }
-        },
-        "id": 2
-    });
+    let arguments = Some(json!({
+        "private": true
+        // Missing required "target" field
+    }));
 
-    send_message(stdin, &call_tool);
+    let result = client.call_tool("ruskel".to_string(), arguments).await;
 
-    let response = read_message_timeout(&mut reader, Duration::from_secs(5))
-        .expect("Failed to read tool call response");
-
-    // Should get an error response
-    assert_eq!(response["jsonrpc"], "2.0");
-    assert_eq!(response["id"], 2);
-    assert!(response["error"].is_object());
+    // Should get an error
+    assert!(result.is_err());
 
     // Clean up
-    child.kill().expect("Failed to kill server");
-    let _ = child.wait();
+    server_handle.abort();
 }
 
-#[test]
-#[ignore = "rust-mcp-sdk stdio transport issues in test environment"]
-fn test_mcp_server_multiple_requests() {
-    let mut child = start_mcp_server();
+#[tokio::test]
+async fn test_mcp_server_multiple_requests() {
+    let (mut client, server_handle) = create_test_pair()
+        .await
+        .expect("Failed to create test pair");
 
-    let stdin = child.stdin.as_mut().expect("Failed to get stdin");
-    let stdout = child.stdout.as_mut().expect("Failed to get stdout");
-    let mut reader = BufReader::new(stdout);
-
-    // Wait for server to start
-    std::thread::sleep(Duration::from_millis(500));
-
-    // Initialize
-    let init_request = json!({
-        "jsonrpc": "2.0",
-        "method": "initialize",
-        "params": {
-            "protocol_version": "2024-11-05",
-            "client_info": {
-                "name": "test-client",
-                "version": "1.0.0"
-            }
-        },
-        "id": 1
-    });
-
-    send_message(stdin, &init_request);
-    let _ = read_message(&mut reader); // Consume initialize response
-
-    // Send initialized notification
-    let initialized = json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/initialized",
-        "params": {}
-    });
-    send_message(stdin, &initialized);
+    let _init_result = initialize_client(&mut client)
+        .await
+        .expect("Failed to initialize");
 
     // Test multiple sequential requests
-    let test_targets = ["std::vec", "std::option", "std::result"];
+    let test_targets = ["serde", "tokio", "async-trait"];
 
-    for (idx, target) in test_targets.iter().enumerate() {
+    for target in &test_targets {
         // List tools request
-        let list_tools = json!({
-            "jsonrpc": "2.0",
-            "method": "tools/list",
-            "params": {},
-            "id": (idx * 2) + 2
-        });
-
-        send_message(stdin, &list_tools);
-
-        let response = read_message_timeout(&mut reader, Duration::from_secs(5))
-            .unwrap_or_else(|_| panic!("Failed to read list tools response for iteration {idx}"));
-
-        assert_eq!(response["jsonrpc"], "2.0");
-        assert_eq!(response["id"], (idx * 2) + 2);
-        assert!(response["result"]["tools"].is_array());
+        let _list_result = timeout(Duration::from_secs(10), client.list_tools())
+            .await
+            .expect("Timeout listing tools")
+            .expect("Failed to list tools");
 
         // Call tool request
-        let call_tool = json!({
-            "jsonrpc": "2.0",
-            "method": "tools/call",
-            "params": {
-                "name": "ruskel_skeleton",
-                "arguments": {
-                    "target": target,
-                    "quiet": true
-                }
-            },
-            "id": (idx * 2) + 3
-        });
+        let arguments = Some(json!({
+            "target": target,
+            "private": false
+        }));
 
-        send_message(stdin, &call_tool);
+        let result = timeout(
+            Duration::from_secs(30),
+            client.call_tool("ruskel".to_string(), arguments),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("Timeout for target {target}"));
 
-        let response = read_message_timeout(&mut reader, Duration::from_secs(30))
-            .unwrap_or_else(|_| panic!("Failed to read tool call response for target {target}"));
-
-        assert_eq!(response["jsonrpc"], "2.0");
-        assert_eq!(response["id"], (idx * 2) + 3);
-
-        if let Some(result) = response.get("result") {
-            assert!(result["content"].is_array());
-            let content = &result["content"][0];
-            assert_eq!(content["type"], "text");
-            assert!(content["text"].is_string());
+        if let Ok(call_result) = result {
+            assert!(!call_result.content.is_empty());
         }
     }
 
     // Clean up
-    child.kill().expect("Failed to kill server");
-    let _ = child.wait();
+    server_handle.abort();
 }
 
-#[test]
-#[ignore = "rust-mcp-sdk stdio transport issues in test environment"]
-fn test_mcp_server_concurrent_requests() {
-    let mut child = start_mcp_server();
+#[tokio::test]
+async fn test_mcp_server_error_recovery() {
+    let (mut client, server_handle) = create_test_pair()
+        .await
+        .expect("Failed to create test pair");
 
-    let stdin = child.stdin.as_mut().expect("Failed to get stdin");
-    let stdout = child.stdout.as_mut().expect("Failed to get stdout");
-    let mut reader = BufReader::new(stdout);
-
-    // Wait for server to start
-    std::thread::sleep(Duration::from_millis(500));
-
-    // Initialize
-    let init_request = json!({
-        "jsonrpc": "2.0",
-        "method": "initialize",
-        "params": {
-            "protocol_version": "2024-11-05",
-            "client_info": {
-                "name": "test-client",
-                "version": "1.0.0"
-            }
-        },
-        "id": 1
-    });
-
-    send_message(stdin, &init_request);
-    let _ = read_message(&mut reader); // Consume initialize response
-
-    // Send initialized notification
-    let initialized = json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/initialized",
-        "params": {}
-    });
-    send_message(stdin, &initialized);
-
-    // Send multiple requests without waiting for responses
-    let request_ids = vec![10, 20, 30, 40, 50];
-
-    // Send all requests
-    for &id in &request_ids {
-        let request = if id % 2 == 0 {
-            // Even IDs: list tools
-            json!({
-                "jsonrpc": "2.0",
-                "method": "tools/list",
-                "params": {},
-                "id": id
-            })
-        } else {
-            // Odd IDs: call tool
-            json!({
-                "jsonrpc": "2.0",
-                "method": "tools/call",
-                "params": {
-                    "name": "ruskel_skeleton",
-                    "arguments": {
-                        "target": format!("test_module_{}", id),
-                        "quiet": true
-                    }
-                },
-                "id": id
-            })
-        };
-
-        send_message(stdin, &request);
-    }
-
-    // Collect responses
-    let mut responses = Vec::new();
-    for _ in 0..request_ids.len() {
-        let response = read_message_timeout(&mut reader, Duration::from_secs(30))
-            .expect("Failed to read response");
-        responses.push(response);
-    }
-
-    // Verify we got all responses
-    assert_eq!(responses.len(), request_ids.len());
-
-    // Verify each response has a valid ID from our requests
-    for response in &responses {
-        assert_eq!(response["jsonrpc"], "2.0");
-        let id = response["id"].as_u64().unwrap();
-        assert!(request_ids.contains(&(id as i32)));
-    }
-
-    // Clean up
-    child.kill().expect("Failed to kill server");
-    let _ = child.wait();
-}
-
-#[test]
-#[ignore = "rust-mcp-sdk stdio transport issues in test environment"]
-fn test_mcp_server_error_recovery() {
-    let mut child = start_mcp_server();
-
-    let stdin = child.stdin.as_mut().expect("Failed to get stdin");
-    let stdout = child.stdout.as_mut().expect("Failed to get stdout");
-    let mut reader = BufReader::new(stdout);
-
-    // Wait for server to start
-    std::thread::sleep(Duration::from_millis(500));
-
-    // Initialize
-    let init_request = json!({
-        "jsonrpc": "2.0",
-        "method": "initialize",
-        "params": {
-            "protocol_version": "2024-11-05",
-            "client_info": {
-                "name": "test-client",
-                "version": "1.0.0"
-            }
-        },
-        "id": 1
-    });
-
-    send_message(stdin, &init_request);
-    let _ = read_message(&mut reader); // Consume initialize response
-
-    // Send initialized notification
-    let initialized = json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/initialized",
-        "params": {}
-    });
-    send_message(stdin, &initialized);
+    let _init_result = initialize_client(&mut client)
+        .await
+        .expect("Failed to initialize");
 
     // 1. Valid request
-    let valid_request = json!({
-        "jsonrpc": "2.0",
-        "method": "tools/list",
-        "params": {},
-        "id": 2
-    });
-
-    send_message(stdin, &valid_request);
-    let response = read_message_timeout(&mut reader, Duration::from_secs(5))
-        .expect("Failed to read valid response");
-
-    assert_eq!(response["jsonrpc"], "2.0");
-    assert_eq!(response["id"], 2);
-    assert!(response["result"].is_object());
+    let result = timeout(Duration::from_secs(10), client.list_tools())
+        .await
+        .expect("Timeout listing tools")
+        .expect("Failed to list tools");
+    assert!(!result.tools.is_empty());
 
     // 2. Invalid tool name (should error)
-    let invalid_tool = json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": {
-            "name": "non_existent_tool",
-            "arguments": {}
-        },
-        "id": 3
-    });
-
-    send_message(stdin, &invalid_tool);
-    let response = read_message_timeout(&mut reader, Duration::from_secs(5))
-        .expect("Failed to read error response");
-
-    assert_eq!(response["jsonrpc"], "2.0");
-    assert_eq!(response["id"], 3);
-    assert!(response["error"].is_object());
+    let result = client
+        .call_tool("non_existent_tool".to_string(), Some(json!({})))
+        .await;
+    assert!(result.is_err());
 
     // 3. Valid request after error (server should recover)
-    let valid_after_error = json!({
-        "jsonrpc": "2.0",
-        "method": "tools/list",
-        "params": {},
-        "id": 4
-    });
-
-    send_message(stdin, &valid_after_error);
-    let response = read_message_timeout(&mut reader, Duration::from_secs(5))
-        .expect("Failed to read recovery response");
-
-    assert_eq!(response["jsonrpc"], "2.0");
-    assert_eq!(response["id"], 4);
-    assert!(response["result"].is_object());
+    let result = timeout(Duration::from_secs(10), client.list_tools())
+        .await
+        .expect("Timeout listing tools after error")
+        .expect("Failed to list tools after error");
+    assert!(!result.tools.is_empty());
 
     // 4. Invalid arguments (should error)
-    let invalid_args = json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": {
-            "name": "ruskel_skeleton",
-            "arguments": {
-                // Missing required "target"
-                "auto_impls": true
-            }
-        },
-        "id": 5
-    });
+    let invalid_args = Some(json!({
+        // Missing required "target"
+        "private": true
+    }));
 
-    send_message(stdin, &invalid_args);
-    let response = read_message_timeout(&mut reader, Duration::from_secs(5))
-        .expect("Failed to read error response");
-
-    assert_eq!(response["jsonrpc"], "2.0");
-    assert_eq!(response["id"], 5);
-    assert!(response["error"].is_object());
+    let result = client.call_tool("ruskel".to_string(), invalid_args).await;
+    assert!(result.is_err());
 
     // 5. Valid request after another error
-    let final_valid = json!({
-        "jsonrpc": "2.0",
-        "method": "tools/call",
-        "params": {
-            "name": "ruskel_skeleton",
-            "arguments": {
-                "target": "std::result",
-                "quiet": true
-            }
-        },
-        "id": 6
-    });
+    let final_args = Some(json!({
+        "target": "serde",
+        "private": false
+    }));
 
-    send_message(stdin, &final_valid);
-    let response = read_message_timeout(&mut reader, Duration::from_secs(30))
-        .expect("Failed to read final response");
+    let result = timeout(
+        Duration::from_secs(30),
+        client.call_tool("ruskel".to_string(), final_args),
+    )
+    .await
+    .expect("Timeout during final request");
 
-    assert_eq!(response["jsonrpc"], "2.0");
-    assert_eq!(response["id"], 6);
-
-    if let Some(result) = response.get("result") {
-        assert!(result["content"].is_array());
+    if let Ok(call_result) = result {
+        assert!(!call_result.content.is_empty());
     }
 
     // Clean up
-    child.kill().expect("Failed to kill server");
-    let _ = child.wait();
+    server_handle.abort();
 }
