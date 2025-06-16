@@ -9,7 +9,7 @@ use super::{cargoutils::*, error::*, render::*};
 /// then uses 'cargo doc' with the nightly toolchain to generate JSON output. This JSON
 /// is parsed and used to render the skeletonized code. Users must have the nightly
 /// Rust toolchain installed and available.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Ruskel {
     /// In offline mode Ruskell will not attempt to fetch dependencies from the network.
     offline: bool,

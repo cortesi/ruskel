@@ -107,7 +107,7 @@ impl ToolHandler for RuskelToolHandler {
     }
 }
 
-pub async fn run_mcp_server(ruskel: Ruskel) -> Result<()> {
+pub async fn run_mcp_server(ruskel: Ruskel, addr: Option<String>) -> Result<()> {
     // Only initialize tracing if RUST_LOG is set
     if std::env::var("RUST_LOG").is_ok() {
         tracing_subscriber::fmt()
@@ -120,20 +120,71 @@ pub async fn run_mcp_server(ruskel: Ruskel) -> Result<()> {
             .init();
     }
 
-    let mut server = MCPServer::new(
-        "Ruskel MCP Server".to_string(),
-        env!("CARGO_PKG_VERSION").to_string(),
-    )
-    .with_capabilities(ServerCapabilities {
-        tools: Some(ToolsCapability { list_changed: None }),
-        ..Default::default()
-    });
+    if let Some(addr) = addr {
+        // TCP server mode
+        use tokio::net::TcpListener;
 
-    let tool_handler = RuskelToolHandler::new(ruskel);
-    server.register_tool(Box::new(tool_handler)).await;
+        let listener =
+            TcpListener::bind(&addr)
+                .await
+                .map_err(|e| MCPError::TransportConnectionFailed {
+                    message: format!("Failed to bind to {addr}: {e}"),
+                })?;
 
-    let transport = Box::new(StdioTransport::new());
-    server.serve(transport).await?;
+        tracing::info!("MCP server listening on {}", addr);
+
+        loop {
+            let (stream, peer_addr) = listener.accept().await.map_err(|e| MCPError::Io {
+                message: format!("Failed to accept connection: {e}"),
+            })?;
+
+            tracing::info!("Accepted connection from {}", peer_addr);
+
+            let transport = Box::new(tenx_mcp::transport::TcpServerTransport::new(stream));
+
+            // Clone the ruskel instance for this connection
+            let connection_ruskel = ruskel.clone();
+
+            // Handle each connection in a separate task
+            tokio::spawn(async move {
+                // Create a new server for this connection
+                let mut connection_server = MCPServer::new(
+                    "Ruskel MCP Server".to_string(),
+                    env!("CARGO_PKG_VERSION").to_string(),
+                )
+                .with_capabilities(ServerCapabilities {
+                    tools: Some(ToolsCapability { list_changed: None }),
+                    ..Default::default()
+                });
+
+                let tool_handler = RuskelToolHandler::new(connection_ruskel);
+                connection_server
+                    .register_tool(Box::new(tool_handler))
+                    .await;
+
+                if let Err(e) = connection_server.serve(transport).await {
+                    tracing::error!("Error serving connection from {}: {}", peer_addr, e);
+                }
+                tracing::info!("Connection from {} closed", peer_addr);
+            });
+        }
+    } else {
+        // Stdio mode
+        let mut server = MCPServer::new(
+            "Ruskel MCP Server".to_string(),
+            env!("CARGO_PKG_VERSION").to_string(),
+        )
+        .with_capabilities(ServerCapabilities {
+            tools: Some(ToolsCapability { list_changed: None }),
+            ..Default::default()
+        });
+
+        let tool_handler = RuskelToolHandler::new(ruskel);
+        server.register_tool(Box::new(tool_handler)).await;
+
+        let transport = Box::new(StdioTransport::new());
+        server.serve(transport).await?;
+    }
 
     Ok(())
 }

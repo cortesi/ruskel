@@ -3,7 +3,6 @@
 //! These tests verify the MCP server protocol implementation using the Transport trait.
 
 use async_trait::async_trait;
-use libruskel::Ruskel;
 use serde_json::json;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -13,7 +12,7 @@ use tenx_mcp::{
     schema::{ClientCapabilities, Implementation, InitializeResult},
     transport::{Transport, TransportStream},
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
+use tokio::io::DuplexStream;
 use tokio::process::Command as TokioCommand;
 use tokio::time::timeout;
 use tokio_util::codec::Framed;
@@ -126,20 +125,20 @@ async fn create_test_pair() -> Result<(MCPClient, tokio::task::JoinHandle<Result
                 match result {
                     Ok(status) => {
                         if !status.success() {
-                            eprintln!("MCP server exited with status: {}", status);
+                            eprintln!("MCP server exited with status: {status}");
                         }
                     }
-                    Err(e) => eprintln!("Error waiting for MCP server: {}", e),
+                    Err(e) => eprintln!("Error waiting for MCP server: {e}"),
                 }
             }
             result = stdin_task => {
                 if let Err(e) = result {
-                    eprintln!("Error in stdin pipe: {}", e);
+                    eprintln!("Error in stdin pipe: {e}");
                 }
             }
             result = stdout_task => {
                 if let Err(e) = result {
-                    eprintln!("Error in stdout pipe: {}", e);
+                    eprintln!("Error in stdout pipe: {e}");
                 }
             }
         }

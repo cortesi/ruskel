@@ -53,6 +53,10 @@ struct Cli {
     /// Run as an MCP server on stdout
     #[arg(long, default_value_t = false)]
     mcp: bool,
+
+    /// Host:port to bind to when running as MCP server (requires --mcp)
+    #[arg(long)]
+    addr: Option<String>,
 }
 
 fn check_nightly_toolchain() -> Result<(), String> {
@@ -92,7 +96,7 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // Run the MCP server
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(ruskel_mcp::run_mcp_server(ruskel))?;
+    runtime.block_on(ruskel_mcp::run_mcp_server(ruskel, cli.addr.clone()))?;
 
     Ok(())
 }
@@ -144,6 +148,12 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
 fn main() {
     let cli = Cli::parse();
+
+    // Validate that --addr is only used with --mcp
+    if cli.addr.is_some() && !cli.mcp {
+        eprintln!("Error: --addr can only be used with --mcp");
+        std::process::exit(1);
+    }
 
     let result = if cli.mcp {
         run_mcp(&cli)

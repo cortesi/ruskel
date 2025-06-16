@@ -77,8 +77,7 @@ impl CargoPath {
         let json_content = fs::read_to_string(&json_path)?;
         let crate_data: Crate = serde_json::from_str(&json_content).map_err(|e| {
             RuskelError::Generate(format!(
-                "Failed to parse rustdoc JSON, which may indicate an outdated nightly toolchain - try running 'rustup update nightly':\nError: {}",
-                e
+                "Failed to parse rustdoc JSON, which may indicate an outdated nightly toolchain - try running 'rustup update nightly':\nError: {e}"
             ))
         })?;
         Ok(crate_data)
