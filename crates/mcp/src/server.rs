@@ -107,16 +107,21 @@ impl ToolHandler for RuskelToolHandler {
     }
 }
 
-pub async fn run_mcp_server(ruskel: Ruskel, addr: Option<String>) -> Result<()> {
-    // Only initialize tracing if RUST_LOG is set
-    if std::env::var("RUST_LOG").is_ok() {
+pub async fn run_mcp_server(
+    ruskel: Ruskel,
+    addr: Option<String>,
+    log_level: Option<String>,
+) -> Result<()> {
+    // Initialize tracing for TCP mode only
+    if addr.is_some() {
+        // TCP mode: enable tracing to stdout
+        let level = log_level.as_deref().unwrap_or("info");
+        let filter = format!("ruskel_mcp={},tenx_mcp={}", level, level);
+
         tracing_subscriber::fmt()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::from_default_env()
-                    .add_directive("ruskel_mcp=debug".parse().unwrap())
-                    .add_directive("tenx_mcp=debug".parse().unwrap()),
-            )
-            .with_writer(std::io::stderr)
+            .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
+            .with_writer(std::io::stdout)
+            .without_time()
             .init();
     }
 
@@ -131,7 +136,12 @@ pub async fn run_mcp_server(ruskel: Ruskel, addr: Option<String>) -> Result<()> 
                     message: format!("Failed to bind to {addr}: {e}"),
                 })?;
 
-        tracing::info!("MCP server listening on {}", addr);
+        // Get the actual bound address (in case port 0 was used)
+        let bound_addr = listener.local_addr().map_err(|e| MCPError::Io {
+            message: format!("Failed to get local address: {e}"),
+        })?;
+
+        tracing::info!("MCP server listening on {}", bound_addr);
 
         loop {
             let (stream, peer_addr) = listener.accept().await.map_err(|e| MCPError::Io {

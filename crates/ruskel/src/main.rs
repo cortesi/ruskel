@@ -57,6 +57,10 @@ struct Cli {
     /// Host:port to bind to when running as MCP server (requires --mcp)
     #[arg(long)]
     addr: Option<String>,
+
+    /// Log level for tracing output (only used with --mcp --addr)
+    #[arg(long, value_parser = ["error", "warn", "info", "debug", "trace"])]
+    log: Option<String>,
 }
 
 fn check_nightly_toolchain() -> Result<(), String> {
@@ -96,7 +100,11 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
 
     // Run the MCP server
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(ruskel_mcp::run_mcp_server(ruskel, cli.addr.clone()))?;
+    runtime.block_on(ruskel_mcp::run_mcp_server(
+        ruskel,
+        cli.addr.clone(),
+        cli.log.clone(),
+    ))?;
 
     Ok(())
 }
@@ -152,6 +160,12 @@ fn main() {
     // Validate that --addr is only used with --mcp
     if cli.addr.is_some() && !cli.mcp {
         eprintln!("Error: --addr can only be used with --mcp");
+        std::process::exit(1);
+    }
+
+    // Validate that --log is only used with --mcp --addr
+    if cli.log.is_some() && (cli.addr.is_none() || !cli.mcp) {
+        eprintln!("Error: --log can only be used with --mcp --addr");
         std::process::exit(1);
     }
 
