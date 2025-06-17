@@ -131,7 +131,7 @@ async fn test_mcp_server_call_tool() {
 
     let result = timeout(
         Duration::from_secs(30),
-        client.call_tool("ruskel", arguments),
+        client.call_tool("ruskel", &arguments),
     )
     .await
     .expect("Timeout during tool call")
@@ -155,7 +155,9 @@ async fn test_mcp_server_invalid_tool() {
         .expect("Failed to initialize");
 
     // Call non-existent tool
-    let result = client.call_tool("non_existent_tool", Some(json!({}))).await;
+    let result = client
+        .call_tool("non_existent_tool", &Some(json!({})))
+        .await;
 
     // Should get an error
     assert!(result.is_err());
@@ -180,7 +182,7 @@ async fn test_mcp_server_invalid_arguments() {
         // Missing required "target" field
     }));
 
-    let result = client.call_tool("ruskel", arguments).await;
+    let result = client.call_tool("ruskel", &arguments).await;
 
     // Should get an error
     assert!(result.is_ok());
@@ -218,7 +220,7 @@ async fn test_mcp_server_multiple_requests() {
 
         let result = timeout(
             Duration::from_secs(30),
-            client.call_tool("ruskel", arguments),
+            client.call_tool("ruskel", &arguments),
         )
         .await
         .unwrap_or_else(|_| panic!("Timeout for target {target}"));
@@ -250,7 +252,9 @@ async fn test_mcp_server_error_recovery() {
     assert!(!result.tools.is_empty());
 
     // 2. Invalid tool name (should error)
-    let result = client.call_tool("non_existent_tool", Some(json!({}))).await;
+    let result = client
+        .call_tool("non_existent_tool", &Some(json!({})))
+        .await;
     assert!(result.is_err());
 
     // 3. Valid request after error (server should recover)
@@ -266,7 +270,7 @@ async fn test_mcp_server_error_recovery() {
         "private": true
     }));
 
-    let result = client.call_tool("ruskel", invalid_args).await;
+    let result = client.call_tool("ruskel", &invalid_args).await;
     assert!(result.is_ok());
     assert!(result.unwrap().is_error.unwrap());
 
@@ -278,7 +282,7 @@ async fn test_mcp_server_error_recovery() {
 
     let result = timeout(
         Duration::from_secs(30),
-        client.call_tool("ruskel", final_args),
+        client.call_tool("ruskel", &final_args),
     )
     .await
     .expect("Timeout during final request");
