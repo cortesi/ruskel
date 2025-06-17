@@ -1,89 +1,73 @@
-use async_trait::async_trait;
 use libruskel::Ruskel;
 use tenx_mcp::{
-    error::{MCPError, Result},
-    schema::{Content, ServerCapabilities, TextContent, Tool, ToolInputSchema, ToolsCapability},
-    server::{MCPServer, ToolHandler},
-    transport::StdioTransport,
+    schema::{
+        CallToolResult, InitializeResult, ListToolsResult, ServerCapabilities, Tool,
+        ToolInputSchema,
+    },
+    Connection, Result, Server,
 };
 use tracing::error;
 
 use crate::tools::RuskelSkeletonTool;
 
-pub struct RuskelToolHandler {
+pub struct RuskelConnection {
     ruskel: Ruskel,
 }
 
-impl RuskelToolHandler {
+impl RuskelConnection {
     pub fn new(ruskel: Ruskel) -> Self {
         Self { ruskel }
     }
-}
 
-#[async_trait]
-impl ToolHandler for RuskelToolHandler {
-    fn metadata(&self) -> Tool {
-        let mut properties = std::collections::HashMap::new();
-
-        properties.insert("target".to_string(), serde_json::json!({
-            "type": "string",
-            "description": "Crate, module path, or filesystem path (optionally with @<semver>) whose API skeleton should be produced."
-        }));
-
-        properties.insert(
-            "private".to_string(),
-            serde_json::json!({
+    fn tool_metadata(&self) -> Tool {
+        let properties = [
+            ("target", serde_json::json!({
+                "type": "string",
+                "description": "Crate, module path, or filesystem path (optionally with @<semver>) whose API skeleton should be produced."
+            })),
+            ("private", serde_json::json!({
                 "type": "boolean",
                 "description": "Include non‑public (private / crate‑private) items.",
                 "default": false
-            }),
-        );
-
-        properties.insert(
-            "no_default_features".to_string(),
-            serde_json::json!({
+            })),
+            ("no_default_features", serde_json::json!({
                 "type": "boolean",
                 "description": "Disable the crate's default Cargo features.",
                 "default": false
-            }),
-        );
-
-        properties.insert(
-            "all_features".to_string(),
-            serde_json::json!({
+            })),
+            ("all_features", serde_json::json!({
                 "type": "boolean",
                 "description": "Enable every optional Cargo feature.",
                 "default": false
-            }),
-        );
+            })),
+            ("features", serde_json::json!({
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Exact list of Cargo features to enable (ignored if all_features=true).",
+                "default": []
+            }))
+        ].into_iter().map(|(k, v)| (k.to_string(), v)).collect();
 
-        properties.insert("features".to_string(), serde_json::json!({
-            "type": "array",
-            "items": {"type": "string"},
-            "description": "Exact list of Cargo features to enable (ignored if all_features=true).",
-            "default": []
-        }));
-
-        Tool {
-            name: "ruskel".to_string(),
-            description: Some(include_str!("../ruskel-description.txt").to_string()),
-            input_schema: ToolInputSchema {
-                schema_type: "object".to_string(),
-                properties: Some(properties),
-                required: Some(vec!["target".to_string()]),
-            },
-            annotations: None,
-        }
+        Tool::new(
+            "ruskel",
+            ToolInputSchema::default()
+                .with_properties(properties)
+                .with_required("target"),
+        )
+        .with_description(include_str!("../ruskel-description.txt"))
     }
 
-    async fn execute(&self, arguments: Option<serde_json::Value>) -> Result<Vec<Content>> {
-        let args = arguments.unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+    async fn execute_tool(&self, arguments: Option<serde_json::Value>) -> CallToolResult {
+        let args = arguments.unwrap_or_default();
 
-        let tool_params: RuskelSkeletonTool =
-            serde_json::from_value(args).map_err(|e| MCPError::InvalidParams {
-                method: "ruskel".to_string(),
-                message: e.to_string(),
-            })?;
+        let tool_params: RuskelSkeletonTool = match serde_json::from_value(args) {
+            Ok(params) => params,
+            Err(e) => {
+                return CallToolResult::new()
+                    .with_text_content(format!("Invalid parameters for ruskel tool: {}", e))
+                    .is_error(true)
+            }
+        };
 
         match self.ruskel.render(
             &tool_params.target,
@@ -92,17 +76,46 @@ impl ToolHandler for RuskelToolHandler {
             tool_params.features,
             tool_params.private,
         ) {
-            Ok(output) => Ok(vec![Content::Text(TextContent {
-                text: output,
-                annotations: None,
-            })]),
+            Ok(output) => CallToolResult::new().with_text_content(output),
             Err(e) => {
                 error!("Failed to generate skeleton: {}", e);
-                Err(MCPError::ToolExecutionFailed {
-                    tool: "ruskel".to_string(),
-                    message: e.to_string(),
-                })
+                CallToolResult::new()
+                    .with_text_content(format!(
+                        "Failed to generate skeleton for '{}': {}",
+                        tool_params.target, e
+                    ))
+                    .is_error(true)
             }
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl Connection for RuskelConnection {
+    async fn initialize(
+        &mut self,
+        _protocol_version: String,
+        _capabilities: tenx_mcp::ClientCapabilities,
+        _client_info: tenx_mcp::Implementation,
+    ) -> Result<InitializeResult> {
+        Ok(InitializeResult::new("Ruskel MCP Server", env!("CARGO_PKG_VERSION"))
+            .with_tools(true)
+            .with_instructions("Use the 'ruskel' tool to generate Rust API skeletons for crates, modules, or filesystem paths."))
+    }
+
+    async fn tools_list(&mut self) -> Result<ListToolsResult> {
+        Ok(ListToolsResult::new().with_tool(self.tool_metadata()))
+    }
+
+    async fn tools_call(
+        &mut self,
+        name: String,
+        arguments: Option<serde_json::Value>,
+    ) -> Result<CallToolResult> {
+        if name == "ruskel" {
+            Ok(self.execute_tool(arguments).await)
+        } else {
+            Err(tenx_mcp::Error::ToolNotFound(name))
         }
     }
 }
@@ -114,7 +127,6 @@ pub async fn run_mcp_server(
 ) -> Result<()> {
     // Initialize tracing for TCP mode only
     if addr.is_some() {
-        // TCP mode: enable tracing to stdout
         let level = log_level.as_deref().unwrap_or("info");
         let filter = format!("ruskel_mcp={},tenx_mcp={}", level, level);
 
@@ -125,76 +137,15 @@ pub async fn run_mcp_server(
             .init();
     }
 
-    if let Some(addr) = addr {
-        // TCP server mode
-        use tokio::net::TcpListener;
+    let server = Server::default()
+        .with_connection_factory(move || Box::new(RuskelConnection::new(ruskel.clone())))
+        .with_capabilities(ServerCapabilities::default().with_tools(None));
 
-        let listener =
-            TcpListener::bind(&addr)
-                .await
-                .map_err(|e| MCPError::TransportConnectionFailed {
-                    message: format!("Failed to bind to {addr}: {e}"),
-                })?;
-
-        // Get the actual bound address (in case port 0 was used)
-        let bound_addr = listener.local_addr().map_err(|e| MCPError::Io {
-            message: format!("Failed to get local address: {e}"),
-        })?;
-
-        tracing::info!("MCP server listening on {}", bound_addr);
-
-        loop {
-            let (stream, peer_addr) = listener.accept().await.map_err(|e| MCPError::Io {
-                message: format!("Failed to accept connection: {e}"),
-            })?;
-
-            tracing::info!("Accepted connection from {}", peer_addr);
-
-            let transport = Box::new(tenx_mcp::transport::TcpServerTransport::new(stream));
-
-            // Clone the ruskel instance for this connection
-            let connection_ruskel = ruskel.clone();
-
-            // Handle each connection in a separate task
-            tokio::spawn(async move {
-                // Create a new server for this connection
-                let mut connection_server = MCPServer::new(
-                    "Ruskel MCP Server".to_string(),
-                    env!("CARGO_PKG_VERSION").to_string(),
-                )
-                .with_capabilities(ServerCapabilities {
-                    tools: Some(ToolsCapability { list_changed: None }),
-                    ..Default::default()
-                });
-
-                let tool_handler = RuskelToolHandler::new(connection_ruskel);
-                connection_server
-                    .register_tool(Box::new(tool_handler))
-                    .await;
-
-                if let Err(e) = connection_server.serve(transport).await {
-                    tracing::error!("Error serving connection from {}: {}", peer_addr, e);
-                }
-                tracing::info!("Connection from {} closed", peer_addr);
-            });
+    match addr {
+        Some(addr) => {
+            tracing::info!("Starting MCP server on {}", addr);
+            server.serve_tcp(addr).await
         }
-    } else {
-        // Stdio mode
-        let mut server = MCPServer::new(
-            "Ruskel MCP Server".to_string(),
-            env!("CARGO_PKG_VERSION").to_string(),
-        )
-        .with_capabilities(ServerCapabilities {
-            tools: Some(ToolsCapability { list_changed: None }),
-            ..Default::default()
-        });
-
-        let tool_handler = RuskelToolHandler::new(ruskel);
-        server.register_tool(Box::new(tool_handler)).await;
-
-        let transport = Box::new(StdioTransport::new());
-        server.serve(transport).await?;
+        None => server.serve_stdio().await,
     }
-
-    Ok(())
 }
