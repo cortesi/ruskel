@@ -222,7 +222,10 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
             trait_,
         } => {
             let self_type_str = render_type_inner(self_type, true);
-            let args_str = render_generic_args(args);
+            let args_str = args
+                .as_ref()
+                .map(|a| render_generic_args(a))
+                .unwrap_or_default();
 
             if let Some(trait_) = trait_ {
                 let trait_path = render_path(trait_);

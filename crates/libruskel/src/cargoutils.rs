@@ -623,7 +623,6 @@ mod tests {
             name = "pkg2"
             version = "0.1.0"
             [dependencies]
-            serde = "1.0"
             "#,
         )
         .unwrap();
