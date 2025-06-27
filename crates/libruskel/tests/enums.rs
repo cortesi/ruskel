@@ -115,6 +115,49 @@ gen_tests! {
                 "#
             }
         }
+        rt {
+            with_derives: {
+                input: r#"
+                    pub enum DeriveEnum {
+                        Variant1,
+                        Variant2(String),
+                        Variant3 { field: i32 },
+                    }
+
+                    impl Clone for DeriveEnum {
+                        fn clone(&self) -> Self {
+                            match self {
+                                DeriveEnum::Variant1 => DeriveEnum::Variant1,
+                                DeriveEnum::Variant2(s) => DeriveEnum::Variant2(s.clone()),
+                                DeriveEnum::Variant3 { field } => DeriveEnum::Variant3 { field: *field },
+                            }
+                        }
+                    }
+
+                    impl Debug for DeriveEnum {
+                        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                            match self {
+                                DeriveEnum::Variant1 => write!(f, "Variant1"),
+                                DeriveEnum::Variant2(s) => write!(f, "Variant2({:?})", s),
+                                DeriveEnum::Variant3 { field } => write!(f, "Variant3 {{ field: {:?} }}", field),
+                            }
+                        }
+                    }
+
+                    use std::fmt::Debug;
+                "#,
+                output: r#"
+                    #[derive(Clone, Debug)]
+                    pub enum DeriveEnum {
+                        Variant1,
+                        Variant2(String),
+                        Variant3 {
+                            field: i32,
+                        },
+                    }
+                "#
+            }
+        }
         rt_custom {
             pub_enum_with_private_rendering: {
                 renderer: Renderer::default().with_private_items(false),

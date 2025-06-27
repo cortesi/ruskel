@@ -222,7 +222,7 @@ impl RenderState<'_, '_> {
         let output = match &item.inner {
             ItemEnum::Module(_) => self.render_module(path_prefix, item),
             ItemEnum::Struct(_) => self.render_struct(path_prefix, item),
-            ItemEnum::Enum(_) => self.render_enum(item),
+            ItemEnum::Enum(_) => self.render_enum(path_prefix, item),
             ItemEnum::Trait(_) => self.render_trait(item),
             ItemEnum::Use(_) => self.render_use(path_prefix, item),
             ItemEnum::Function(_) => self.render_function(item, false),
@@ -414,10 +414,33 @@ impl RenderState<'_, '_> {
         }
     }
 
-    fn render_enum(&self, item: &Item) -> String {
+    fn render_enum(&mut self, path_prefix: &str, item: &Item) -> String {
         let mut output = docs(item);
 
         let enum_ = extract_item!(item, ItemEnum::Enum);
+
+        // Collect inline traits
+        let mut inline_traits = Vec::new();
+        for impl_id in &enum_.impls {
+            let impl_item = must_get(self.crate_data, impl_id);
+            let impl_ = extract_item!(impl_item, ItemEnum::Impl);
+            if impl_.is_synthetic {
+                continue;
+            }
+
+            if let Some(trait_) = &impl_.trait_ {
+                if let Some(name) = trait_.path.split("::").last() {
+                    if DERIVE_TRAITS.contains(&name) {
+                        inline_traits.push(name);
+                    }
+                }
+            }
+        }
+
+        // Add derive attribute if we found any inline traits
+        if !inline_traits.is_empty() {
+            output.push_str(&format!("#[derive({})]\n", inline_traits.join(", ")));
+        }
 
         let generics = render_generics(&enum_.generics);
         let where_clause = render_where_clause(&enum_.generics);
@@ -436,6 +459,15 @@ impl RenderState<'_, '_> {
         }
 
         output.push_str("}\n\n");
+
+        // Render impl blocks
+        for impl_id in &enum_.impls {
+            let impl_item = must_get(self.crate_data, impl_id);
+            let impl_ = extract_item!(impl_item, ItemEnum::Impl);
+            if self.should_render_impl(impl_) {
+                output.push_str(&self.render_impl(path_prefix, impl_item));
+            }
+        }
 
         output
     }
