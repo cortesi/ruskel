@@ -64,7 +64,7 @@ impl RuskelConnection {
             Ok(params) => params,
             Err(e) => {
                 return CallToolResult::new()
-                    .with_text_content(format!("Invalid parameters for ruskel tool: {}", e))
+                    .with_text_content(format!("Invalid parameters for ruskel tool: {e}"))
                     .is_error(true)
             }
         };
@@ -128,7 +128,7 @@ pub async fn run_mcp_server(
     // Initialize tracing for TCP mode only
     if addr.is_some() {
         let level = log_level.as_deref().unwrap_or("info");
-        let filter = format!("ruskel_mcp={},tenx_mcp={}", level, level);
+        let filter = format!("ruskel_mcp={level},tenx_mcp={level}");
 
         tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::new(filter))

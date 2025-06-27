@@ -1,6 +1,7 @@
 use std::fs;
 use std::io::Write;
 use std::path::{absolute, Path, PathBuf};
+use std::process::Command;
 
 use cargo::{core::Workspace, ops, util::context::GlobalContext};
 use rustdoc_types::Crate;
@@ -10,11 +11,175 @@ use tempfile::TempDir;
 use super::target::{Entrypoint, Target};
 use crate::error::{convert_cargo_error, Result, RuskelError};
 
+/// Get the sysroot path for the nightly toolchain
+fn get_sysroot() -> Result<PathBuf> {
+    let output = Command::new("rustc")
+        .args(["+nightly", "--print", "sysroot"])
+        .output()
+        .map_err(|e| RuskelError::Generate(format!("Failed to get sysroot: {e}")))?;
+
+    if !output.status.success() {
+        return Err(RuskelError::Generate(
+            "Failed to get nightly sysroot - ensure nightly toolchain is installed".to_string(),
+        ));
+    }
+
+    let sysroot = String::from_utf8(output.stdout)
+        .map_err(|e| RuskelError::Generate(format!("Invalid UTF-8 in sysroot path: {e}")))?
+        .trim()
+        .to_string();
+
+    Ok(PathBuf::from(sysroot))
+}
+
+/// Check if a crate name is a standard library crate
+fn is_std_library_crate(name: &str) -> bool {
+    matches!(name, "std" | "core" | "alloc" | "proc_macro" | "test")
+}
+
+/// Check if a name is a common standard library module that should not be resolved as a crate
+fn is_std_library_module(name: &str) -> bool {
+    matches!(
+        name,
+        "rc" | "arc"
+            | "vec"
+            | "hashmap"
+            | "btreemap"
+            | "collections"
+            | "sync"
+            | "io"
+            | "fs"
+            | "net"
+            | "thread"
+            | "process"
+            | "env"
+            | "path"
+            | "mem"
+            | "ptr"
+            | "slice"
+            | "str"
+            | "string"
+            | "option"
+            | "result"
+            | "error"
+            | "fmt"
+            | "ops"
+            | "cmp"
+            | "iter"
+            | "cell"
+            | "marker"
+            | "any"
+            | "panic"
+            | "hash"
+            | "borrow"
+            | "clone"
+            | "convert"
+            | "default"
+            | "num"
+            | "char"
+            | "array"
+            | "boxed"
+            | "task"
+            | "future"
+            | "pin"
+            | "time"
+            | "ascii"
+            | "ffi"
+            | "os"
+    )
+}
+
+/// Map common std re-export paths to their actual crate locations
+fn resolve_std_reexport(target_str: &str) -> Option<String> {
+    match target_str {
+        // std re-exports from alloc
+        s if s.starts_with("std::rc") => Some(s.replace("std::", "alloc::")),
+        s if s.starts_with("std::arc") => Some(s.replace("std::", "alloc::")),
+        s if s.starts_with("std::vec") => Some(s.replace("std::", "alloc::")),
+        s if s.starts_with("std::collections") => Some(s.replace("std::", "alloc::")),
+        s if s.starts_with("std::string") => Some(s.replace("std::", "alloc::")),
+        s if s.starts_with("std::boxed") => Some(s.replace("std::", "alloc::")),
+        s if s.starts_with("std::borrow") => Some(s.replace("std::", "alloc::")),
+        s if s.starts_with("std::fmt") => Some(s.replace("std::", "alloc::")),
+        s if s.starts_with("std::slice") => Some(s.replace("std::", "alloc::")),
+        s if s.starts_with("std::str") => Some(s.replace("std::", "alloc::")),
+
+        // std re-exports from core
+        s if s.starts_with("std::mem") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::ptr") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::option") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::result") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::iter") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::ops") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::cmp") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::cell") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::marker") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::any") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::panic") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::hash") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::clone") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::convert") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::default") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::num") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::char") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::array") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::pin") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::future") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::task") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::time::Duration") => {
+            Some(s.replace("std::time::Duration", "core::time::Duration"))
+        }
+        s if s.starts_with("std::ascii") => Some(s.replace("std::", "core::")),
+        s if s.starts_with("std::hint") => Some(s.replace("std::", "core::")),
+
+        _ => None,
+    }
+}
+
+/// Load pre-built JSON documentation for a standard library crate
+fn load_std_library_json(crate_name: &str, display_name: Option<&str>) -> Result<Crate> {
+    let sysroot = get_sysroot()?;
+    let json_path = sysroot
+        .join("share")
+        .join("doc")
+        .join("rust")
+        .join("json")
+        .join(format!("{crate_name}.json"));
+
+    if !json_path.exists() {
+        return Err(RuskelError::Generate(format!(
+            "Standard library JSON documentation not found at {}. \
+             Please install rust-docs-json component: \
+             rustup component add --toolchain nightly rust-docs-json",
+            json_path.display()
+        )));
+    }
+
+    let json_content = fs::read_to_string(&json_path)?;
+    let mut crate_data: Crate = serde_json::from_str(&json_content).map_err(|e| {
+        RuskelError::Generate(format!(
+            "Failed to parse standard library JSON documentation: {e}"
+        ))
+    })?;
+
+    // If a display name is provided, update the root module name
+    if let Some(display) = display_name {
+        if let Some(root_item) = crate_data.index.get_mut(&crate_data.root) {
+            root_item.name = Some(display.to_string());
+        }
+    }
+
+    Ok(crate_data)
+}
+
 /// A path to a crate. This can be a directory on the filesystem or a temporary directory.
 #[derive(Debug)]
 enum CargoPath {
     Path(PathBuf),
     TempDir(TempDir),
+    /// Standard library crate (actual_crate, display_crate)
+    /// e.g., ("alloc", "std") when user requests std::vec
+    StdLibrary(String, String),
 }
 
 impl CargoPath {
@@ -22,6 +187,9 @@ impl CargoPath {
         match self {
             CargoPath::Path(path) => path.as_path(),
             CargoPath::TempDir(temp_dir) => temp_dir.path(),
+            CargoPath::StdLibrary(_, _) => {
+                panic!("Standard library crates don't have a filesystem path")
+            }
         }
     }
 
@@ -32,6 +200,16 @@ impl CargoPath {
         features: Vec<String>,
         silent: bool,
     ) -> Result<Crate> {
+        // Handle standard library crates specially
+        if let CargoPath::StdLibrary(actual_crate, display_crate) = self {
+            let display_name = if actual_crate != display_crate {
+                Some(display_crate.as_str())
+            } else {
+                None
+            };
+            return load_std_library_json(actual_crate, display_name);
+        }
+
         // First check if this crate has a library target by reading Cargo.toml
         let manifest_path = self.manifest_path();
         let manifest_content = fs::read_to_string(&manifest_path)?;
@@ -84,30 +262,50 @@ impl CargoPath {
     }
 
     pub fn manifest_path(&self) -> PathBuf {
-        absolute(self.as_path().join("Cargo.toml")).unwrap()
+        match self {
+            CargoPath::StdLibrary(_, _) => {
+                panic!("Standard library crates don't have a manifest path")
+            }
+            _ => absolute(self.as_path().join("Cargo.toml")).unwrap(),
+        }
     }
 
     pub fn has_manifest(&self) -> bool {
-        self.manifest_path().exists()
+        match self {
+            CargoPath::StdLibrary(_, _) => false,
+            _ => self.manifest_path().exists(),
+        }
     }
 
     pub fn is_package(&self) -> bool {
-        self.has_manifest() && !self.is_workspace()
+        match self {
+            CargoPath::StdLibrary(_, _) => false,
+            _ => self.has_manifest() && !self.is_workspace(),
+        }
     }
 
     pub fn is_workspace(&self) -> bool {
-        if !self.has_manifest() {
-            return false;
+        match self {
+            CargoPath::StdLibrary(_, _) => false,
+            _ => {
+                if !self.has_manifest() {
+                    return false;
+                }
+                let manifest = cargo_toml::Manifest::from_path(self.manifest_path())
+                    .map_err(|_| ())
+                    .ok();
+                manifest
+                    .as_ref()
+                    .is_some_and(|m| m.workspace.is_some() && m.package.is_none())
+            }
         }
-        let manifest = cargo_toml::Manifest::from_path(self.manifest_path())
-            .map_err(|_| ())
-            .ok();
-        manifest
-            .as_ref()
-            .is_some_and(|m| m.workspace.is_some() && m.package.is_none())
     }
 
     pub fn find_dependency(&self, dependency: &str, offline: bool) -> Result<Option<CargoPath>> {
+        if let CargoPath::StdLibrary(_, _) = self {
+            return Ok(None);
+        }
+
         let mut config = GlobalContext::default().map_err(convert_cargo_error)?;
         config
             .configure(
@@ -307,6 +505,22 @@ impl ResolvedTarget {
                 }
             }
             Entrypoint::Name { name, version } => {
+                // Check if this is a standard library crate
+                if is_std_library_crate(&name) {
+                    return Ok(ResolvedTarget::new(
+                        CargoPath::StdLibrary(name.to_string(), name.to_string()),
+                        &target.path,
+                    ));
+                }
+
+                // Check if this is a common std library module name
+                if is_std_library_module(&name) {
+                    return Err(RuskelError::InvalidTarget(format!(
+                        "'{}' appears to be a standard library module. Use the full path like 'std::{}'",
+                        name, name
+                    )));
+                }
+
                 let current_dir = std::env::current_dir()?;
                 match CargoPath::nearest_manifest(&current_dir) {
                     Some(root) => {
@@ -394,11 +608,38 @@ impl ResolvedTarget {
 /// Resovles a target specification and returns a ResolvedTarget, pointing to the package
 /// directory. If necessary, construct temporary dummy crate to download packages from cargo.io.
 pub fn resolve_target(target_str: &str, offline: bool) -> Result<ResolvedTarget> {
-    let target = Target::parse(target_str)?;
+    // Check if this is a std re-export that needs to be mapped to the actual crate
+    let (resolved_target_str, original_crate) =
+        if let Some(mapped) = resolve_std_reexport(target_str) {
+            // Extract the original crate name (e.g., "std" from "std::vec")
+            let original = target_str.split("::").next().unwrap_or("std");
+            (mapped, Some(original.to_string()))
+        } else {
+            (target_str.to_string(), None)
+        };
+
+    let target = Target::parse(&resolved_target_str)?;
 
     match &target.entrypoint {
         Entrypoint::Path(_) => ResolvedTarget::from_target(target, offline),
         Entrypoint::Name { name, version } => {
+            // Check if this is a standard library crate first
+            if is_std_library_crate(name) {
+                let display_name = original_crate.as_ref().unwrap_or(name).to_string();
+                return Ok(ResolvedTarget::new(
+                    CargoPath::StdLibrary(name.to_string(), display_name),
+                    &target.path,
+                ));
+            }
+
+            // Check if this is a common std library module name
+            if is_std_library_module(name) {
+                return Err(RuskelError::InvalidTarget(format!(
+                    "'{}' appears to be a standard library module. Use the full path like 'std::{}'",
+                    name, name
+                )));
+            }
+
             if version.is_some() {
                 // If a version is specified, always create a dummy package
                 ResolvedTarget::from_dummy_crate(name, version.clone(), &target.path, offline)
@@ -655,6 +896,161 @@ mod tests {
     }
 
     #[test]
+    fn test_is_std_library_crate() {
+        assert!(is_std_library_crate("std"));
+        assert!(is_std_library_crate("core"));
+        assert!(is_std_library_crate("alloc"));
+        assert!(is_std_library_crate("proc_macro"));
+        assert!(is_std_library_crate("test"));
+
+        assert!(!is_std_library_crate("serde"));
+        assert!(!is_std_library_crate("tokio"));
+        assert!(!is_std_library_crate("random_crate"));
+    }
+
+    #[test]
+    fn test_resolve_std_reexport() {
+        // Test alloc re-exports
+        assert_eq!(
+            resolve_std_reexport("std::rc"),
+            Some("alloc::rc".to_string())
+        );
+        assert_eq!(
+            resolve_std_reexport("std::rc::Rc"),
+            Some("alloc::rc::Rc".to_string())
+        );
+        assert_eq!(
+            resolve_std_reexport("std::vec::Vec"),
+            Some("alloc::vec::Vec".to_string())
+        );
+        assert_eq!(
+            resolve_std_reexport("std::collections::HashMap"),
+            Some("alloc::collections::HashMap".to_string())
+        );
+
+        // Test core re-exports
+        assert_eq!(
+            resolve_std_reexport("std::mem"),
+            Some("core::mem".to_string())
+        );
+        assert_eq!(
+            resolve_std_reexport("std::mem::size_of"),
+            Some("core::mem::size_of".to_string())
+        );
+        assert_eq!(
+            resolve_std_reexport("std::option::Option"),
+            Some("core::option::Option".to_string())
+        );
+
+        // Test non-reexports
+        assert_eq!(resolve_std_reexport("std::fs"), None);
+        assert_eq!(resolve_std_reexport("std::io"), None);
+        assert_eq!(resolve_std_reexport("std::net"), None);
+        assert_eq!(resolve_std_reexport("alloc::rc"), None);
+        assert_eq!(resolve_std_reexport("core::mem"), None);
+        assert_eq!(resolve_std_reexport("serde::Deserialize"), None);
+    }
+
+    #[test]
+    fn test_is_std_library_module() {
+        // Common std library modules should be detected
+        assert!(is_std_library_module("rc"));
+        assert!(is_std_library_module("arc"));
+        assert!(is_std_library_module("vec"));
+        assert!(is_std_library_module("collections"));
+        assert!(is_std_library_module("sync"));
+        assert!(is_std_library_module("io"));
+
+        // Regular crate names should not be detected
+        assert!(!is_std_library_module("serde"));
+        assert!(!is_std_library_module("tokio"));
+        assert!(!is_std_library_module("reqwest"));
+    }
+
+    #[test]
+    fn test_std_library_resolve() {
+        // Test resolving std library crates
+        let result = resolve_target("std", true).unwrap();
+        match &result.package_path {
+            CargoPath::StdLibrary(actual, display) => {
+                assert_eq!(actual, "std");
+                assert_eq!(display, "std");
+            }
+            _ => panic!("Expected StdLibrary variant for std crate"),
+        }
+        assert_eq!(result.filter, "");
+
+        // Test resolving std library with module path (maps to alloc)
+        let result = resolve_target("std::vec::Vec", true).unwrap();
+        match &result.package_path {
+            CargoPath::StdLibrary(actual, display) => {
+                assert_eq!(actual, "alloc");
+                assert_eq!(display, "std");
+            }
+            _ => panic!("Expected StdLibrary variant for alloc crate"),
+        }
+        assert_eq!(result.filter, "vec::Vec");
+
+        // Test core library
+        let result = resolve_target("core::mem", true).unwrap();
+        match &result.package_path {
+            CargoPath::StdLibrary(actual, display) => {
+                assert_eq!(actual, "core");
+                assert_eq!(display, "core");
+            }
+            _ => panic!("Expected StdLibrary variant for core crate"),
+        }
+        assert_eq!(result.filter, "mem");
+
+        // Test that bare module names from std are rejected with helpful error
+        let result = resolve_target("rc", true);
+        match result {
+            Err(e) => {
+                assert!(e
+                    .to_string()
+                    .contains("appears to be a standard library module"));
+                assert!(e.to_string().contains("std::rc"));
+            }
+            Ok(_) => {
+                panic!("'rc' should have failed with an error about being a std library module")
+            }
+        }
+
+        // Test std::rc::Rc maps to alloc::rc::Rc
+        let result = resolve_target("std::rc::Rc", true).unwrap();
+        match &result.package_path {
+            CargoPath::StdLibrary(actual, display) => {
+                assert_eq!(actual, "alloc");
+                assert_eq!(display, "std");
+            }
+            _ => panic!("Expected StdLibrary variant for alloc crate"),
+        }
+        assert_eq!(result.filter, "rc::Rc");
+
+        // Test alloc::rc::Rc still works directly
+        let result = resolve_target("alloc::rc::Rc", true).unwrap();
+        match &result.package_path {
+            CargoPath::StdLibrary(actual, display) => {
+                assert_eq!(actual, "alloc");
+                assert_eq!(display, "alloc");
+            }
+            _ => panic!("Expected StdLibrary variant for alloc crate"),
+        }
+        assert_eq!(result.filter, "rc::Rc");
+
+        // Test std::mem maps to core::mem
+        let result = resolve_target("std::mem", true).unwrap();
+        match &result.package_path {
+            CargoPath::StdLibrary(actual, display) => {
+                assert_eq!(actual, "core");
+                assert_eq!(display, "std");
+            }
+            _ => panic!("Expected StdLibrary variant for core crate"),
+        }
+        assert_eq!(result.filter, "mem");
+    }
+
+    #[test]
     fn test_from_target() {
         let temp_dir = setup_test_structure();
         let root = temp_dir.path();
@@ -730,6 +1126,9 @@ mod tests {
                         }
                         CargoPath::TempDir(_) => {
                             panic!("Test case {i} failed: expected CargoPath::Path, got CargoPath::TempDir");
+                        }
+                        CargoPath::StdLibrary(_, _) => {
+                            panic!("Test case {i} failed: expected CargoPath::Path, got CargoPath::StdLibrary");
                         }
                     }
                     assert_eq!(

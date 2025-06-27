@@ -120,6 +120,26 @@ Want to contribute? Have ideas or feature requests? Come tell us about it on
 - Syntax highlighting for terminal output 
 - Optionally include private items and auto-implemented traits
 - Support for custom feature flags and version specification
+- Full support for Rust standard library documentation (std, core, alloc)
+
+---
+
+## Requirements
+
+Ruskel requires the Rust nightly toolchain for its operation:
+
+- **Nightly toolchain**: Required for unstable rustdoc features used to generate JSON documentation
+- **rust-docs-json component** (optional): Required only for standard library documentation access
+
+Install the nightly toolchain:
+```sh
+rustup toolchain install nightly
+```
+
+For standard library support, also install:
+```sh
+rustup component add --toolchain nightly rust-docs-json
+```
 
 ---
 
@@ -131,9 +151,7 @@ To install Ruskel, run:
 cargo install ruskel
 ```
 
-***Ruskel requires nightly-only features on `cargo doc` for document
-generation. You need to have the nightly toolchain installed to run ruskel, but
-not to install it.***
+Note: While ruskel requires the nightly toolchain to run, you can install it using any toolchain.
 
 
 ---
@@ -178,6 +196,44 @@ ruskel /my/path::foo
 # A crate from crates.io with a specific version
 ruskel serde@1.0.0
 ```
+
+### Standard Library Support
+
+Ruskel has full support for Rust's standard library documentation. You can access documentation for `std`, `core`, and `alloc` crates using the same familiar import paths you use in your code. The `core` crate contains the core functionality that works without heap allocation, `alloc` provides heap allocation support, and `std` re-exports from both while adding OS-specific functionality. Ruskel automatically handles these re-exports, so `std::vec::Vec` works even though `Vec` actually lives in `alloc`.
+
+### Standard Library Documentation
+
+Ruskel supports accessing documentation for Rust standard library crates (std, core, alloc, proc_macro, test) using the official `rust-docs-json` component.
+
+#### Setup
+
+Before using ruskel with standard library crates, install the `rust-docs-json` component:
+
+```sh
+rustup component add --toolchain nightly rust-docs-json
+```
+
+#### Usage
+
+Once installed, you can use ruskel with standard library crates:
+
+```sh
+# Access via std re-exports (recommended - matches your import statements)
+ruskel std::vec::Vec        # Vec type from std
+ruskel std::rc::Rc          # Rc type from std  
+ruskel std::mem::size_of    # size_of function from std
+
+# Direct access to core and alloc
+ruskel core::mem            # Memory utilities from core
+ruskel alloc::vec           # Vec module from alloc
+
+# Get entire crate documentation
+ruskel std                  # All of std
+ruskel core                 # Core library (no_std compatible)
+ruskel alloc                # Allocation library
+```
+
+**Note:** Ruskel automatically handles std re-exports, displaying them as `std::` even when the actual implementation lives in `core` or `alloc`. This matches how you import these items in your code. Bare module names like `rc` or `vec` will show an error suggesting the correct `std::` path.
 
 
 ---
