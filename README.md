@@ -14,6 +14,8 @@ Ruskel is great for:
 - Quick access to Rust documentation from the command line.
 - Exporting the full public API of a crate as a single file to pass to LLMs and
   other tools.
+- Quick access to std library documentation, including `std`, `core`, and
+  `alloc` prefixes - e.g. `ruskel std::vec::Vec`.
 
 For example, here is the skeleton of the very tiny `termsize` crate. Note that
 the entire public API is included, but all implementation is omitted.
