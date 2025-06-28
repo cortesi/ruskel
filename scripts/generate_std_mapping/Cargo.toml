@@ -1,8 +1,0 @@
-[package]
-name = "generate_std_mapping"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-rustdoc-types = "0.53.0"
-serde_json = "1.0"

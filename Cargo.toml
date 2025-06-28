@@ -10,8 +10,7 @@ keywords = ["docs", "documentation", "outline", "cli"]
 
 [workspace]
 resolver = "2"
-members = ["crates/*"]
-exclude = ["scripts/generate_std_mapping"]
+members = ["crates/*", "xtask"]
 
 [workspace.dependencies]
 libruskel = { version = "0.0.10", path = "crates/libruskel" }
