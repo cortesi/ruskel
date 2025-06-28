@@ -12,6 +12,7 @@ readme.workspace = true
 anyhow = "1.0.86"
 cargo = "0.89.0"
 cargo_toml = "0.22.0"
+once_cell = "1.19"
 rust-format = "0.3.4"
 rustdoc-json = "0.9.1"
 rustdoc-types = "0.53.0"

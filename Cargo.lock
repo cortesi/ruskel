@@ -2445,6 +2445,7 @@ dependencies = [
  "anyhow",
  "cargo",
  "cargo_toml",
+ "once_cell",
  "pretty_assertions",
  "rust-format",
  "rustdoc-json",
