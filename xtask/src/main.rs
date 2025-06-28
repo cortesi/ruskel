@@ -182,14 +182,14 @@ fn find_std_reexports() -> Result<HashMap<String, String>, Box<dyn std::error::E
 
     // Update mappings based on known patterns
     for module in known_core_modules {
-        if mapping.get(module).map_or(true, |v| v == "std") {
+        if mapping.get(module).is_none_or(|v| v == "std") {
             mapping.insert(module.to_string(), "core".to_string());
         }
     }
 
     for module in known_alloc_modules {
         // Only update if not already mapped to core
-        if mapping.get(module).map_or(true, |v| v == "std") {
+        if mapping.get(module).is_none_or(|v| v == "std") {
             mapping.insert(module.to_string(), "alloc".to_string());
         }
     }
@@ -237,14 +237,14 @@ fn generate_rust_code(mapping: &HashMap<String, String>) -> String {
         "static STD_MODULE_MAPPING: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {\n",
     );
     output.push_str("    let mut map = HashMap::new();\n");
-    output.push_str("\n");
+    output.push('\n');
 
     // Group by crate for better organization
     let mut by_crate: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
     for (module, crate_name) in mapping {
         by_crate
             .entry(crate_name.as_str())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push((module.as_str(), crate_name.as_str()));
     }
 
@@ -259,7 +259,7 @@ fn generate_rust_code(mapping: &HashMap<String, String>) -> String {
                 module, crate_name
             ));
         }
-        output.push_str("\n");
+        output.push('\n');
     }
 
     output.push_str("    map\n");
