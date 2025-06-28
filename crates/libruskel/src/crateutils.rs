@@ -174,7 +174,11 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
                 .unwrap_or_default();
 
             let inner = format!("dyn {traits}{lifetime}");
-            if nested && dyn_trait.lifetime.is_some() {
+            if nested
+                && (dyn_trait.lifetime.is_some()
+                    || dyn_trait.traits.len() > 1
+                    || traits.contains(" + "))
+            {
                 format!("({inner})")
             } else {
                 inner
