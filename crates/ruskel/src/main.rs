@@ -1,7 +1,33 @@
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use libruskel::{highlight, Ruskel};
 use std::io::{self, IsTerminal, Write};
 use std::process::{Command, Stdio};
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ColorMode {
+    Auto,
+    Always,
+    Never,
+}
+
+impl std::fmt::Display for ColorMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ColorMode::Auto => write!(f, "auto"),
+            ColorMode::Always => write!(f, "always"),
+            ColorMode::Never => write!(f, "never"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum LogLevel {
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -35,8 +61,8 @@ struct Cli {
     features: Vec<String>,
 
     /// Colorize output
-    #[arg(long, default_value = "auto", value_parser = ["auto", "always", "never"], env = "RUSKEL_COLOR")]
-    color: String,
+    #[arg(long, default_value_t = ColorMode::Auto, env = "RUSKEL_COLOR")]
+    color: ColorMode,
 
     /// Disable paging
     #[arg(long, default_value_t = false)]
@@ -59,8 +85,8 @@ struct Cli {
     addr: Option<String>,
 
     /// Log level for tracing output (only used with --mcp --addr)
-    #[arg(long, value_parser = ["error", "warn", "info", "debug", "trace"])]
-    log: Option<String>,
+    #[arg(long)]
+    log: Option<LogLevel>,
 }
 
 fn check_nightly_toolchain() -> Result<(), String> {
@@ -104,7 +130,7 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         || cli.no_default_features
         || cli.all_features
         || !cli.features.is_empty()
-        || cli.color != "auto"
+        || !matches!(cli.color, ColorMode::Auto)
         || cli.no_page
     {
         return Err(
@@ -123,18 +149,26 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     runtime.block_on(ruskel_mcp::run_mcp_server(
         ruskel,
         cli.addr.clone(),
-        cli.log.clone(),
+        cli.log.map(|l| {
+            match l {
+                LogLevel::Error => "error",
+                LogLevel::Warn => "warn",
+                LogLevel::Info => "info",
+                LogLevel::Debug => "debug",
+                LogLevel::Trace => "trace",
+            }
+            .to_string()
+        }),
     ))?;
 
     Ok(())
 }
 
 fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
-    let should_highlight = match cli.color.as_str() {
-        "never" => false,
-        "always" => true,
-        "auto" => io::stdout().is_terminal(),
-        _ => unreachable!(),
+    let should_highlight = match cli.color {
+        ColorMode::Never => false,
+        ColorMode::Always => true,
+        ColorMode::Auto => io::stdout().is_terminal(),
     };
 
     let rs = Ruskel::new()

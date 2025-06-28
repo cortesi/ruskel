@@ -108,6 +108,32 @@ fn test_reserved_word() {
 }
 
 #[test]
+fn test_macro_with_reserved_name() {
+    let source = r#"
+        /// A macro named try (reserved keyword)
+        #[macro_export]
+        macro_rules! try {
+            ($expr:expr) => {
+                match $expr {
+                    Ok(val) => val,
+                    Err(err) => return Err(err),
+                }
+            };
+        }
+    "#;
+
+    let expected_output = r#"
+        /// A macro named try (reserved keyword)
+        #[macro_export]
+        macro_rules! r#try {
+            ($expr:expr) => { ... };
+        }
+    "#;
+
+    rt(source, expected_output);
+}
+
+#[test]
 fn test_render_macro() {
     let source = r#"
         /// A simple macro for creating a vector

@@ -28,6 +28,16 @@ const DERIVE_TRAITS: &[&str] = &[
     "Deserialize",
 ];
 
+// List of Rust reserved words that need to be escaped with r#
+const RESERVED_WORDS: &[&str] = &[
+    "abstract", "as", "become", "box", "break", "const", "continue", "crate", "do",
+    "else", "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in",
+    "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv",
+    "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait",
+    "true", "try", "type", "typeof", "unsafe", "unsized", "use", "virtual",
+    "where", "while", "yield",
+];
+
 fn must_get<'a>(crate_data: &'a Crate, id: &Id) -> &'a Item {
     crate_data.index.get(id).unwrap()
 }
@@ -284,7 +294,31 @@ impl RenderState<'_, '_> {
         let macro_def = extract_item!(item, ItemEnum::Macro);
         // Add #[macro_export] for public macros
         output.push_str("#[macro_export]\n");
-        output.push_str(&format!("{macro_def}\n"));
+
+        // Handle reserved keywords in macro names
+        let macro_str = macro_def.to_string();
+        if let Some(name_start) = macro_str.find("macro_rules!") {
+            let prefix = &macro_str[..name_start + 12]; // "macro_rules!"
+            let rest = &macro_str[name_start + 12..];
+
+            // Find the macro name (skip whitespace)
+            let trimmed = rest.trim_start();
+            if let Some(name_end) = trimmed.find(|c: char| c.is_whitespace() || c == '{') {
+                let name = &trimmed[..name_end];
+                let suffix = &trimmed[name_end..];
+
+                // Check if the name is a reserved word
+                if RESERVED_WORDS.contains(&name) {
+                    output.push_str(&format!("{prefix} r#{name}{suffix}\n"));
+                } else {
+                    output.push_str(&format!("{macro_def}\n"));
+                }
+            } else {
+                output.push_str(&format!("{macro_def}\n"));
+            }
+        } else {
+            output.push_str(&format!("{macro_def}\n"));
+        }
 
         output
     }
