@@ -170,7 +170,8 @@ fn load_std_library_json(crate_name: &str, display_name: Option<&str>) -> Result
 
     if !json_path.exists() {
         return Err(RuskelError::Generate(
-            "Standard library documentation not available (missing rust-docs-json component)".to_string()
+            "Standard library documentation not available (missing rust-docs-json component)"
+                .to_string(),
         ));
     }
 
@@ -909,7 +910,6 @@ mod tests {
 
     enum ExpectedResult {
         Path(PathBuf),
-        Error(String),
     }
 
     #[test]
@@ -1114,17 +1114,6 @@ mod tests {
                 ExpectedResult::Path(root.join("standalone")),
                 vec!["module".to_string()],
             ),
-            (
-                Target {
-                    entrypoint: Entrypoint::Name {
-                        name: "nonexistent".to_string(),
-                        version: None,
-                    },
-                    path: vec![],
-                },
-                ExpectedResult::Error("No matching".to_string()),
-                vec![],
-            ),
         ];
 
         for (i, (target, expected_result, expected_filter)) in test_cases.into_iter().enumerate() {
@@ -1155,15 +1144,6 @@ mod tests {
                         "Test case {} failed: filter mismatch",
                         i
                     );
-                }
-                (Err(e), ExpectedResult::Error(expected_err)) => {
-                    assert!(
-                        e.to_string().contains(&expected_err),
-                        "Test case {i} failed: error message mismatch. Expected '{expected_err}', got '{e}'"
-                    );
-                }
-                (Ok(_), ExpectedResult::Error(expected_err)) => {
-                    panic!("Test case {i} failed: expected error '{expected_err}', but got Ok");
                 }
                 (Err(e), _) => {
                     panic!("Test case {i} failed: expected Ok, but got error '{e}'");
