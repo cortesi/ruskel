@@ -30,12 +30,11 @@ const DERIVE_TRAITS: &[&str] = &[
 
 // List of Rust reserved words that need to be escaped with r#
 const RESERVED_WORDS: &[&str] = &[
-    "abstract", "as", "become", "box", "break", "const", "continue", "crate", "do",
-    "else", "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in",
-    "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv",
-    "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait",
-    "true", "try", "type", "typeof", "unsafe", "unsized", "use", "virtual",
-    "where", "while", "yield",
+    "abstract", "as", "become", "box", "break", "const", "continue", "crate", "do", "else", "enum",
+    "extern", "false", "final", "fn", "for", "if", "impl", "in", "let", "loop", "macro", "match",
+    "mod", "move", "mut", "override", "priv", "pub", "ref", "return", "self", "Self", "static",
+    "struct", "super", "trait", "true", "try", "type", "typeof", "unsafe", "unsized", "use",
+    "virtual", "where", "while", "yield",
 ];
 
 fn must_get<'a>(crate_data: &'a Crate, id: &Id) -> &'a Item {
@@ -297,9 +296,28 @@ impl RenderState<'_, '_> {
 
         // Handle reserved keywords in macro names
         let macro_str = macro_def.to_string();
-        if let Some(name_start) = macro_str.find("macro_rules!") {
-            let prefix = &macro_str[..name_start + 12]; // "macro_rules!"
-            let rest = &macro_str[name_start + 12..];
+
+        // Fix rustdoc's incorrect rendering of new-style macro syntax
+        // rustdoc produces "} {\n    ...\n}" which is invalid syntax
+        // For new-style macros, we need to remove the extra block
+        let fixed_macro_str =
+            if macro_str.starts_with("macro ") && !macro_str.starts_with("macro_rules!") {
+                // This is a new-style declarative macro
+                // Look for the problematic pattern where we have "} { ... }" at the end
+                let problematic_pattern = regex::Regex::new(r"\}\s*\{\s*\.\.\.\s*\}\s*$").unwrap();
+                if problematic_pattern.is_match(&macro_str) {
+                    // Remove the invalid "{ ... }" part, just end after the pattern
+                    problematic_pattern.replace(&macro_str, "}").to_string()
+                } else {
+                    macro_str.clone()
+                }
+            } else {
+                macro_str.clone()
+            };
+
+        if let Some(name_start) = fixed_macro_str.find("macro_rules!") {
+            let prefix = &fixed_macro_str[..name_start + 12]; // "macro_rules!"
+            let rest = &fixed_macro_str[name_start + 12..];
 
             // Find the macro name (skip whitespace)
             let trimmed = rest.trim_start();
@@ -311,13 +329,16 @@ impl RenderState<'_, '_> {
                 if RESERVED_WORDS.contains(&name) {
                     output.push_str(&format!("{prefix} r#{name}{suffix}\n"));
                 } else {
-                    output.push_str(&format!("{macro_def}\n"));
+                    output.push_str(&fixed_macro_str);
+                    output.push('\n');
                 }
             } else {
-                output.push_str(&format!("{macro_def}\n"));
+                output.push_str(&fixed_macro_str);
+                output.push('\n');
             }
         } else {
-            output.push_str(&format!("{macro_def}\n"));
+            output.push_str(&fixed_macro_str);
+            output.push('\n');
         }
 
         output
