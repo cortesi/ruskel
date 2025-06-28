@@ -134,6 +134,34 @@ gen_tests! {
                 pub fn function_with_box_dyn_fn(f: Box<dyn Fn() + Send + Sync>) {}
             "#
         }
+        idemp {
+            impl_trait_with_multiple_bounds: r#"
+                pub fn request_value<'a, T>(err: &'a (impl std::error::Error + ?Sized)) -> Option<T> 
+                where 
+                    T: 'static 
+                {
+                }
+            "#
+        }
+        idemp {
+            impl_trait_single_bound: r#"
+                pub fn takes_impl_error(err: &impl std::error::Error) {}
+            "#
+        }
+        idemp {
+            impl_trait_sized_bound_only: r#"
+                pub fn takes_impl_sized(val: &impl ?Sized) {}
+            "#
+        }
+        idemp {
+            impl_trait_complex_bounds: r#"
+                pub fn complex_impl<T>(val: &(impl Iterator<Item = T> + Send)) 
+                where 
+                    T: Clone 
+                {
+                }
+            "#
+        }
         rt {
             private_function: {
                 input: r#"

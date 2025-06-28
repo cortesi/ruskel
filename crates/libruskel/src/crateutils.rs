@@ -205,7 +205,14 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
             format!("[{}; {len}]", render_type_inner(type_, true))
         }
         Type::ImplTrait(bounds) => {
-            format!("impl {}", render_generic_bounds(bounds))
+            let bounds_str = render_generic_bounds(bounds);
+            // If we're nested (e.g., inside a reference or function parameter) and have multiple bounds
+            // (indicated by presence of '+' in the bounds string), we need parentheses to avoid ambiguity
+            if nested && bounds_str.contains(" + ") {
+                format!("(impl {bounds_str})")
+            } else {
+                format!("impl {bounds_str}")
+            }
         }
         Type::Infer => "_".to_string(),
         Type::RawPointer { is_mutable, type_ } => {
