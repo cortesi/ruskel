@@ -387,7 +387,15 @@ fn render_generic_arg(arg: &GenericArg) -> String {
     match arg {
         GenericArg::Lifetime(lt) => lt.clone(),
         GenericArg::Type(ty) => render_type(ty),
-        GenericArg::Const(c) => c.expr.clone(),
+        GenericArg::Const(c) => {
+            // Check if the expression contains macro variables ($ signs)
+            // These come from unexpanded macros and would create invalid syntax
+            if c.expr.contains('$') {
+                "/* macro expression */".to_string()
+            } else {
+                c.expr.clone()
+            }
+        },
         GenericArg::Infer => "_".to_string(),
     }
 }
