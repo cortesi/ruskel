@@ -1,11 +1,10 @@
 mod server;
-mod tools;
 
 pub use server::run_mcp_server;
 
 #[cfg(test)]
 mod tests {
-    use crate::tools::RuskelSkeletonTool;
+    use crate::server::RuskelSkeletonTool;
     use serde_json::json;
 
     #[test]
