@@ -145,7 +145,11 @@ pub fn render_generic_bound(bound: &GenericBound) -> String {
                 trait_: trait_.clone(),
                 generic_params: generic_params.clone(),
             };
-            format!("{modifier}{}", render_poly_trait(&poly_trait))
+            match modifier {
+                "" => render_poly_trait(&poly_trait),
+                "~const" => format!("{modifier} {}", render_poly_trait(&poly_trait)),
+                _ => format!("{modifier}{}", render_poly_trait(&poly_trait)),
+            }
         }
         GenericBound::Outlives(lifetime) => lifetime.clone(),
     }
@@ -489,4 +493,82 @@ pub fn render_associated_type(item: &Item) -> String {
         .map(|d| format!(" = {}", render_type(d)))
         .unwrap_or_default();
     format!("type {}{bounds_str}{default_str};\n", render_name(item))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustdoc_types::{GenericBound, Id, Path, TraitBoundModifier};
+
+    #[test]
+    fn test_render_generic_bound_with_const_modifier() {
+        // Test ~const modifier with a simple trait
+        let trait_path = Path {
+            id: Id(0),
+            path: "MyTrait".to_string(),
+            args: None,
+        };
+        let bound = GenericBound::TraitBound {
+            trait_: trait_path.clone(),
+            generic_params: vec![],
+            modifier: TraitBoundModifier::MaybeConst,
+        };
+
+        let result = render_generic_bound(&bound);
+        assert_eq!(result, "~const MyTrait");
+    }
+
+    #[test]
+    fn test_render_generic_bound_with_const_modifier_and_path() {
+        // Test ~const modifier with a trait path
+        let trait_path = Path {
+            id: Id(0),
+            path: "fallback::DisjointBitOr".to_string(),
+            args: None,
+        };
+        let bound = GenericBound::TraitBound {
+            trait_: trait_path,
+            generic_params: vec![],
+            modifier: TraitBoundModifier::MaybeConst,
+        };
+
+        let result = render_generic_bound(&bound);
+        assert_eq!(result, "~const fallback::DisjointBitOr");
+    }
+
+    #[test]
+    fn test_render_generic_bound_with_maybe_modifier() {
+        // Test ? modifier
+        let trait_path = Path {
+            id: Id(0),
+            path: "Sized".to_string(),
+            args: None,
+        };
+        let bound = GenericBound::TraitBound {
+            trait_: trait_path,
+            generic_params: vec![],
+            modifier: TraitBoundModifier::Maybe,
+        };
+
+        let result = render_generic_bound(&bound);
+        assert_eq!(result, "?Sized");
+    }
+
+    #[test]
+    fn test_render_generic_bound_no_modifier() {
+        // Test no modifier
+        let trait_path = Path {
+            id: Id(0),
+            path: "Debug".to_string(),
+            args: None,
+        };
+        let bound = GenericBound::TraitBound {
+            trait_: trait_path,
+            generic_params: vec![],
+            modifier: TraitBoundModifier::None,
+        };
+
+        let result = render_generic_bound(&bound);
+        assert_eq!(result, "Debug");
+    }
 }
