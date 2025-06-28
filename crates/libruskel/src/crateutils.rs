@@ -128,7 +128,8 @@ pub fn render_generic_bound(bound: &GenericBound) -> String {
     match bound {
         GenericBound::Use(_) => {
             // https://github.com/rust-lang/rust/issues/123432
-            unimplemented!("unstable feature precise capturing not supported yet")
+            // TODO: Implement once rustdoc stabilizes precise capturing syntax
+            "use<...>".to_string() // Placeholder for unstable precise capturing feature
         }
         GenericBound::TraitBound {
             trait_,
