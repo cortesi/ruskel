@@ -119,6 +119,21 @@ gen_tests! {
                 pub fn function_with_dyn_iterator(iter: &mut dyn Iterator<Item = i32>) {}
             "#
         }
+        idemp {
+            dyn_fn_sync: r#"
+                pub fn function_with_dyn_fn_sync(f: &(dyn Fn() + Sync)) {}
+            "#
+        }
+        idemp {
+            dyn_multiple_bounds: r#"
+                pub fn function_with_dyn_multiple_bounds(arg: &(dyn std::fmt::Debug + Send)) {}
+            "#
+        }
+        idemp {
+            box_dyn_fn_send_sync: r#"
+                pub fn function_with_box_dyn_fn(f: Box<dyn Fn() + Send + Sync>) {}
+            "#
+        }
         rt {
             private_function: {
                 input: r#"
