@@ -185,9 +185,27 @@ fn main() {
     }
 }
 
+fn is_command_available(cmd: &str) -> bool {
+    Command::new("which")
+        .arg(cmd)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 fn page_output(content: String) -> Result<(), Box<dyn std::error::Error>> {
     let pager = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
-    let mut child = Command::new(pager).stdin(Stdio::piped()).spawn()?;
+
+    // Check if the pager command is available
+    if !is_command_available(&pager) {
+        // If pager is not available, just print to stdout
+        println!("{content}");
+        return Ok(());
+    }
+
+    let mut child = Command::new(&pager).stdin(Stdio::piped()).spawn()?;
 
     let mut stdin = child
         .stdin
