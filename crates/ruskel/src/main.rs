@@ -64,14 +64,34 @@ struct Cli {
 }
 
 fn check_nightly_toolchain() -> Result<(), String> {
+    // Check if nightly toolchain is installed
     let output = Command::new("rustup")
         .args(["run", "nightly", "rustc", "--version"])
-        .stderr(Stdio::null()) // Suppress stderr to avoid rustup's error message
+        .stderr(Stdio::null())
         .output()
         .map_err(|e| format!("Failed to run rustup: {e}"))?;
 
     if !output.status.success() {
-        return Err("ruskel requires the nightly toolchain to be installed - run 'rustup toolchain install nightly'".to_string());
+        return Err("ruskel requires the nightly toolchain to be installed.\nRun: rustup toolchain install nightly".to_string());
+    }
+
+    // Check if rust-docs-json component is available (for std library support)
+    let components_output = Command::new("rustup")
+        .args(["component", "list", "--toolchain", "nightly"])
+        .stderr(Stdio::null())
+        .output()
+        .map_err(|e| format!("Failed to check nightly components: {e}"))?;
+
+    if components_output.status.success() {
+        let components_str = String::from_utf8_lossy(&components_output.stdout);
+        let has_rust_docs_json = components_str
+            .lines()
+            .any(|line| line.starts_with("rust-docs-json") && line.contains("(installed)"));
+
+        if !has_rust_docs_json {
+            eprintln!("Warning: rust-docs-json component not installed. Standard library documentation will not be available.");
+            eprintln!("To install: rustup component add rust-docs-json --toolchain nightly");
+        }
     }
 
     Ok(())

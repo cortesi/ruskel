@@ -169,12 +169,9 @@ fn load_std_library_json(crate_name: &str, display_name: Option<&str>) -> Result
         .join(format!("{crate_name}.json"));
 
     if !json_path.exists() {
-        return Err(RuskelError::Generate(format!(
-            "Standard library JSON documentation not found at {}. \
-             Please install rust-docs-json component: \
-             rustup component add --toolchain nightly rust-docs-json",
-            json_path.display()
-        )));
+        return Err(RuskelError::Generate(
+            "Standard library documentation not available (missing rust-docs-json component)".to_string()
+        ));
     }
 
     let json_content = fs::read_to_string(&json_path)?;
