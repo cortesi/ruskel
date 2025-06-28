@@ -206,13 +206,7 @@ fn main() {
 }
 
 fn is_command_available(cmd: &str) -> bool {
-    Command::new("which")
-        .arg(cmd)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    which::which(cmd).is_ok()
 }
 
 fn page_output(content: String) -> Result<(), Box<dyn std::error::Error>> {
