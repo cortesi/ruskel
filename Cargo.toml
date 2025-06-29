@@ -1,6 +1,6 @@
 [workspace.package]
 version = "0.0.10"
-edition = "2021"
+edition = "2024"
 authors = ["Aldo Cortesi <aldo@corte.si>"]
 description = "Generates skeletonized outlines of Rust crates"
 license = "MIT"
