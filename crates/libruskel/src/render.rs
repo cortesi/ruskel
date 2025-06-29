@@ -49,6 +49,23 @@ fn ppush(path_prefix: &str, name: &str) -> String {
     }
 }
 
+/// Escape reserved keywords in a path by adding r# prefix where needed
+fn escape_path(path: &str) -> String {
+    path.split("::")
+        .map(|segment| {
+            // Some keywords like 'crate', 'self', 'super' cannot be raw identifiers
+            if segment == "crate" || segment == "self" || segment == "super" || segment == "Self" {
+                segment.to_string()
+            } else if RESERVED_WORDS.contains(&segment) {
+                format!("r#{}", segment)
+            } else {
+                segment.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
 #[derive(Debug, PartialEq)]
 enum FilterMatch {
     Hit,
@@ -380,7 +397,7 @@ impl RenderState<'_, '_> {
                 }
             }
             // If we can't resolve the glob import, fall back to rendering it as-is
-            return format!("pub use {}::*;\n", import.source);
+            return format!("pub use {}::*;\n", escape_path(&import.source));
         }
 
         if let Some(imported_item) = import
@@ -393,9 +410,15 @@ impl RenderState<'_, '_> {
 
         let mut output = docs(item);
         if import.name != import.source.split("::").last().unwrap_or(&import.source) {
-            output.push_str(&format!("pub use {} as {};\n", import.source, import.name));
+            // Check if the alias itself needs escaping
+            let escaped_name = if RESERVED_WORDS.contains(&import.name.as_str()) {
+                format!("r#{}", import.name)
+            } else {
+                import.name.clone()
+            };
+            output.push_str(&format!("pub use {} as {};\n", escape_path(&import.source), escaped_name));
         } else {
-            output.push_str(&format!("pub use {};\n", import.source));
+            output.push_str(&format!("pub use {};\n", escape_path(&import.source)));
         }
 
         output
