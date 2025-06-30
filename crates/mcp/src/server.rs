@@ -39,30 +39,34 @@ impl RuskelServer {
 #[mcp_server]
 impl RuskelServer {
     #[tool]
-    /// **Ruskel Skeleton Generator** return a single Rust source file that lists the
-    /// *public API (or optionally private items) of any crate or module path, with all
-    /// bodies stripped*. Useful for large‑language models that need to look up item
-    /// names, signatures, derives, feature‑gated cfgs, and doc‑comments while writing
-    /// or reviewing Rust code.
+    /// **ruskel** returns a Rust skeleton that shows the API of any item with implementation
+    /// bodies stripped. Useful for models that need to look up names, signatures, derives, APIs,
+    /// and doc‑comments while writing or reviewing Rust code. An item can be a crate, module,
+    /// struct, trait, function, or any other Rust entity that can be referred to with a Rust path.
     ///
-    /// ### When a model should call this tool
-    /// 1. It needs a function/trait/struct signature it can't recall.
-    /// 2. The user asks for examples or docs from a crate.
-    /// 3. The model wants to verify what features gate a symbol.
+    /// # When a model should call this tool
+    /// 1. It needs to look up a function/trait/struct signature.
+    /// 2. It wants an overview of a public or private API.
+    /// 3. The user asks for examples or docs from a crate.
     ///
-    /// ### Target syntax examples
-    /// - `serde`               →  latest serde on crates.io
-    /// - `serde@1.0.160`      →  specific published version
+    /// # Target syntax examples
+    /// - `mycrate::Struct` →  a struct in the current crate
+    /// - `mycrate::Struct::method` →  a method on a struct in the current crate
+    /// - `std::vec::Vec` →  Vec from the std lib
+    /// - `serde` →  latest serde on crates.io
+    /// - `serde@1.0.160` →  specific published version
     /// - `serde::de::Deserialize` →  narrow output to one module/type for small contexts
     /// - `/path/to/crate` or `/path/to/crate::submod` →  local workspace paths
     ///
-    /// ### Output format
+    /// # Output format
     /// Plain UTF‑8 text containing valid Rust code, with implementation omitted.
     ///
-    /// ### Tips for LLMs
+    /// # Tips for LLMs
     /// - Request deep module paths (e.g. `tokio::sync::mpsc`) to keep the reply below
     ///   your token budget.
     /// - Pass `all_features=true` or `features=[…]` when a symbol is behind a feature gate.
+    /// - Pass private=true to include non‑public items. Useful if you're looking up details of
+    ///   items in the current codebase for development.
     async fn ruskel(&self, _ctx: &ServerCtx, params: RuskelSkeletonTool) -> Result<CallToolResult> {
         match self.ruskel.render(
             &params.target,
