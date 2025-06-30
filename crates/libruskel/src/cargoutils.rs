@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::Write;
-use std::path::{absolute, Path, PathBuf};
+use std::path::{Path, PathBuf, absolute};
 use std::process::Command;
 
 use cargo::{core::Workspace, ops, util::context::GlobalContext};
@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use tempfile::TempDir;
 
 use super::target::{Entrypoint, Target};
-use crate::error::{convert_cargo_error, Result, RuskelError};
+use crate::error::{Result, RuskelError, convert_cargo_error};
 
 /// Get the sysroot path for the nightly toolchain
 fn get_sysroot() -> Result<PathBuf> {
@@ -353,8 +353,16 @@ impl CargoPath {
         )
         .map_err(convert_cargo_error)?;
 
+        // Try both the provided name and its hyphenated/underscored version
+        let alt_dependency = if dependency.contains('_') {
+            dependency.replace('_', "-")
+        } else {
+            dependency.replace('-', "_")
+        };
+
         for package in ps.packages() {
-            if package.name().as_str() == dependency {
+            let package_name = package.name().as_str();
+            if package_name == dependency || package_name == alt_dependency {
                 return Ok(Some(CargoPath::Path(
                     package.manifest_path().parent().unwrap().to_path_buf(),
                 )));
@@ -381,8 +389,13 @@ impl CargoPath {
     /// Find a package in the current workspace by name.
     fn find_workspace_package(&self, module_name: &str) -> Result<Option<ResolvedTarget>> {
         let workspace_manifest_path = self.manifest_path();
-        let original_name = module_name.replace('-', "_");
-        let normalized_name = module_name.to_string();
+
+        // Try both hyphenated and underscored versions
+        let alt_name = if module_name.contains('_') {
+            module_name.replace('_', "-")
+        } else {
+            module_name.replace('-', "_")
+        };
 
         let config = GlobalContext::default().map_err(convert_cargo_error)?;
 
@@ -390,9 +403,8 @@ impl CargoPath {
             Workspace::new(&workspace_manifest_path, &config).map_err(convert_cargo_error)?;
 
         for package in workspace.members() {
-            if package.name().as_str() == normalized_name
-                || package.name().as_str() == original_name
-            {
+            let package_name = package.name().as_str();
+            if package_name == module_name || package_name == alt_name {
                 let package_path = package.manifest_path().parent().unwrap().to_path_buf();
                 return Ok(Some(ResolvedTarget::new(
                     CargoPath::Path(package_path),
@@ -409,6 +421,9 @@ fn generate_dummy_manifest(
     version: Option<String>,
     features: Option<&[&str]>,
 ) -> String {
+    // Convert underscores to hyphens for Cargo package names
+    let cargo_dependency = dependency.replace('_', "-");
+
     let version_str = version.map_or("*".to_string(), |v| v.to_string());
     let features_str = features.map_or(String::new(), |f| {
         let feature_list = f
@@ -424,7 +439,7 @@ name = "dummy-crate"
 version = "0.1.0"
 
 [dependencies]
-{dependency} = {{ version = "{version_str}"{features_str} }}
+{cargo_dependency} = {{ version = "{version_str}"{features_str} }}
 "#
     )
 }
@@ -728,6 +743,23 @@ mod tests {
     }
 
     #[test]
+    fn test_generate_dummy_manifest_with_underscores() {
+        // Test underscore to hyphen conversion
+        let manifest = generate_dummy_manifest("serde_json", None, None);
+        assert!(manifest.contains("serde-json = { version = \"*\" }"));
+        assert!(!manifest.contains("serde_json"));
+
+        // Test with already hyphenated names (should remain unchanged)
+        let manifest = generate_dummy_manifest("async-trait", None, None);
+        assert!(manifest.contains("async-trait = { version = \"*\" }"));
+
+        // Test complex name with multiple underscores
+        let manifest =
+            generate_dummy_manifest("my_complex_crate_name", Some("0.1.0".to_string()), None);
+        assert!(manifest.contains("my-complex-crate-name = { version = \"0.1.0\" }"));
+    }
+
+    #[test]
     fn test_create_dummy_crate() -> Result<()> {
         let cargo_path = create_dummy_crate("serde", None, None)?;
         let path = cargo_path.as_path();
@@ -752,7 +784,9 @@ mod tests {
 
         // Validate that the manifest contains the expected content
         assert!(manifest_content.contains("[dependencies]"));
-        assert!(manifest_content.contains("serde = { version = \"1.0\", features = [\"derive\"] }"));
+        assert!(
+            manifest_content.contains("serde = { version = \"1.0\", features = [\"derive\"] }")
+        );
 
         Ok(())
     }
@@ -838,9 +872,11 @@ mod tests {
         }
 
         // Test not finding a package in the workspace
-        assert!(cargo_path
-            .find_workspace_package("non-existent-package")?
-            .is_none());
+        assert!(
+            cargo_path
+                .find_workspace_package("non-existent-package")?
+                .is_none()
+        );
 
         Ok(())
     }
@@ -1024,9 +1060,10 @@ mod tests {
         let result = resolve_target("rc", true);
         match result {
             Err(e) => {
-                assert!(e
-                    .to_string()
-                    .contains("appears to be a standard library module"));
+                assert!(
+                    e.to_string()
+                        .contains("appears to be a standard library module")
+                );
                 assert!(e.to_string().contains("std::rc"));
             }
             Ok(_) => {
@@ -1132,10 +1169,14 @@ mod tests {
                             );
                         }
                         CargoPath::TempDir(_) => {
-                            panic!("Test case {i} failed: expected CargoPath::Path, got CargoPath::TempDir");
+                            panic!(
+                                "Test case {i} failed: expected CargoPath::Path, got CargoPath::TempDir"
+                            );
                         }
                         CargoPath::StdLibrary(_, _) => {
-                            panic!("Test case {i} failed: expected CargoPath::Path, got CargoPath::StdLibrary");
+                            panic!(
+                                "Test case {i} failed: expected CargoPath::Path, got CargoPath::StdLibrary"
+                            );
                         }
                     }
                     assert_eq!(

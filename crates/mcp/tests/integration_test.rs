@@ -5,12 +5,7 @@
 use serde_json::json;
 use std::process::Command;
 use std::time::Duration;
-use tenx_mcp::{
-    Client,
-    Result,
-    ServerAPI,
-    schema::InitializeResult,
-};
+use tenx_mcp::{Client, Result, ServerAPI, schema::InitializeResult};
 use tokio::process::Command as TokioCommand;
 use tokio::time::timeout;
 
@@ -149,9 +144,7 @@ async fn test_mcp_server_invalid_tool() {
         .expect("Failed to initialize");
 
     // Call non-existent tool
-    let result = client
-        .call_tool("non_existent_tool", json!({}))
-        .await;
+    let result = client.call_tool("non_existent_tool", json!({})).await;
 
     // Should get an error
     assert!(result.is_err());
@@ -182,15 +175,17 @@ async fn test_mcp_server_invalid_arguments() {
     match result {
         Ok(call_result) => {
             // Check if it's an error response
-            assert!(call_result.is_error.unwrap_or(false) || 
-                    call_result.content.iter().any(|c| {
+            assert!(
+                call_result.is_error.unwrap_or(false)
+                    || call_result.content.iter().any(|c| {
                         if let tenx_mcp::schema::Content::Text(text) = c {
-                            text.text.contains("Invalid parameters") || 
-                            text.text.contains("Failed to generate")
+                            text.text.contains("Invalid parameters")
+                                || text.text.contains("Failed to generate")
                         } else {
                             false
                         }
-                    }));
+                    })
+            );
         }
         Err(_) => {
             // This is also acceptable - the tool call failed
@@ -261,9 +256,7 @@ async fn test_mcp_server_error_recovery() {
     assert!(!result.tools.is_empty());
 
     // 2. Invalid tool name (should error)
-    let result = client
-        .call_tool("non_existent_tool", json!({}))
-        .await;
+    let result = client.call_tool("non_existent_tool", json!({})).await;
     assert!(result.is_err());
 
     // 3. Valid request after error (server should recover)
@@ -283,15 +276,17 @@ async fn test_mcp_server_error_recovery() {
     match result {
         Ok(call_result) => {
             // Check if it's an error response
-            assert!(call_result.is_error.unwrap_or(false) || 
-                    call_result.content.iter().any(|c| {
+            assert!(
+                call_result.is_error.unwrap_or(false)
+                    || call_result.content.iter().any(|c| {
                         if let tenx_mcp::schema::Content::Text(text) = c {
-                            text.text.contains("Invalid parameters") || 
-                            text.text.contains("Failed to generate")
+                            text.text.contains("Invalid parameters")
+                                || text.text.contains("Failed to generate")
                         } else {
                             false
                         }
-                    }));
+                    })
+            );
         }
         Err(_) => {
             // This is also acceptable - the tool call failed

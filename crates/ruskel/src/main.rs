@@ -1,5 +1,5 @@
 use clap::{Parser, ValueEnum};
-use libruskel::{highlight, Ruskel};
+use libruskel::{Ruskel, highlight};
 use std::io::{self, IsTerminal, Write};
 use std::process::{Command, Stdio};
 
@@ -115,7 +115,9 @@ fn check_nightly_toolchain() -> Result<(), String> {
             .any(|line| line.starts_with("rust-docs-json") && line.contains("(installed)"));
 
         if !has_rust_docs_json {
-            eprintln!("Warning: rust-docs-json component not installed. Standard library documentation will not be available.");
+            eprintln!(
+                "Warning: rust-docs-json component not installed. Standard library documentation will not be available."
+            );
             eprintln!("To install: rustup component add rust-docs-json --toolchain nightly");
         }
     }

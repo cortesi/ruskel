@@ -416,7 +416,11 @@ impl RenderState<'_, '_> {
             } else {
                 import.name.clone()
             };
-            output.push_str(&format!("pub use {} as {};\n", escape_path(&import.source), escaped_name));
+            output.push_str(&format!(
+                "pub use {} as {};\n",
+                escape_path(&import.source),
+                escaped_name
+            ));
         } else {
             output.push_str(&format!("pub use {};\n", escape_path(&import.source)));
         }

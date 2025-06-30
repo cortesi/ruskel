@@ -1,6 +1,6 @@
 use libruskel::Ruskel;
 use serde::{Deserialize, Serialize};
-use tenx_mcp::{mcp_server, schema::CallToolResult, schemars, tool, Result, Server, ServerCtx};
+use tenx_mcp::{Result, Server, ServerCtx, mcp_server, schema::CallToolResult, schemars, tool};
 use tracing::error;
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -112,4 +112,3 @@ pub async fn run_mcp_server(
         None => server.serve_stdio().await,
     }
 }
-

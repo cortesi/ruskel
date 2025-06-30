@@ -395,7 +395,7 @@ fn render_generic_arg(arg: &GenericArg) -> String {
             } else {
                 c.expr.clone()
             }
-        },
+        }
         GenericArg::Infer => "_".to_string(),
     }
 }

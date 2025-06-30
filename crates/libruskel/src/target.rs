@@ -340,19 +340,20 @@ mod tests {
                     );
                 }
                 (Err(error), Err(expected_error)) => {
-                    assert!(error.to_string().starts_with(&expected_error.to_string()),
-                    "Error mismatch for input '{input}'. \nGot: {error}\nExpected error starting with: {expected_error}"
-                );
+                    assert!(
+                        error.to_string().starts_with(&expected_error.to_string()),
+                        "Error mismatch for input '{input}'. \nGot: {error}\nExpected error starting with: {expected_error}"
+                    );
                 }
                 (Ok(target), Err(expected_error)) => {
                     panic!(
-                    "Expected error but got success for input '{input}'. \nGot: {target:?}\nExpected error: {expected_error}"
-                );
+                        "Expected error but got success for input '{input}'. \nGot: {target:?}\nExpected error: {expected_error}"
+                    );
                 }
                 (Err(error), Ok(expected_target)) => {
                     panic!(
-                    "Expected success but got error for input '{input}'. \nGot error: {error}\nExpected: {expected_target:?}"
-                );
+                        "Expected success but got error for input '{input}'. \nGot error: {error}\nExpected: {expected_target:?}"
+                    );
                 }
             }
         }
