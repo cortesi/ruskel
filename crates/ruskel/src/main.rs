@@ -72,9 +72,9 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     offline: bool,
 
-    /// Enable quiet mode, disabling output while rendering docs
+    /// Enable verbose mode, showing cargo output while rendering docs
     #[arg(long, default_value_t = false)]
-    quiet: bool,
+    verbose: bool,
 
     /// Run as an MCP server on stdout
     #[arg(long, default_value_t = false)]
@@ -136,7 +136,7 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         || cli.no_page
     {
         return Err(
-            "--mcp can only be used with --auto-impls, --private, --offline, and --quiet".into(),
+            "--mcp can only be used with --auto-impls, --private, --offline, and --verbose".into(),
         );
     }
 
@@ -144,7 +144,7 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let ruskel = Ruskel::new()
         .with_offline(cli.offline)
         .with_auto_impls(cli.auto_impls)
-        .with_silent(cli.quiet);
+        .with_silent(!cli.verbose);
 
     // Run the MCP server
     let runtime = tokio::runtime::Runtime::new()?;
@@ -176,7 +176,7 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let rs = Ruskel::new()
         .with_offline(cli.offline)
         .with_auto_impls(cli.auto_impls)
-        .with_silent(cli.quiet);
+        .with_silent(!cli.verbose);
 
     let mut output = if cli.raw {
         rs.raw_json(

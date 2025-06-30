@@ -326,20 +326,7 @@ impl CargoPath {
             return Ok(None);
         }
 
-        let mut config = GlobalContext::default().map_err(convert_cargo_error)?;
-        config
-            .configure(
-                0,     // verbose
-                true,  // quiet
-                None,  // color
-                false, // frozen
-                false, // locked
-                offline,
-                &None, // target_dir
-                &[],   // unstable_flags
-                &[],   // cli_config
-            )
-            .map_err(convert_cargo_error)?;
+        let config = create_quiet_cargo_config(offline)?;
 
         let workspace =
             Workspace::new(&self.manifest_path(), &config).map_err(convert_cargo_error)?;
@@ -397,7 +384,7 @@ impl CargoPath {
             module_name.replace('-', "_")
         };
 
-        let config = GlobalContext::default().map_err(convert_cargo_error)?;
+        let config = create_quiet_cargo_config(false)?;
 
         let workspace =
             Workspace::new(&workspace_manifest_path, &config).map_err(convert_cargo_error)?;
@@ -414,6 +401,25 @@ impl CargoPath {
         }
         Ok(None)
     }
+}
+
+/// Create a quiet cargo configuration
+fn create_quiet_cargo_config(offline: bool) -> Result<GlobalContext> {
+    let mut config = GlobalContext::default().map_err(convert_cargo_error)?;
+    config
+        .configure(
+            0,     // verbose
+            true,  // quiet
+            None,  // color
+            false, // frozen
+            false, // locked
+            offline,
+            &None, // target_dir
+            &[],   // unstable_flags
+            &[],   // cli_config
+        )
+        .map_err(convert_cargo_error)?;
+    Ok(config)
 }
 
 fn generate_dummy_manifest(
