@@ -20,6 +20,6 @@ mod render;
 mod ruskel;
 mod target;
 
-pub use crate::error::{Result, RuskelError};
+pub use crate::error::{Result, RuskelError, nightly_install_error};
 pub use crate::render::Renderer;
 pub use ruskel::Ruskel;

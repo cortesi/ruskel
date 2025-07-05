@@ -1,5 +1,5 @@
 use clap::{Parser, ValueEnum};
-use libruskel::{Ruskel, highlight};
+use libruskel::{Ruskel, highlight, nightly_install_error};
 use std::io::{self, IsTerminal, Write};
 use std::process::{Command, Stdio};
 
@@ -76,6 +76,10 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     verbose: bool,
 
+    /// Target architecture/platform triple (e.g., x86_64-unknown-linux-gnu)
+    #[arg(long)]
+    target_arch: Option<String>,
+
     /// Run as an MCP server on stdout
     #[arg(long, default_value_t = false)]
     mcp: bool,
@@ -89,7 +93,7 @@ struct Cli {
     log: Option<LogLevel>,
 }
 
-fn check_nightly_toolchain() -> Result<(), String> {
+fn check_nightly_toolchain(target_arch: Option<&str>) -> Result<(), String> {
     // Check if nightly toolchain is installed
     let output = Command::new("rustup")
         .args(["run", "nightly", "rustc", "--version"])
@@ -98,7 +102,10 @@ fn check_nightly_toolchain() -> Result<(), String> {
         .map_err(|e| format!("Failed to run rustup: {e}"))?;
 
     if !output.status.success() {
-        return Err("ruskel requires the nightly toolchain to be installed.\nRun: rustup toolchain install nightly".to_string());
+        return Err(nightly_install_error(
+            "ruskel requires the nightly toolchain to be installed",
+            target_arch,
+        ));
     }
 
     // Check if rust-docs-json component is available (for std library support)
@@ -136,7 +143,7 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
         || cli.no_page
     {
         return Err(
-            "--mcp can only be used with --auto-impls, --private, --offline, and --verbose".into(),
+            "--mcp can only be used with --auto-impls, --private, --offline, --verbose, and --target-arch".into(),
         );
     }
 
@@ -144,7 +151,8 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let ruskel = Ruskel::new()
         .with_offline(cli.offline)
         .with_auto_impls(cli.auto_impls)
-        .with_silent(!cli.verbose);
+        .with_silent(!cli.verbose)
+        .with_target_arch(cli.target_arch.clone());
 
     // Run the MCP server
     let runtime = tokio::runtime::Runtime::new()?;
@@ -176,7 +184,8 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let rs = Ruskel::new()
         .with_offline(cli.offline)
         .with_auto_impls(cli.auto_impls)
-        .with_silent(!cli.verbose);
+        .with_silent(!cli.verbose)
+        .with_target_arch(cli.target_arch.clone());
 
     let mut output = if cli.raw {
         rs.raw_json(
@@ -228,7 +237,7 @@ fn main() {
     let result = if cli.mcp {
         run_mcp(&cli)
     } else {
-        if let Err(e) = check_nightly_toolchain() {
+        if let Err(e) = check_nightly_toolchain(cli.target_arch.as_deref()) {
             eprintln!("{e}");
             std::process::exit(1);
         }
