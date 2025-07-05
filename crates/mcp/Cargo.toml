@@ -10,8 +10,8 @@ readme.workspace = true
 
 [dependencies]
 libruskel = { workspace = true }
-#tenx-mcp = { git = "https://github.com/tenxhq/tenx-mcp.git", rev = "1f49b8f"}
-tenx-mcp = { path= "../../../tenx-mcp/crates/tenx-mcp" }
+tenx-mcp = { git = "https://github.com/tenxhq/tenx-mcp.git", rev = "d95ebe2"}
+# tenx-mcp = { path= "../../../tenx-mcp/crates/tenx-mcp" }
 tokio = { version = "1", features = ["full"] }
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
