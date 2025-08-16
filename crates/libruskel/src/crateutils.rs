@@ -94,14 +94,12 @@ pub fn render_generic_param_def(param: &GenericParamDef) -> Option<String> {
                 let bounds = if bounds.is_empty() {
                     String::new()
                 } else {
-                    format!(
-                        ": {}",
-                        bounds
-                            .iter()
-                            .map(render_generic_bound)
-                            .collect::<Vec<_>>()
-                            .join(" + ")
-                    )
+                    let b = render_generic_bounds(bounds);
+                    if b.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {b}")
+                    }
                 };
                 let default = default
                     .as_ref()
@@ -127,9 +125,8 @@ pub fn render_generic_param_def(param: &GenericParamDef) -> Option<String> {
 pub fn render_generic_bound(bound: &GenericBound) -> String {
     match bound {
         GenericBound::Use(_) => {
-            // https://github.com/rust-lang/rust/issues/123432
-            // TODO: Implement once rustdoc stabilizes precise capturing syntax
-            "use<...>".to_string() // Placeholder for unstable precise capturing feature
+            // Omit unstable precise-capturing bounds to keep output valid
+            String::new()
         }
         GenericBound::TraitBound {
             trait_,
@@ -400,23 +397,24 @@ fn render_generic_arg(arg: &GenericArg) -> String {
 }
 
 pub fn render_generic_bounds(bounds: &[GenericBound]) -> String {
-    bounds
+    let parts: Vec<String> = bounds
         .iter()
         .map(render_generic_bound)
-        .collect::<Vec<_>>()
-        .join(" + ")
+        .filter(|s| !s.trim().is_empty())
+        .collect();
+    parts.join(" + ")
 }
 
 fn render_type_constraint(constraint: &AssocItemConstraint) -> String {
     let binding_kind = match &constraint.binding {
         AssocItemConstraintKind::Equality(term) => format!(" = {}", render_term(term)),
         AssocItemConstraintKind::Constraint(bounds) => {
-            let bounds = bounds
-                .iter()
-                .map(render_generic_bound)
-                .collect::<Vec<_>>()
-                .join(" + ");
-            format!(": {bounds}")
+            let b = render_generic_bounds(bounds);
+            if b.is_empty() {
+                String::new()
+            } else {
+                format!(": {b}")
+            }
         }
     };
     format!("{}{binding_kind}", constraint.name)
@@ -472,13 +470,12 @@ pub fn render_where_predicate(pred: &WherePredicate) -> Option<String> {
                 String::new()
             };
 
-            let bounds_str = bounds
-                .iter()
-                .map(render_generic_bound)
-                .collect::<Vec<_>>()
-                .join(" + ");
-
-            Some(format!("{hrtb}{}: {bounds_str}", render_type(type_)))
+            let bounds_str = render_generic_bounds(bounds);
+            if bounds_str.is_empty() {
+                None
+            } else {
+                Some(format!("{hrtb}{}: {bounds_str}", render_type(type_)))
+            }
         }
         WherePredicate::LifetimePredicate { lifetime, outlives } => {
             if outlives.is_empty() {
@@ -583,5 +580,46 @@ mod tests {
 
         let result = render_generic_bound(&bound);
         assert_eq!(result, "Debug");
+    }
+
+    #[test]
+    fn test_render_generic_bounds_omits_precise_capturing() {
+        use rustdoc_types::{Id, Path, PreciseCapturingArg};
+
+        // Prepare a normal trait bound
+        let sized_path = Path {
+            id: Id(0),
+            path: "Sized".to_string(),
+            args: None,
+        };
+        let trait_bound = GenericBound::TraitBound {
+            trait_: sized_path,
+            generic_params: vec![],
+            modifier: TraitBoundModifier::None,
+        };
+
+        // And a precise-capturing `use<'a, T>` bound
+        let use_bound = GenericBound::Use(vec![
+            PreciseCapturingArg::Lifetime("'a".to_string()),
+            PreciseCapturingArg::Param("T".to_string()),
+        ]);
+
+        // When combined, only the valid trait bound should render
+        let rendered = render_generic_bounds(&[trait_bound, use_bound]);
+        assert_eq!(rendered, "Sized");
+    }
+
+    #[test]
+    fn test_render_generic_bounds_only_precise_capturing() {
+        use rustdoc_types::PreciseCapturingArg;
+
+        let use_only = GenericBound::Use(vec![
+            PreciseCapturingArg::Lifetime("'a".to_string()),
+            PreciseCapturingArg::Param("T".to_string()),
+        ]);
+
+        // If only `use<...>` is present, nothing should render
+        let rendered = render_generic_bounds(&[use_only]);
+        assert_eq!(rendered, "");
     }
 }
