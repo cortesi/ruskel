@@ -71,50 +71,48 @@ fn find_std_reexports() -> Result<HashMap<String, String>, Box<dyn std::error::E
     let mut mapping = HashMap::new();
 
     // Get the root module
-    if let Some(root_item) = std_crate.index.get(&std_crate.root) {
-        if let ItemEnum::Module(root_module) = &root_item.inner {
-            // Iterate through top-level items in std
-            for item_id in &root_module.items {
-                if let Some(item) = std_crate.index.get(item_id) {
-                    // Only consider public items
-                    if !matches!(item.visibility, Visibility::Public) {
-                        continue;
-                    }
+    if let Some(root_item) = std_crate.index.get(&std_crate.root)
+        && let ItemEnum::Module(root_module) = &root_item.inner
+    {
+        // Iterate through top-level items in std
+        for item_id in &root_module.items {
+            if let Some(item) = std_crate.index.get(item_id) {
+                // Only consider public items
+                if !matches!(item.visibility, Visibility::Public) {
+                    continue;
+                }
 
-                    if let Some(name) = &item.name {
-                        match &item.inner {
-                            ItemEnum::Use(use_item) => {
-                                // This is a re-export - analyze where it comes from
-                                if use_item.source.starts_with("core::") {
-                                    // Extract module name from path like "core::mem"
-                                    if let Some(module) = use_item.source.strip_prefix("core::") {
-                                        if let Some(module_name) = module.split("::").next() {
-                                            if module_name == name {
-                                                mapping.insert(name.clone(), "core".to_string());
-                                            }
-                                        }
-                                    }
-                                } else if use_item.source.starts_with("alloc::") {
-                                    // Extract module name from path like "alloc::vec"
-                                    if let Some(module) = use_item.source.strip_prefix("alloc::") {
-                                        if let Some(module_name) = module.split("::").next() {
-                                            if module_name == name {
-                                                mapping.insert(name.clone(), "alloc".to_string());
-                                            }
-                                        }
-                                    }
+                if let Some(name) = &item.name {
+                    match &item.inner {
+                        ItemEnum::Use(use_item) => {
+                            // This is a re-export - analyze where it comes from
+                            if use_item.source.starts_with("core::") {
+                                // Extract module name from path like "core::mem"
+                                if let Some(module) = use_item.source.strip_prefix("core::")
+                                    && let Some(module_name) = module.split("::").next()
+                                    && module_name == name
+                                {
+                                    mapping.insert(name.clone(), "core".to_string());
+                                }
+                            } else if use_item.source.starts_with("alloc::") {
+                                // Extract module name from path like "alloc::vec"
+                                if let Some(module) = use_item.source.strip_prefix("alloc::")
+                                    && let Some(module_name) = module.split("::").next()
+                                    && module_name == name
+                                {
+                                    mapping.insert(name.clone(), "alloc".to_string());
                                 }
                             }
-                            ItemEnum::Module(_) => {
-                                // For modules that are not re-exports, they're std-specific
-                                // But we need to check if this is actually a re-export at the module level
-                                // For now, we'll mark them as std and manually verify later
-                                if !mapping.contains_key(name) {
-                                    mapping.insert(name.clone(), "std".to_string());
-                                }
-                            }
-                            _ => {}
                         }
+                        ItemEnum::Module(_) => {
+                            // For modules that are not re-exports, they're std-specific
+                            // But we need to check if this is actually a re-export at the module level
+                            // For now, we'll mark them as std and manually verify later
+                            if !mapping.contains_key(name) {
+                                mapping.insert(name.clone(), "std".to_string());
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }

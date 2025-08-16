@@ -5,6 +5,7 @@
 use serde_json::json;
 use std::process::Command;
 use std::time::Duration;
+use tenx_mcp::Arguments;
 use tenx_mcp::{Client, Result, ServerAPI, schema::InitializeResult};
 use tokio::process::Command as TokioCommand;
 use tokio::time::timeout;
@@ -118,9 +119,10 @@ async fn test_mcp_server_call_tool() {
         "private": false
     });
 
+    let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
     let result = timeout(
         Duration::from_secs(30),
-        client.call_tool("ruskel", arguments),
+        client.call_tool("ruskel", Some(args)),
     )
     .await
     .expect("Timeout during tool call")
@@ -144,7 +146,9 @@ async fn test_mcp_server_invalid_tool() {
         .expect("Failed to initialize");
 
     // Call non-existent tool
-    let result = client.call_tool("non_existent_tool", json!({})).await;
+    let result = client
+        .call_tool("non_existent_tool", Some(Arguments::new()))
+        .await;
 
     // Should get an error
     assert!(result.is_err());
@@ -169,7 +173,8 @@ async fn test_mcp_server_invalid_arguments() {
         // Missing required "target" field
     });
 
-    let result = client.call_tool("ruskel", arguments).await;
+    let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
+    let result = client.call_tool("ruskel", Some(args)).await;
 
     // Should get an error response in the content
     match result {
@@ -222,9 +227,10 @@ async fn test_mcp_server_multiple_requests() {
             "private": false
         });
 
+        let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
         let result = timeout(
             Duration::from_secs(30),
-            client.call_tool("ruskel", arguments),
+            client.call_tool("ruskel", Some(args)),
         )
         .await
         .unwrap_or_else(|_| panic!("Timeout for target {target}"));
@@ -256,7 +262,9 @@ async fn test_mcp_server_error_recovery() {
     assert!(!result.tools.is_empty());
 
     // 2. Invalid tool name (should error)
-    let result = client.call_tool("non_existent_tool", json!({})).await;
+    let result = client
+        .call_tool("non_existent_tool", Some(Arguments::new()))
+        .await;
     assert!(result.is_err());
 
     // 3. Valid request after error (server should recover)
@@ -272,7 +280,8 @@ async fn test_mcp_server_error_recovery() {
         "private": true
     });
 
-    let result = client.call_tool("ruskel", invalid_args).await;
+    let args = Arguments::from_struct(invalid_args).expect("invalid arguments struct");
+    let result = client.call_tool("ruskel", Some(args)).await;
     match result {
         Ok(call_result) => {
             // Check if it's an error response
@@ -299,9 +308,10 @@ async fn test_mcp_server_error_recovery() {
         "private": false
     });
 
+    let args = Arguments::from_struct(final_args).expect("invalid arguments struct");
     let result = timeout(
         Duration::from_secs(30),
-        client.call_tool("ruskel", final_args),
+        client.call_tool("ruskel", Some(args)),
     )
     .await
     .expect("Timeout during final request");

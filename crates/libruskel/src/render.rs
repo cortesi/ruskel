@@ -382,19 +382,19 @@ impl RenderState<'_, '_> {
         let import = extract_item!(item, ItemEnum::Use);
 
         if import.is_glob {
-            if let Some(source_id) = &import.id {
-                if let Some(source_item) = self.crate_data.index.get(source_id) {
-                    let module = extract_item!(source_item, ItemEnum::Module);
-                    let mut output = String::new();
-                    for item_id in &module.items {
-                        if let Some(item) = self.crate_data.index.get(item_id) {
-                            if self.is_visible(item) {
-                                output.push_str(&self.render_item(path_prefix, item, true));
-                            }
-                        }
+            if let Some(source_id) = &import.id
+                && let Some(source_item) = self.crate_data.index.get(source_id)
+            {
+                let module = extract_item!(source_item, ItemEnum::Module);
+                let mut output = String::new();
+                for item_id in &module.items {
+                    if let Some(item) = self.crate_data.index.get(item_id)
+                        && self.is_visible(item)
+                    {
+                        output.push_str(&self.render_item(path_prefix, item, true));
                     }
-                    return output;
                 }
+                return output;
             }
             // If we can't resolve the glob import, fall back to rendering it as-is
             return format!("pub use {}::*;\n", escape_path(&import.source));
@@ -432,12 +432,11 @@ impl RenderState<'_, '_> {
         let mut output = docs(item);
         let impl_ = extract_item!(item, ItemEnum::Impl);
 
-        if let Some(trait_) = &impl_.trait_ {
-            if let Some(trait_item) = self.crate_data.index.get(&trait_.id) {
-                if !self.is_visible(trait_item) {
-                    return String::new();
-                }
-            }
+        if let Some(trait_) = &impl_.trait_
+            && let Some(trait_item) = self.crate_data.index.get(&trait_.id)
+            && !self.is_visible(trait_item)
+        {
+            return String::new();
         }
 
         let where_clause = render_where_clause(&impl_.generics);
@@ -510,12 +509,11 @@ impl RenderState<'_, '_> {
                 continue;
             }
 
-            if let Some(trait_) = &impl_.trait_ {
-                if let Some(name) = trait_.path.split("::").last() {
-                    if DERIVE_TRAITS.contains(&name) {
-                        inline_traits.push(name);
-                    }
-                }
+            if let Some(trait_) = &impl_.trait_
+                && let Some(name) = trait_.path.split("::").last()
+                && DERIVE_TRAITS.contains(&name)
+            {
+                inline_traits.push(name);
             }
         }
 
@@ -687,12 +685,11 @@ impl RenderState<'_, '_> {
                 continue;
             }
 
-            if let Some(trait_) = &impl_.trait_ {
-                if let Some(name) = trait_.path.split("::").last() {
-                    if DERIVE_TRAITS.contains(&name) {
-                        inline_traits.push(name);
-                    }
-                }
+            if let Some(trait_) = &impl_.trait_
+                && let Some(name) = trait_.path.split("::").last()
+                && DERIVE_TRAITS.contains(&name)
+            {
+                inline_traits.push(name);
             }
         }
 
@@ -801,13 +798,13 @@ impl RenderState<'_, '_> {
         let path_prefix = ppush(path_prefix, &render_name(item));
         let mut output = format!("{}mod {} {{\n", render_vis(item), render_name(item));
         // Add module doc comment if present
-        if self.should_module_doc(&path_prefix, item) {
-            if let Some(docs) = &item.docs {
-                for line in docs.lines() {
-                    output.push_str(&format!("    //! {line}\n"));
-                }
-                output.push('\n');
+        if self.should_module_doc(&path_prefix, item)
+            && let Some(docs) = &item.docs
+        {
+            for line in docs.lines() {
+                output.push_str(&format!("    //! {line}\n"));
             }
+            output.push('\n');
         }
 
         let module = extract_item!(item, ItemEnum::Module);

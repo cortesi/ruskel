@@ -156,7 +156,7 @@ pub fn render_generic_bound(bound: &GenericBound) -> String {
 }
 
 pub fn render_type_inner(ty: &Type, nested: bool) -> String {
-    let rendered = match ty {
+    match ty {
         Type::ResolvedPath(path) => {
             let args = path
                 .args
@@ -255,8 +255,7 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
             }
         }
         Type::Pat { .. } => "/* pattern */".to_string(),
-    };
-    rendered
+    }
 }
 
 pub fn render_type(ty: &Type) -> String {
@@ -451,13 +450,12 @@ pub fn render_where_predicate(pred: &WherePredicate) -> Option<String> {
             generic_params,
         } => {
             // Check if this is a synthetic type
-            if let Type::Generic(_name) = type_ {
-                if generic_params.iter().any(|param| {
+            if let Type::Generic(_name) = type_
+                && generic_params.iter().any(|param| {
                     matches!(&param.kind, GenericParamDefKind::Type { is_synthetic, .. } if *is_synthetic)
                 }) {
                     return None;
                 }
-            }
 
             let hrtb = if !generic_params.is_empty() {
                 let params = generic_params

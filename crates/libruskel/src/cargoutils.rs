@@ -183,10 +183,10 @@ fn load_std_library_json(crate_name: &str, display_name: Option<&str>) -> Result
     })?;
 
     // If a display name is provided, update the root module name
-    if let Some(display) = display_name {
-        if let Some(root_item) = crate_data.index.get_mut(&crate_data.root) {
-            root_item.name = Some(display.to_string());
-        }
+    if let Some(display) = display_name
+        && let Some(root_item) = crate_data.index.get_mut(&crate_data.root)
+    {
+        root_item.name = Some(display.to_string());
     }
 
     Ok(crate_data)
@@ -613,10 +613,10 @@ impl ResolvedTarget {
         }
 
         // Remove the last component (file name) and add it back without the extension
-        if let Some(file_name) = components.pop() {
-            if let Some(stem) = Path::new(&file_name).file_stem().and_then(|s| s.to_str()) {
-                components.push(stem.to_string());
-            }
+        if let Some(file_name) = components.pop()
+            && let Some(stem) = Path::new(&file_name).file_stem().and_then(|s| s.to_str())
+        {
+            components.push(stem.to_string());
         }
 
         // Combine the module path with the additional path
