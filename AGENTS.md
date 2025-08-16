@@ -101,4 +101,11 @@ ruskel serde@1.0.0
 
 </rust>
 
+## Reliable Git Commits
+
+- Prepare: run `cargo fmt --all`, `cargo clippy -q --fix --all-targets --all-features --allow-dirty --tests --examples 2>&1`, and `cargo test --all` to ensure clean state.
+- Stage: prefer explicit staging. Use `git add -A` (or specific paths) and verify with `git status --porcelain`.
+- Message: write the commit message to a file to avoid shell interpolation issues with symbols like `<`, `>`, `$`, and backticks. Example: write to `/tmp/commit_msg.txt` and run `git commit -F /tmp/commit_msg.txt`.
+- Style: use concise Conventional Commits subjects (e.g., `fix(render): ...`) and a brief body listing changes and validation.
+- Validate: after committing, run `git show --stat -1` to verify contents and `git log -1 --pretty=format:%s` to confirm the subject.
 
