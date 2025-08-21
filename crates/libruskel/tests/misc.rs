@@ -301,3 +301,15 @@ fn test_use_with_reserved_keyword() {
         "#,
     );
 }
+
+#[test]
+fn test_struct_field_docs() {
+    rt_idemp(
+        r#"
+            pub struct MyStruct {
+                /// This is a documented field.
+                pub field: i32,
+            }
+        "#,
+    );
+}

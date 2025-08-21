@@ -768,12 +768,15 @@ impl RenderState<'_, '_> {
         let field_item = must_get(self.crate_data, field_id);
         if force || self.is_visible(field_item) {
             let ty = extract_item!(field_item, ItemEnum::StructField);
-            format!(
+            let mut out = String::new();
+            out.push_str(&docs(field_item));
+            out.push_str(&format!(
                 "{}{}: {},\n",
                 render_vis(field_item),
                 render_name(field_item),
                 render_type(ty)
-            )
+            ));
+            out
         } else {
             String::new()
         }

@@ -1,4 +1,39 @@
 
+# Git Commits 
+
+Never commit until you're asked to do so (the user will say "commit" or "do a
+git commit" or some variant of that). Make git commit messages concise and
+clear. In the body of the message, provide a concise summary of what's been
+done, but leave out details like the validation process.
+
+First, review the actual changes that are being committed.
+
+```sh
+# 1) Review, then stage explicitly (paths or -A).
+git status --porcelain
+
+# If necessary, review changes before staging:
+git diff 
+```
+
+Formulate your commit message, based on the actual diff and the user's
+instructions that lead up to this point. Make sure your message covers all
+changed code, not just the user's latest prompt.
+
+Next, stage and commit:
+
+```sh
+# Stage changes; use -A to stage all changes, or specify paths.
+git add -A  # or: git add <paths>
+
+# Commit via stdin; Conventional Commit subject (≤50). Body optional; blank
+# line before body; quoted heredoc prevents interpolation.
+git commit --cleanup=strip -F - <<'MSG'
+feat(ui): concise example
+
+Body
+MSG
+```
 
 
 
@@ -51,26 +86,34 @@ Add dependencies by using the following command rather than editing
 cargo add <crate_name>
 ```
 
+When adding a new dependency, do NOT specify a version unless absolutely
+necessary. This will mean we pick up the latest version of the crate.
+
 ## Ruskel Tool Usage
 
-**ruskel** generates Rust skeletons displaying the API structure of crates,
-modules, structs, traits, functions, or any Rust path—omitting implementation
-bodies. This tool is useful for reviewing names, type signatures, derives, and
-documentation comments during code writing or review.
+The **ruskel** command-line utility generates Rust skeletons displaying the API
+structure of crates, modules, structs, traits, functions, or any Rust
+path—omitting implementation bodies. This tool is useful for reviewing names,
+type signatures, derives, and documentation comments during code writing or
+review. Always prefer ruskel over other inspection methods for Rust code.
 
-Before any significant tool call (such as invoking ruskel), state in one line the purpose and minimal required inputs.
+Before any significant tool call (such as invoking ruskel), state in one line
+the purpose and minimal required inputs.
 
 ### When to Use ruskel
-- To look up signatures or definitions of functions, traits, or structs.
-- To obtain overviews of public or private APIs.
-- When specific examples or crate documentation are needed.
+- Look up signatures or definitions of functions, traits, or structs.
+- Explore public or private APIs.
+- Find specific examples or crate documentation are needed.
 
 ### ruskel Usage Tips
-- Request deep module paths (e.g., `tokio::sync::mpsc`) to stay within your token budget.
-- Use the `--private` flag to view non-public items, which can be useful for inspecting your current codebase.
+- Request deep module paths (e.g., `ruskel tokio::sync::mpsc`) to stay within your
+  token budget.
+- Use the `ruskel --private` flag to view non-public items, which can be useful for
+  nspecting your current codebase.
 
 #### Examples
-```bash
+
+```sh
 # Inspect the current project
 ruskel
 
@@ -101,11 +144,4 @@ ruskel serde@1.0.0
 
 </rust>
 
-## Reliable Git Commits
-
-- Prepare: run `cargo fmt --all`, `cargo clippy -q --fix --all-targets --all-features --allow-dirty --tests --examples 2>&1`, and `cargo test --all` to ensure clean state.
-- Stage: prefer explicit staging. Use `git add -A` (or specific paths) and verify with `git status --porcelain`.
-- Message: write the commit message to a file to avoid shell interpolation issues with symbols like `<`, `>`, `$`, and backticks. Example: write to `/tmp/commit_msg.txt` and run `git commit -F /tmp/commit_msg.txt`.
-- Style: use concise Conventional Commits subjects (e.g., `fix(render): ...`) and a brief body listing changes and validation.
-- Validate: after committing, run `git show --stat -1` to verify contents and `git log -1 --pretty=format:%s` to confirm the subject.
 
