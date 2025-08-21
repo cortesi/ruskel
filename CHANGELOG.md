@@ -1,3 +1,10 @@
+# v0.0.11
+
+- [bug] Include struct field docs in output
+- [feat] MCP server
+- Many improvements to parsing, language support and output
+
+
 # v0.0.10
 
 - Update dependencies for Rust 1.85.0
