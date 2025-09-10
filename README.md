@@ -103,6 +103,7 @@ The `ruskel_skeleton` tool accepts the following parameters:
 - `features`: Array of features to enable (default: [])
 - `quiet`: Enable quiet mode (default: false)
 - `offline`: Enable offline mode (default: false)
+- `target_arch`: Target architecture/platform triple (optional)
 
 ---
 
@@ -141,6 +142,18 @@ rustup toolchain install nightly
 For standard library support, also install:
 ```sh
 rustup component add --toolchain nightly rust-docs-json
+```
+
+### Cross-compilation Support
+
+If you need to generate documentation for a different target architecture, install the nightly toolchain for that target:
+```sh
+rustup toolchain install nightly --target <target-triple>
+```
+
+For example, to support ARM64 Linux:
+```sh
+rustup toolchain install nightly --target aarch64-unknown-linux-gnu
 ```
 
 ---
@@ -197,6 +210,10 @@ ruskel /my/path::foo
 
 # A crate from crates.io with a specific version
 ruskel serde@1.0.0
+
+# Generate documentation for a specific target architecture
+ruskel --target-arch x86_64-unknown-linux-gnu serde
+ruskel --target-arch aarch64-unknown-linux-gnu std::vec::Vec
 ```
 
 ### Standard Library Support

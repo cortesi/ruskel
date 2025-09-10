@@ -19,6 +19,9 @@ pub struct Ruskel {
 
     /// Whether to suppress output during processing.
     silent: bool,
+
+    /// Target architecture/platform triple for cross-compilation.
+    target_arch: Option<String>,
 }
 
 impl Ruskel {
@@ -56,6 +59,7 @@ impl Ruskel {
             offline: false,
             auto_impls: false,
             silent: false,
+            target_arch: None,
         }
     }
 
@@ -78,6 +82,12 @@ impl Ruskel {
         self
     }
 
+    /// Sets the target architecture/platform triple for cross-compilation.
+    pub fn with_target_arch(mut self, target_arch: Option<String>) -> Self {
+        self.target_arch = target_arch;
+        self
+    }
+
     /// Returns the parsed representation of the crate's API.
     ///
     /// # Arguments
@@ -95,7 +105,13 @@ impl Ruskel {
         _private_items: bool,
     ) -> Result<Crate> {
         let rt = resolve_target(target, self.offline)?;
-        rt.read_crate(no_default_features, all_features, features, self.silent)
+        rt.read_crate(
+            no_default_features,
+            all_features,
+            features,
+            self.silent,
+            self.target_arch.as_deref(),
+        )
     }
 
     /// Generates a skeletonized version of the crate as a string of Rust code.
@@ -115,7 +131,13 @@ impl Ruskel {
         private_items: bool,
     ) -> Result<String> {
         let rt = resolve_target(target, self.offline)?;
-        let crate_data = rt.read_crate(no_default_features, all_features, features, self.silent)?;
+        let crate_data = rt.read_crate(
+            no_default_features,
+            all_features,
+            features,
+            self.silent,
+            self.target_arch.as_deref(),
+        )?;
 
         let renderer = Renderer::default()
             .with_filter(&rt.filter)

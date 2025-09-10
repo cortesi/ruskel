@@ -11,19 +11,25 @@ use std::collections::HashMap;
 use tempfile::TempDir;
 
 use super::target::{Entrypoint, Target};
-use crate::error::{Result, RuskelError, convert_cargo_error};
+use crate::error::{Result, RuskelError, convert_cargo_error, nightly_install_error};
 
 /// Get the sysroot path for the nightly toolchain
-fn get_sysroot() -> Result<PathBuf> {
+fn get_sysroot(target_arch: Option<&str>) -> Result<PathBuf> {
+    let mut args = vec!["+nightly", "--print", "sysroot"];
+    if let Some(target) = target_arch {
+        args.extend(["--target", target]);
+    }
+
     let output = Command::new("rustc")
-        .args(["+nightly", "--print", "sysroot"])
+        .args(args)
         .output()
         .map_err(|e| RuskelError::Generate(format!("Failed to get sysroot: {e}")))?;
 
     if !output.status.success() {
-        return Err(RuskelError::Generate(
-            "Failed to get nightly sysroot - ensure nightly toolchain is installed".to_string(),
-        ));
+        return Err(RuskelError::Generate(nightly_install_error(
+            "Failed to get nightly sysroot",
+            target_arch,
+        )));
     }
 
     let sysroot = String::from_utf8(output.stdout)
@@ -159,8 +165,12 @@ fn resolve_std_reexport(target_str: &str) -> Option<String> {
 }
 
 /// Load pre-built JSON documentation for a standard library crate
-fn load_std_library_json(crate_name: &str, display_name: Option<&str>) -> Result<Crate> {
-    let sysroot = get_sysroot()?;
+fn load_std_library_json(
+    crate_name: &str,
+    display_name: Option<&str>,
+    target_arch: Option<&str>,
+) -> Result<Crate> {
+    let sysroot = get_sysroot(target_arch)?;
     let json_path = sysroot
         .join("share")
         .join("doc")
@@ -219,6 +229,7 @@ impl CargoPath {
         all_features: bool,
         features: Vec<String>,
         silent: bool,
+        target_arch: Option<&str>,
     ) -> Result<Crate> {
         // Handle standard library crates specially
         if let CargoPath::StdLibrary(actual_crate, display_crate) = self {
@@ -227,7 +238,7 @@ impl CargoPath {
             } else {
                 None
             };
-            return load_std_library_json(actual_crate, display_name);
+            return load_std_library_json(actual_crate, display_name, target_arch);
         }
 
         // First check if this crate has a library target by reading Cargo.toml
@@ -245,7 +256,7 @@ impl CargoPath {
             ));
         }
 
-        let json_path = rustdoc_json::Builder::default()
+        let mut builder = rustdoc_json::Builder::default()
             .toolchain("nightly")
             .manifest_path(self.manifest_path())
             .document_private_items(true)
@@ -253,25 +264,38 @@ impl CargoPath {
             .all_features(all_features)
             .features(&features)
             .quiet(silent)
-            .silent(silent)
-            .build()
-            .map_err(|e| {
-                let err_msg = e.to_string();
-                if err_msg.contains("no library targets found in package") {
-                    // Return just the error without the "Failed to build" wrapper
-                    RuskelError::Generate("error: no library targets found in package".to_string())
-                } else if err_msg.contains("toolchain") && err_msg.contains("is not installed") {
-                    // Handle nightly toolchain not installed error
-                    RuskelError::Generate("ruskel requires the nightly toolchain to be installed - run 'rustup toolchain install nightly'".to_string())
-                } else if err_msg.contains("Failed to build rustdoc JSON") && err_msg.contains("see stderr") {
-                    // This is the generic error when rustdoc_json fails, likely due to missing nightly
-                    RuskelError::Generate("ruskel requires the nightly toolchain to be installed - run 'rustup toolchain install nightly'".to_string())
-                } else if err_msg.contains("Failed to build rustdoc JSON") {
-                    RuskelError::Generate(err_msg)
-                } else {
-                    RuskelError::Generate(format!("Failed to build rustdoc JSON: {err_msg}"))
-                }
-            })?;
+            .silent(silent);
+
+        // Add target architecture if specified
+        if let Some(target) = target_arch {
+            builder = builder.target(target.to_string());
+        }
+
+        let json_path = builder.build().map_err(|e| {
+            let err_msg = e.to_string();
+            if err_msg.contains("no library targets found in package") {
+                // Return just the error without the "Failed to build" wrapper
+                RuskelError::Generate("error: no library targets found in package".to_string())
+            } else if err_msg.contains("toolchain") && err_msg.contains("is not installed") {
+                // Handle nightly toolchain not installed error
+                RuskelError::Generate(nightly_install_error(
+                    "Nightly toolchain is not installed",
+                    target_arch,
+                ))
+            } else if err_msg.contains("Failed to build rustdoc JSON")
+                && err_msg.contains("see stderr")
+            {
+                // This is the generic error when rustdoc_json fails, likely due to missing nightly
+                RuskelError::Generate(nightly_install_error(
+                    "Failed to build rustdoc JSON (likely missing nightly toolchain)",
+                    target_arch,
+                ))
+            } else if err_msg.contains("Failed to build rustdoc JSON") {
+                RuskelError::Generate(err_msg)
+            } else {
+                RuskelError::Generate(format!("Failed to build rustdoc JSON: {err_msg}"))
+            }
+        })?;
         let json_content = fs::read_to_string(&json_path)?;
         let crate_data: Crate = serde_json::from_str(&json_content).map_err(|e| {
             RuskelError::Generate(format!(
@@ -506,9 +530,15 @@ impl ResolvedTarget {
         all_features: bool,
         features: Vec<String>,
         silent: bool,
+        target_arch: Option<&str>,
     ) -> Result<Crate> {
-        self.package_path
-            .read_crate(no_default_features, all_features, features, silent)
+        self.package_path.read_crate(
+            no_default_features,
+            all_features,
+            features,
+            silent,
+            target_arch,
+        )
     }
 
     pub fn from_target(target: Target, offline: bool) -> Result<Self> {
