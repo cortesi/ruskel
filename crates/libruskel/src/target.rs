@@ -4,13 +4,16 @@ use semver::Version;
 
 use crate::error::{Result, RuskelError};
 
+/// Entry point for resolving a target specification.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Entrypoint {
     /// A path to a Rust file or directory.
     Path(PathBuf),
     /// A module or package name, optionally with a version.
     Name {
+        /// Package or module name provided by the user.
         name: String,
+        /// Optional package version requested with the target.
         version: Option<Version>,
     },
 }
@@ -64,11 +67,14 @@ pub enum Entrypoint {
 ///   - `my_crate::utils::helper_function`
 #[derive(Debug, Clone, PartialEq)]
 pub struct Target {
+    /// Entry point describing where to start resolving the target.
     pub entrypoint: Entrypoint,
+    /// Optional module path components within the entrypoint.
     pub path: Vec<String>,
 }
 
 impl Target {
+    /// Parse a target specification string into a structured `Target`.
     pub fn parse(spec: &str) -> Result<Self> {
         if spec.is_empty() {
             return Err(RuskelError::InvalidTarget(
@@ -126,7 +132,7 @@ impl Target {
             }
         };
 
-        Ok(Target {
+        Ok(Self {
             entrypoint,
             path: path.iter().map(|&s| s.to_string()).collect(),
         })

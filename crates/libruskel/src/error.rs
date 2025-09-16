@@ -1,7 +1,11 @@
+use std::{io, result};
+
 use thiserror::Error;
 
-pub type Result<T> = std::result::Result<T, RuskelError>;
+/// Convenience alias for results returned by libruskel operations.
+pub type Result<T> = result::Result<T, RuskelError>;
 
+/// Errors surfaced while generating rustdoc skeletons.
 #[derive(Error, Debug)]
 pub enum RuskelError {
     /// Indicates that a specified module could not be found.
@@ -10,7 +14,7 @@ pub enum RuskelError {
 
     /// Indicates a failure in reading a file, wrapping the underlying IO error.
     #[error("Failed to read file: {0}")]
-    FileRead(#[from] std::io::Error),
+    FileRead(#[from] io::Error),
 
     /// Indicates a failure in the code generation process.
     #[error("{0}")]
@@ -59,24 +63,24 @@ pub enum RuskelError {
 
 impl From<syntect::Error> for RuskelError {
     fn from(err: syntect::Error) -> Self {
-        RuskelError::Highlight(err.to_string())
+        Self::Highlight(err.to_string())
     }
 }
 
 impl From<serde_json::Error> for RuskelError {
     fn from(err: serde_json::Error) -> Self {
-        RuskelError::Generate(err.to_string())
+        Self::Generate(err.to_string())
     }
 }
 
 impl From<rust_format::Error> for RuskelError {
     fn from(err: rust_format::Error) -> Self {
-        RuskelError::Format(err.to_string())
+        Self::Format(err.to_string())
     }
 }
 
-/// Converts anyhow::Error to our custom RuskelError type.
-pub fn convert_cargo_error(error: anyhow::Error) -> RuskelError {
+/// Convert an `anyhow::Error` into the corresponding `RuskelError` variant.
+pub fn convert_cargo_error(error: &anyhow::Error) -> RuskelError {
     let err_msg = error.to_string();
     if err_msg.contains("no matching package") {
         RuskelError::DependencyNotFound

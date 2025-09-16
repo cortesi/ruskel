@@ -1,8 +1,8 @@
 use std::{
     collections::HashMap,
-    fs,
+    env, fs,
     io::Write,
-    path::{Path, PathBuf, absolute},
+    path::{Component, Path, PathBuf, absolute},
     process::Command,
 };
 
@@ -197,7 +197,9 @@ fn load_std_library_json(crate_name: &str, display_name: Option<&str>) -> Result
 /// A path to a crate. This can be a directory on the filesystem or a temporary directory.
 #[derive(Debug)]
 enum CargoPath {
+    /// Filesystem-backed crate directory containing a manifest.
     Path(PathBuf),
+    /// Ephemeral crate stored inside a temporary directory when fetching dependencies.
     TempDir(TempDir),
     /// Standard library crate (actual_crate, display_crate)
     /// e.g., ("alloc", "std") when user requests std::vec
@@ -205,16 +207,19 @@ enum CargoPath {
 }
 
 impl CargoPath {
+    /// Return the root directory tied to this Cargo source.
     pub fn as_path(&self) -> &Path {
         match self {
-            CargoPath::Path(path) => path.as_path(),
-            CargoPath::TempDir(temp_dir) => temp_dir.path(),
-            CargoPath::StdLibrary(_, _) => {
+            Self::Path(path) => path.as_path(),
+            Self::TempDir(temp_dir) => temp_dir.path(),
+            Self::StdLibrary(_, _) => {
                 panic!("Standard library crates don't have a filesystem path")
             }
         }
     }
 
+    /// Load rustdoc JSON for the crate represented by this cargo path.
+    /// Read the crate data for this resolved target using rustdoc JSON generation.
     pub fn read_crate(
         &self,
         no_default_features: bool,
@@ -224,7 +229,7 @@ impl CargoPath {
         silent: bool,
     ) -> Result<Crate> {
         // Handle standard library crates specially
-        if let CargoPath::StdLibrary(actual_crate, display_crate) = self {
+        if let Self::StdLibrary(actual_crate, display_crate) = self {
             let display_name = if actual_crate != display_crate {
                 Some(display_crate.as_str())
             } else {
@@ -254,7 +259,7 @@ impl CargoPath {
             .document_private_items(private_items)
             .no_default_features(no_default_features)
             .all_features(all_features)
-            .features(&features)
+            .features(features)
             .quiet(silent)
             .silent(silent)
             .build()
@@ -294,32 +299,36 @@ impl CargoPath {
         Ok(crate_data)
     }
 
+    /// Compute the absolute `Cargo.toml` path for this source.
     pub fn manifest_path(&self) -> PathBuf {
         match self {
-            CargoPath::StdLibrary(_, _) => {
+            Self::StdLibrary(_, _) => {
                 panic!("Standard library crates don't have a manifest path")
             }
             _ => absolute(self.as_path().join("Cargo.toml")).unwrap(),
         }
     }
 
+    /// Return whether this cargo path includes a `Cargo.toml`.
     pub fn has_manifest(&self) -> bool {
         match self {
-            CargoPath::StdLibrary(_, _) => false,
+            Self::StdLibrary(_, _) => false,
             _ => self.manifest_path().exists(),
         }
     }
 
+    /// Identify if the path is a standalone package manifest.
     pub fn is_package(&self) -> bool {
         match self {
-            CargoPath::StdLibrary(_, _) => false,
+            Self::StdLibrary(_, _) => false,
             _ => self.has_manifest() && !self.is_workspace(),
         }
     }
 
+    /// Identify if the path is a workspace manifest without a package section.
     pub fn is_workspace(&self) -> bool {
         match self {
-            CargoPath::StdLibrary(_, _) => false,
+            Self::StdLibrary(_, _) => false,
             _ => {
                 if !self.has_manifest() {
                     return false;
@@ -334,15 +343,16 @@ impl CargoPath {
         }
     }
 
-    pub fn find_dependency(&self, dependency: &str, offline: bool) -> Result<Option<CargoPath>> {
-        if let CargoPath::StdLibrary(_, _) = self {
+    /// Find a dependency within the current workspace or registry cache.
+    pub fn find_dependency(&self, dependency: &str, offline: bool) -> Result<Option<Self>> {
+        if let Self::StdLibrary(_, _) = self {
             return Ok(None);
         }
 
         let config = create_quiet_cargo_config(offline)?;
 
-        let workspace =
-            Workspace::new(&self.manifest_path(), &config).map_err(convert_cargo_error)?;
+        let workspace = Workspace::new(&self.manifest_path(), &config)
+            .map_err(|err| convert_cargo_error(&err))?;
 
         let (_, ps) = ops::fetch(
             &workspace,
@@ -351,7 +361,7 @@ impl CargoPath {
                 targets: vec![],
             },
         )
-        .map_err(convert_cargo_error)?;
+        .map_err(|err| convert_cargo_error(&err))?;
 
         // Try both the provided name and its hyphenated/underscored version
         let alt_dependency = if dependency.contains('_') {
@@ -363,7 +373,7 @@ impl CargoPath {
         for package in ps.packages() {
             let package_name = package.name().as_str();
             if package_name == dependency || package_name == alt_dependency {
-                return Ok(Some(CargoPath::Path(
+                return Ok(Some(Self::Path(
                     package.manifest_path().parent().unwrap().to_path_buf(),
                 )));
             }
@@ -371,13 +381,14 @@ impl CargoPath {
         Ok(None)
     }
 
-    pub fn nearest_manifest(start_dir: &Path) -> Option<CargoPath> {
+    /// Walk upwards from `start_dir` to locate the closest `Cargo.toml`.
+    pub fn nearest_manifest(start_dir: &Path) -> Option<Self> {
         let mut current_dir = start_dir.to_path_buf();
 
         loop {
             let manifest_path = current_dir.join("Cargo.toml");
             if manifest_path.exists() {
-                return Some(CargoPath::Path(current_dir));
+                return Some(Self::Path(current_dir));
             }
             if !current_dir.pop() {
                 break;
@@ -399,26 +410,23 @@ impl CargoPath {
 
         let config = create_quiet_cargo_config(false)?;
 
-        let workspace =
-            Workspace::new(&workspace_manifest_path, &config).map_err(convert_cargo_error)?;
+        let workspace = Workspace::new(&workspace_manifest_path, &config)
+            .map_err(|err| convert_cargo_error(&err))?;
 
         for package in workspace.members() {
             let package_name = package.name().as_str();
             if package_name == module_name || package_name == alt_name {
                 let package_path = package.manifest_path().parent().unwrap().to_path_buf();
-                return Ok(Some(ResolvedTarget::new(
-                    CargoPath::Path(package_path),
-                    &[],
-                )));
+                return Ok(Some(ResolvedTarget::new(Self::Path(package_path), &[])));
             }
         }
         Ok(None)
     }
 }
 
-/// Create a quiet cargo configuration
+/// Create a cargo configuration with minimal output suited for library usage.
 fn create_quiet_cargo_config(offline: bool) -> Result<GlobalContext> {
-    let mut config = GlobalContext::default().map_err(convert_cargo_error)?;
+    let mut config = GlobalContext::default().map_err(|err| convert_cargo_error(&err))?;
     config
         .configure(
             0,     // verbose
@@ -431,10 +439,11 @@ fn create_quiet_cargo_config(offline: bool) -> Result<GlobalContext> {
             &[],   // unstable_flags
             &[],   // cli_config
         )
-        .map_err(convert_cargo_error)?;
+        .map_err(|err| convert_cargo_error(&err))?;
     Ok(config)
 }
 
+/// Construct a minimal manifest string for a temporary crate that depends on `dependency`.
 fn generate_dummy_manifest(
     dependency: &str,
     version: Option<String>,
@@ -443,7 +452,7 @@ fn generate_dummy_manifest(
     // Convert underscores to hyphens for Cargo package names
     let cargo_dependency = dependency.replace('_', "-");
 
-    let version_str = version.map_or("*".to_string(), |v| v.to_string());
+    let version_str = version.map_or("*".to_string(), |v| v);
     let features_str = features.map_or(String::new(), |f| {
         let feature_list = f
             .iter()
@@ -463,6 +472,7 @@ version = "0.1.0"
     )
 }
 
+/// Materialize a temporary crate on disk to fetch metadata for a dependency.
 fn create_dummy_crate(
     dependency: &str,
     version: Option<String>,
@@ -498,6 +508,7 @@ pub struct ResolvedTarget {
 }
 
 impl ResolvedTarget {
+    /// Build a `ResolvedTarget` with a normalised module filter path.
     fn new(path: CargoPath, components: &[String]) -> Self {
         let filter = if components.is_empty() {
             String::new()
@@ -507,12 +518,13 @@ impl ResolvedTarget {
             normalized_components.join("::")
         };
 
-        ResolvedTarget {
+        Self {
             package_path: path,
             filter,
         }
     }
 
+    /// Read the crate data for this resolved target using rustdoc JSON generation.
     pub fn read_crate(
         &self,
         no_default_features: bool,
@@ -530,6 +542,7 @@ impl ResolvedTarget {
         )
     }
 
+    /// Resolve a `Target` into a fully-qualified location and filter path.
     pub fn from_target(target: Target, offline: bool) -> Result<Self> {
         match target.entrypoint {
             Entrypoint::Path(path) => {
@@ -538,7 +551,7 @@ impl ResolvedTarget {
                 } else {
                     let cargo_path = CargoPath::Path(path.clone());
                     if cargo_path.is_package() {
-                        Ok(ResolvedTarget::new(cargo_path, &target.path))
+                        Ok(Self::new(cargo_path, &target.path))
                     } else if cargo_path.is_workspace() {
                         if target.path.is_empty() {
                             Err(RuskelError::InvalidTarget(
@@ -549,7 +562,7 @@ impl ResolvedTarget {
                             if let Some(package) =
                                 cargo_path.find_workspace_package(package_name)?
                             {
-                                Ok(ResolvedTarget::new(package.package_path, &target.path[1..]))
+                                Ok(Self::new(package.package_path, &target.path[1..]))
                             } else {
                                 Err(RuskelError::ModuleNotFound(format!(
                                     "Package '{package_name}' not found in workspace"
@@ -567,8 +580,8 @@ impl ResolvedTarget {
             Entrypoint::Name { name, version } => {
                 // Check if this is a standard library crate
                 if is_std_library_crate(&name) {
-                    return Ok(ResolvedTarget::new(
-                        CargoPath::StdLibrary(name.to_string(), name.to_string()),
+                    return Ok(Self::new(
+                        CargoPath::StdLibrary(name.to_string(), name),
                         &target.path,
                     ));
                 }
@@ -580,11 +593,11 @@ impl ResolvedTarget {
                     )));
                 }
 
-                let current_dir = std::env::current_dir()?;
+                let current_dir = env::current_dir()?;
                 match CargoPath::nearest_manifest(&current_dir) {
                     Some(root) => {
                         if let Some(dependency) = root.find_dependency(&name, offline)? {
-                            Ok(ResolvedTarget::new(dependency, &target.path))
+                            Ok(Self::new(dependency, &target.path))
                         } else {
                             Self::from_dummy_crate(&name, version, &target.path, offline)
                         }
@@ -595,6 +608,7 @@ impl ResolvedTarget {
         }
     }
 
+    /// Resolve a module path starting from a specific Rust source file.
     fn from_rust_file(file_path: PathBuf, additional_path: &[String]) -> Result<Self> {
         let file_path = fs::canonicalize(file_path)?;
         let mut current_dir = file_path
@@ -618,7 +632,7 @@ impl ResolvedTarget {
         let mut components: Vec<_> = relative_path
             .components()
             .filter_map(|c| {
-                if let std::path::Component::Normal(os_str) = c {
+                if let Component::Normal(os_str) = c {
                     os_str.to_str().map(String::from)
                 } else {
                     None
@@ -641,9 +655,10 @@ impl ResolvedTarget {
         // Combine the module path with the additional path
         components.extend_from_slice(additional_path);
 
-        Ok(ResolvedTarget::new(cargo_path, &components))
+        Ok(Self::new(cargo_path, &components))
     }
 
+    /// Create a resolved target backed by a temporary crate for registry dependencies.
     fn from_dummy_crate(
         name: &str,
         version: Option<Version>,
@@ -655,7 +670,7 @@ impl ResolvedTarget {
 
         // Find the dependency within the dummy crate
         if let Some(dependency_path) = dummy.find_dependency(name, offline)? {
-            Ok(ResolvedTarget::new(dependency_path, path))
+            Ok(Self::new(dependency_path, path))
         } else {
             Err(RuskelError::ModuleNotFound(format!(
                 "Dependency '{name}' not found in dummy crate"
@@ -666,6 +681,7 @@ impl ResolvedTarget {
 
 /// Resovles a target specification and returns a ResolvedTarget, pointing to the package
 /// directory. If necessary, construct temporary dummy crate to download packages from cargo.io.
+/// Parse a textual target specification into a `ResolvedTarget`.
 pub fn resolve_target(target_str: &str, offline: bool) -> Result<ResolvedTarget> {
     // Check if this is a std re-export that needs to be mapped to the actual crate
     let (resolved_target_str, original_crate) =
@@ -721,6 +737,7 @@ pub fn resolve_target(target_str: &str, offline: bool) -> Result<ResolvedTarget>
     }
 }
 
+/// Convert a package name into its canonical import form by replacing hyphens.
 fn to_import_name(package_name: &str) -> String {
     package_name.replace('-', "_")
 }
@@ -1048,88 +1065,47 @@ mod tests {
         assert!(!is_std_library_module("reqwest"));
     }
 
+    /// Assert that resolving `target` yields the expected std crate mapping.
+    fn assert_std_target(
+        target: &str,
+        expected_actual: &str,
+        expected_display: &str,
+        expected_filter: &str,
+    ) {
+        let result = resolve_target(target, true).unwrap();
+        match &result.package_path {
+            CargoPath::StdLibrary(actual, display) => {
+                assert_eq!(actual, expected_actual);
+                assert_eq!(display, expected_display);
+            }
+            _ => panic!("Expected StdLibrary variant for {target}"),
+        }
+        assert_eq!(result.filter, expected_filter);
+    }
+
+    /// Assert that resolving a bare module fails with the expected error message.
+    fn assert_std_module_error(module: &str, suggestion: &str) {
+        match resolve_target(module, true) {
+            Err(err) => {
+                let message = err.to_string();
+                assert!(message.contains("appears to be a standard library module"));
+                assert!(message.contains(suggestion));
+            }
+            Ok(_) => panic!(
+                "'{module}' should have failed with an error about being a std library module"
+            ),
+        }
+    }
+
     #[test]
     fn test_std_library_resolve() {
-        // Test resolving std library crates
-        let result = resolve_target("std", true).unwrap();
-        match &result.package_path {
-            CargoPath::StdLibrary(actual, display) => {
-                assert_eq!(actual, "std");
-                assert_eq!(display, "std");
-            }
-            _ => panic!("Expected StdLibrary variant for std crate"),
-        }
-        assert_eq!(result.filter, "");
-
-        // Test resolving std library with module path (maps to alloc)
-        let result = resolve_target("std::vec::Vec", true).unwrap();
-        match &result.package_path {
-            CargoPath::StdLibrary(actual, display) => {
-                assert_eq!(actual, "alloc");
-                assert_eq!(display, "std");
-            }
-            _ => panic!("Expected StdLibrary variant for alloc crate"),
-        }
-        assert_eq!(result.filter, "vec::Vec");
-
-        // Test core library
-        let result = resolve_target("core::mem", true).unwrap();
-        match &result.package_path {
-            CargoPath::StdLibrary(actual, display) => {
-                assert_eq!(actual, "core");
-                assert_eq!(display, "core");
-            }
-            _ => panic!("Expected StdLibrary variant for core crate"),
-        }
-        assert_eq!(result.filter, "mem");
-
-        // Test that bare module names from std are rejected with helpful error
-        let result = resolve_target("rc", true);
-        match result {
-            Err(e) => {
-                assert!(
-                    e.to_string()
-                        .contains("appears to be a standard library module")
-                );
-                assert!(e.to_string().contains("std::rc"));
-            }
-            Ok(_) => {
-                panic!("'rc' should have failed with an error about being a std library module")
-            }
-        }
-
-        // Test std::rc::Rc maps to alloc::rc::Rc
-        let result = resolve_target("std::rc::Rc", true).unwrap();
-        match &result.package_path {
-            CargoPath::StdLibrary(actual, display) => {
-                assert_eq!(actual, "alloc");
-                assert_eq!(display, "std");
-            }
-            _ => panic!("Expected StdLibrary variant for alloc crate"),
-        }
-        assert_eq!(result.filter, "rc::Rc");
-
-        // Test alloc::rc::Rc still works directly
-        let result = resolve_target("alloc::rc::Rc", true).unwrap();
-        match &result.package_path {
-            CargoPath::StdLibrary(actual, display) => {
-                assert_eq!(actual, "alloc");
-                assert_eq!(display, "alloc");
-            }
-            _ => panic!("Expected StdLibrary variant for alloc crate"),
-        }
-        assert_eq!(result.filter, "rc::Rc");
-
-        // Test std::mem maps to core::mem
-        let result = resolve_target("std::mem", true).unwrap();
-        match &result.package_path {
-            CargoPath::StdLibrary(actual, display) => {
-                assert_eq!(actual, "core");
-                assert_eq!(display, "std");
-            }
-            _ => panic!("Expected StdLibrary variant for core crate"),
-        }
-        assert_eq!(result.filter, "mem");
+        assert_std_target("std", "std", "std", "");
+        assert_std_target("std::vec::Vec", "alloc", "std", "vec::Vec");
+        assert_std_target("core::mem", "core", "core", "mem");
+        assert_std_module_error("rc", "std::rc");
+        assert_std_target("std::rc::Rc", "alloc", "std", "rc::Rc");
+        assert_std_target("alloc::rc::Rc", "alloc", "alloc", "rc::Rc");
+        assert_std_target("std::mem", "core", "std", "mem");
     }
 
     #[test]

@@ -1,3 +1,4 @@
+//! Integration tests validating function signature rendering.
 mod utils;
 use libruskel::Renderer;
 use utils::*;

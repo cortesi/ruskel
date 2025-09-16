@@ -1,3 +1,4 @@
+//! Integration tests for impl block rendering.
 mod utils;
 use libruskel::Renderer;
 use utils::*;

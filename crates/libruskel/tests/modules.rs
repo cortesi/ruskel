@@ -1,3 +1,4 @@
+//! Integration tests covering module rendering scenarios.
 mod utils;
 use utils::*;
 

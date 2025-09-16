@@ -1,3 +1,4 @@
+//! Integration tests validating enum rendering behaviour.
 mod utils;
 use libruskel::Renderer;
 use utils::*;

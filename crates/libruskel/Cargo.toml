@@ -8,6 +8,9 @@ license.workspace = true
 repository.workspace = true
 readme.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow = "1.0.99"
 cargo = "0.90.0"

@@ -8,7 +8,7 @@ use crate::{
     error::{Result, RuskelError},
 };
 
-// List of traits that we want to render as a derive inline, above a struct declaration
+/// Traits that we render via `#[derive(...)]` annotations instead of explicit impl blocks.
 const DERIVE_TRAITS: &[&str] = &[
     "Clone",
     "Copy",
@@ -30,7 +30,7 @@ const DERIVE_TRAITS: &[&str] = &[
     "Deserialize",
 ];
 
-// List of Rust reserved words that need to be escaped with r#
+/// Rust reserved words that require the `r#` raw identifier syntax.
 const RESERVED_WORDS: &[&str] = &[
     "abstract", "as", "become", "box", "break", "const", "continue", "crate", "do", "else", "enum",
     "extern", "false", "final", "fn", "for", "if", "impl", "in", "let", "loop", "macro", "match",
@@ -39,10 +39,12 @@ const RESERVED_WORDS: &[&str] = &[
     "virtual", "where", "while", "yield",
 ];
 
+/// Retrieve an item from the crate index, panicking if it is missing.
 fn must_get<'a>(crate_data: &'a Crate, id: &Id) -> &'a Item {
     crate_data.index.get(id).unwrap()
 }
 
+/// Append `name` to a path prefix using `::` separators.
 fn ppush(path_prefix: &str, name: &str) -> String {
     if path_prefix.is_empty() {
         name.to_string()
@@ -51,7 +53,7 @@ fn ppush(path_prefix: &str, name: &str) -> String {
     }
 }
 
-/// Escape reserved keywords in a path by adding r# prefix where needed
+/// Escape reserved keywords in a path by adding raw identifier prefixes when needed.
 fn escape_path(path: &str) -> String {
     path.split("::")
         .map(|segment| {
@@ -68,26 +70,40 @@ fn escape_path(path: &str) -> String {
         .join("::")
 }
 
+/// Classification describing how a filter string matches a path.
 #[derive(Debug, PartialEq)]
 enum FilterMatch {
+    /// The filter exactly matches the path.
     Hit,
+    /// The filter matches a prefix of the path.
     Prefix,
+    /// The filter matches a suffix of the path.
     Suffix,
+    /// The filter does not match the path.
     Miss,
 }
 
+/// Configurable renderer that turns rustdoc data into skeleton Rust source.
 pub struct Renderer {
+    /// Formatter used to produce tidy Rust output.
     formatter: RustFmt,
+    /// Whether auto trait implementations should be included in the output.
     pub render_auto_impls: bool,
+    /// Whether private items should be rendered.
     pub render_private_items: bool,
+    /// Whether blanket implementations (with generics over `T`) should be rendered.
     render_blanket_impls: bool,
-    /// The filter is a path BELOW the outermost module.
+    /// Filter path relative to the crate root.
     filter: String,
 }
 
+/// Mutable rendering context shared across helper functions.
 struct RenderState<'a, 'b> {
+    /// Reference to the immutable renderer configuration.
     config: &'a Renderer,
+    /// Crate metadata produced by rustdoc.
     crate_data: &'b Crate,
+    /// Tracks whether any item matched the configured filter.
     filter_matched: bool,
 }
 
@@ -98,6 +114,7 @@ impl Default for Renderer {
 }
 
 impl Renderer {
+    /// Create a renderer with default configuration.
     pub fn new() -> Self {
         let config = Config::new_str().option("brace_style", "PreferSameLine");
         Self {
@@ -133,6 +150,7 @@ impl Renderer {
         self
     }
 
+    /// Render a crate into formatted Rust source text.
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
         let mut state = RenderState {
             config: self,
@@ -144,6 +162,7 @@ impl Renderer {
 }
 
 impl RenderState<'_, '_> {
+    /// Render the crate, applying filters and formatting output.
     pub fn render(&mut self) -> Result<String> {
         // The root item is always a module
         let output = self.render_item("", must_get(self.crate_data, &self.crate_data.root), false);
@@ -155,11 +174,12 @@ impl RenderState<'_, '_> {
         Ok(self.config.formatter.format_str(&output)?)
     }
 
+    /// Determine whether an item should be rendered based on visibility settings.
     fn is_visible(&self, item: &Item) -> bool {
         self.config.render_private_items || matches!(item.visibility, Visibility::Public)
     }
 
-    /// Should an impl be rendered in full?
+    /// Determine whether an impl block should be rendered in the output.
     fn should_render_impl(&self, impl_: &Impl) -> bool {
         if impl_.is_synthetic && !self.config.render_auto_impls {
             return false;
@@ -190,7 +210,7 @@ impl RenderState<'_, '_> {
         true
     }
 
-    /// Should we filter this item? If true, the item should not be rendered.
+    /// Determine whether an item is filtered out by the configured path filter.
     fn should_filter(&mut self, path_prefix: &str, item: &Item) -> bool {
         // We never filter the root module - filters operate under the root.
         if item.id == self.crate_data.root {
@@ -211,6 +231,7 @@ impl RenderState<'_, '_> {
     }
 
     /// Does this item match the filter?
+    /// Evaluate how the current filter matches a candidate path.
     fn filter_match(&self, path_prefix: &str, item: &Item) -> FilterMatch {
         let item_path = if let Some(name) = &item.name {
             ppush(path_prefix, name)
@@ -232,6 +253,7 @@ impl RenderState<'_, '_> {
         }
     }
 
+    /// Determine whether a module should emit a `//!` doc comment header.
     fn should_module_doc(&self, path_prefix: &str, item: &Item) -> bool {
         if self.config.filter.is_empty() {
             return true;
@@ -242,6 +264,7 @@ impl RenderState<'_, '_> {
         )
     }
 
+    /// Render an item into Rust source text.
     fn render_item(&mut self, path_prefix: &str, item: &Item, force_private: bool) -> String {
         if self.should_filter(path_prefix, item) {
             return String::new();
@@ -268,6 +291,7 @@ impl RenderState<'_, '_> {
         }
     }
 
+    /// Render a procedural macro definition.
     fn render_proc_macro(&self, item: &Item) -> String {
         let mut output = docs(item);
 
@@ -306,6 +330,7 @@ impl RenderState<'_, '_> {
         output
     }
 
+    /// Render a macro_rules! definition.
     fn render_macro(&self, item: &Item) -> String {
         let mut output = docs(item);
 
@@ -328,10 +353,10 @@ impl RenderState<'_, '_> {
                     // Remove the invalid "{ ... }" part, just end after the pattern
                     problematic_pattern.replace(&macro_str, "}").to_string()
                 } else {
-                    macro_str.clone()
+                    macro_str
                 }
             } else {
-                macro_str.clone()
+                macro_str
             };
 
         if let Some(name_start) = fixed_macro_str.find("macro_rules!") {
@@ -363,6 +388,7 @@ impl RenderState<'_, '_> {
         output
     }
 
+    /// Render a type alias with generics, bounds, and visibility.
     fn render_type_alias(&self, item: &Item) -> String {
         let type_alias = extract_item!(item, ItemEnum::TypeAlias);
         let mut output = docs(item);
@@ -380,6 +406,7 @@ impl RenderState<'_, '_> {
         output
     }
 
+    /// Render a `use` statement, applying filter rules for private modules.
     fn render_use(&mut self, path_prefix: &str, item: &Item) -> String {
         let import = extract_item!(item, ItemEnum::Use);
 
@@ -430,6 +457,7 @@ impl RenderState<'_, '_> {
         output
     }
 
+    /// Render an implementation block, respecting filtering rules.
     fn render_impl(&mut self, path_prefix: &str, item: &Item) -> String {
         let mut output = docs(item);
         let impl_ = extract_item!(item, ItemEnum::Impl);
@@ -483,6 +511,7 @@ impl RenderState<'_, '_> {
         output
     }
 
+    /// Render the item inside an impl block.
     fn render_impl_item(&mut self, path_prefix: &str, item: &Item) -> String {
         if self.should_filter(path_prefix, item) {
             return String::new();
@@ -497,6 +526,7 @@ impl RenderState<'_, '_> {
         }
     }
 
+    /// Render an enum definition, including variants.
     fn render_enum(&mut self, path_prefix: &str, item: &Item) -> String {
         let mut output = docs(item);
 
@@ -554,6 +584,7 @@ impl RenderState<'_, '_> {
         output
     }
 
+    /// Render a single enum variant.
     fn render_enum_variant(&self, item: &Item) -> String {
         let mut output = docs(item);
 
@@ -595,6 +626,7 @@ impl RenderState<'_, '_> {
         output
     }
 
+    /// Render a trait definition.
     fn render_trait(&self, item: &Item) -> String {
         let mut output = docs(item);
 
@@ -631,6 +663,7 @@ impl RenderState<'_, '_> {
         output
     }
 
+    /// Render an item contained within a trait (method, associated type, etc.).
     fn render_trait_item(&self, item: &Item) -> String {
         match &item.inner {
             ItemEnum::Function(_) => self.render_function(item, true),
@@ -673,6 +706,7 @@ impl RenderState<'_, '_> {
         }
     }
 
+    /// Render a struct declaration and its fields.
     fn render_struct(&mut self, path_prefix: &str, item: &Item) -> String {
         let mut output = docs(item);
 
@@ -766,6 +800,7 @@ impl RenderState<'_, '_> {
         output
     }
 
+    /// Render a struct field, optionally forcing visibility.
     fn render_struct_field(&self, field_id: &Id, force: bool) -> String {
         let field_item = must_get(self.crate_data, field_id);
         if force || self.is_visible(field_item) {
@@ -784,6 +819,7 @@ impl RenderState<'_, '_> {
         }
     }
 
+    /// Render a constant definition.
     fn render_constant(&self, item: &Item) -> String {
         let mut output = docs(item);
 
@@ -799,6 +835,7 @@ impl RenderState<'_, '_> {
         output
     }
 
+    /// Render a module and its children.
     fn render_module(&mut self, path_prefix: &str, item: &Item) -> String {
         let path_prefix = ppush(path_prefix, &render_name(item));
         let mut output = format!("{}mod {} {{\n", render_vis(item), render_name(item));
@@ -823,6 +860,7 @@ impl RenderState<'_, '_> {
         output
     }
 
+    /// Render a function or method signature.
     fn render_function(&self, item: &Item, is_trait_method: bool) -> String {
         let mut output = docs(item);
         let function = extract_item!(item, ItemEnum::Function);

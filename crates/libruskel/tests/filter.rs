@@ -1,3 +1,4 @@
+//! Integration tests asserting filter behaviour for rendered output.
 mod utils;
 use libruskel::Renderer;
 use utils::*;

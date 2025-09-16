@@ -52,7 +52,7 @@ impl Ruskel {
     /// - rustdoc-types::Crate
     /// - rustdoc_types::Crate
     pub fn new() -> Self {
-        Ruskel {
+        Self {
             offline: false,
             auto_impls: false,
             silent: false,

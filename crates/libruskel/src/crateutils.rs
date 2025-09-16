@@ -4,6 +4,7 @@ use rustdoc_types::{
     Path, PolyTrait, Term, TraitBoundModifier, Type, Visibility, WherePredicate,
 };
 
+/// Convenience macro to destructure `rustdoc_types::Item` variants during rendering.
 macro_rules! extract_item {
     ($item:expr, $variant:path) => {
         match &$item.inner {
@@ -21,6 +22,7 @@ macro_rules! extract_item {
 
 pub(crate) use extract_item;
 
+/// Format documentation comments as triple-slash lines.
 pub fn docs(item: &Item) -> String {
     let mut output = String::new();
     if let Some(docs) = &item.docs {
@@ -31,6 +33,7 @@ pub fn docs(item: &Item) -> String {
     output
 }
 
+/// Render the visibility modifier for an item if it is public.
 pub fn render_vis(item: &Item) -> String {
     match &item.visibility {
         Visibility::Public => "pub ".to_string(),
@@ -38,6 +41,7 @@ pub fn render_vis(item: &Item) -> String {
     }
 }
 
+/// Render an item name, escaping Rust keywords when necessary.
 pub fn render_name(item: &Item) -> String {
     const RESERVED_WORDS: &[&str] = &[
         "abstract", "as", "become", "box", "break", "const", "continue", "crate", "do", "else",
@@ -59,6 +63,7 @@ pub fn render_name(item: &Item) -> String {
     )
 }
 
+/// Render the generic parameter list for an item.
 pub fn render_generics(generics: &Generics) -> String {
     let params: Vec<String> = generics
         .params
@@ -73,6 +78,7 @@ pub fn render_generics(generics: &Generics) -> String {
     }
 }
 
+/// Render an individual generic parameter definition.
 pub fn render_generic_param_def(param: &GenericParamDef) -> Option<String> {
     match &param.kind {
         GenericParamDefKind::Lifetime { outlives } => {
@@ -122,6 +128,7 @@ pub fn render_generic_param_def(param: &GenericParamDef) -> Option<String> {
     }
 }
 
+/// Render a generic bound expression into Rust syntax.
 pub fn render_generic_bound(bound: &GenericBound) -> String {
     match bound {
         GenericBound::Use(_) => {
@@ -152,6 +159,7 @@ pub fn render_generic_bound(bound: &GenericBound) -> String {
     }
 }
 
+/// Render a type, tracking whether it is nested for parentheses handling.
 pub fn render_type_inner(ty: &Type, nested: bool) -> String {
     match ty {
         Type::ResolvedPath(path) => {
@@ -255,10 +263,12 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
     }
 }
 
+/// Render a type without considering nesting.
 pub fn render_type(ty: &Type) -> String {
     render_type_inner(ty, false)
 }
 
+/// Render a `PolyTrait` including any generic parameters.
 pub fn render_poly_trait(poly_trait: &PolyTrait) -> String {
     let generic_params = if poly_trait.generic_params.is_empty() {
         String::new()
@@ -279,6 +289,7 @@ pub fn render_poly_trait(poly_trait: &PolyTrait) -> String {
     format!("{generic_params}{}", render_path(&poly_trait.trait_))
 }
 
+/// Render a type or module path into Rust source form.
 pub fn render_path(path: &Path) -> String {
     let args = path
         .args
@@ -288,11 +299,13 @@ pub fn render_path(path: &Path) -> String {
     format!("{}{}", path.path.replace("$crate::", ""), args)
 }
 
+/// Render a function pointer signature.
 fn render_function_pointer(f: &FunctionPointer) -> String {
     let args = render_function_args(&f.sig);
     format!("fn({}) {}", args, render_return_type(&f.sig))
 }
 
+/// Render a function's parameter list, including names and types.
 pub fn render_function_args(decl: &FunctionSignature) -> String {
     decl.inputs
         .iter()
@@ -330,6 +343,7 @@ pub fn render_function_args(decl: &FunctionSignature) -> String {
         .join(", ")
 }
 
+/// Render a function's return type, including the `->` separator when needed.
 pub fn render_return_type(decl: &FunctionSignature) -> String {
     match &decl.output {
         Some(ty) => format!("-> {}", render_type(ty)),
@@ -337,6 +351,7 @@ pub fn render_return_type(decl: &FunctionSignature) -> String {
     }
 }
 
+/// Render concrete generic arguments used in a path.
 pub fn render_generic_args(args: &GenericArgs) -> String {
     match args {
         GenericArgs::AngleBracketed { args, constraints } => {
@@ -379,6 +394,7 @@ pub fn render_generic_args(args: &GenericArgs) -> String {
     }
 }
 
+/// Render an individual generic argument such as a lifetime or type.
 fn render_generic_arg(arg: &GenericArg) -> String {
     match arg {
         GenericArg::Lifetime(lt) => lt.clone(),
@@ -396,6 +412,7 @@ fn render_generic_arg(arg: &GenericArg) -> String {
     }
 }
 
+/// Render a comma-separated list of generic bounds.
 pub fn render_generic_bounds(bounds: &[GenericBound]) -> String {
     let parts: Vec<String> = bounds
         .iter()
@@ -405,6 +422,7 @@ pub fn render_generic_bounds(bounds: &[GenericBound]) -> String {
     parts.join(" + ")
 }
 
+/// Render an associated type constraint with equality or bound semantics.
 fn render_type_constraint(constraint: &AssocItemConstraint) -> String {
     let binding_kind = match &constraint.binding {
         AssocItemConstraintKind::Equality(term) => format!(" = {}", render_term(term)),
@@ -420,6 +438,7 @@ fn render_type_constraint(constraint: &AssocItemConstraint) -> String {
     format!("{}{binding_kind}", constraint.name)
 }
 
+/// Render a `Term` appearing in associated type constraints.
 fn render_term(term: &Term) -> String {
     match term {
         Term::Type(ty) => render_type(ty),
@@ -427,6 +446,7 @@ fn render_term(term: &Term) -> String {
     }
 }
 
+/// Render a `where` clause for a generics block.
 pub fn render_where_clause(generics: &Generics) -> String {
     let predicates: Vec<String> = generics
         .where_predicates
@@ -440,6 +460,7 @@ pub fn render_where_clause(generics: &Generics) -> String {
     }
 }
 
+/// Render a single predicate within a `where` clause.
 pub fn render_where_predicate(pred: &WherePredicate) -> Option<String> {
     match pred {
         WherePredicate::BoundPredicate {
@@ -490,6 +511,7 @@ pub fn render_where_predicate(pred: &WherePredicate) -> Option<String> {
     }
 }
 
+/// Render an associated type definition, including defaults and bounds.
 pub fn render_associated_type(item: &Item) -> String {
     let (bounds, default) = extract_item!(item, ItemEnum::AssocType { bounds, type_ });
 
@@ -520,7 +542,7 @@ mod tests {
             args: None,
         };
         let bound = GenericBound::TraitBound {
-            trait_: trait_path.clone(),
+            trait_: trait_path,
             generic_params: vec![],
             modifier: TraitBoundModifier::MaybeConst,
         };

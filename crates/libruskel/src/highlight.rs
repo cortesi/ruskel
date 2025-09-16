@@ -2,7 +2,7 @@
 
 use syntect::{
     easy::HighlightLines,
-    highlighting::ThemeSet,
+    highlighting::{Style, ThemeSet},
     parsing::SyntaxSet,
     util::{LinesWithEndings, as_24_bit_terminal_escaped},
 };
@@ -27,7 +27,7 @@ pub fn highlight_code(code: &str) -> Result<String> {
 
     let mut output = String::new();
     for line in LinesWithEndings::from(code) {
-        let ranges: Vec<(syntect::highlighting::Style, &str)> = h.highlight_line(line, &ss)?;
+        let ranges: Vec<(Style, &str)> = h.highlight_line(line, &ss)?;
         let escaped = as_24_bit_terminal_escaped(&ranges[..], false);
         output.push_str(&escaped);
     }

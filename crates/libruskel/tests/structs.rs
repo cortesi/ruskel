@@ -1,3 +1,4 @@
+//! Integration tests covering struct rendering scenarios.
 mod utils;
 use utils::*;
 

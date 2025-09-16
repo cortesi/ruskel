@@ -1,3 +1,4 @@
+//! Utility helpers shared across integration tests for exercising Ruskel rendering.
 // Dead code detection breaks here, because the integration test crates all use a disjoint set of
 // the pub items.
 #![allow(dead_code)]
@@ -10,6 +11,7 @@ use rust_format::{Formatter, RustFmt};
 use rustdoc_types::Crate;
 use tempfile::TempDir;
 
+/// Normalize indentation and remove blank lines for reliable string comparisons.
 fn normalize_whitespace(s: &str) -> String {
     let lines: Vec<&str> = s
         .lines()
@@ -43,6 +45,7 @@ fn normalize_whitespace(s: &str) -> String {
         .join("\n")
 }
 
+/// Remove the outer `mod` declaration from rendered skeletons.
 fn strip_module_declaration(s: &str) -> String {
     let lines: Vec<&str> = s
         .lines()
@@ -57,6 +60,7 @@ fn strip_module_declaration(s: &str) -> String {
     lines[1..lines.len() - 1].join("\n")
 }
 
+/// Compile the provided source into rustdoc JSON for assertions.
 pub fn inspect_crate(source: &str, private_items: bool, is_proc_macro: bool) -> Crate {
     let temp_dir = TempDir::new().unwrap();
     let crate_path = temp_dir.path().join("src");
@@ -96,7 +100,8 @@ pub fn inspect_crate(source: &str, private_items: bool, is_proc_macro: bool) -> 
         .unwrap()
 }
 
-pub fn render(renderer: Renderer, source: &str, expected_output: &str, is_proc_macro: bool) {
+/// Render a crate and compare the formatted output against `expected_output`.
+pub fn render(renderer: &Renderer, source: &str, expected_output: &str, is_proc_macro: bool) {
     let crate_data = inspect_crate(source, true, is_proc_macro);
 
     // Render the crate data
@@ -115,13 +120,13 @@ pub fn render(renderer: Renderer, source: &str, expected_output: &str, is_proc_m
 
 /// Idempotent rendering test
 pub fn rt_idemp(source: &str) {
-    render(Renderer::default(), source, source, false);
+    render(&Renderer::default(), source, source, false);
 }
 
 /// Idempotent rendering test with private items
 pub fn rt_priv_idemp(source: &str) {
     render(
-        Renderer::default().with_private_items(true),
+        &Renderer::default().with_private_items(true),
         source,
         source,
         false,
@@ -130,24 +135,26 @@ pub fn rt_priv_idemp(source: &str) {
 
 /// Render roundtrip
 pub fn rt(source: &str, expected_output: &str) {
-    render(Renderer::default(), source, expected_output, false);
+    render(&Renderer::default(), source, expected_output, false);
 }
 
 /// Render roundtrip with private items
 pub fn rt_private(source: &str, expected_output: &str) {
     render(
-        Renderer::default().with_private_items(true),
+        &Renderer::default().with_private_items(true),
         source,
         expected_output,
         false,
     );
 }
 
+/// Render roundtrip for procedural macro crates.
 pub fn rt_procmacro(source: &str, expected_output: &str) {
-    render(Renderer::default(), source, expected_output, true);
+    render(&Renderer::default(), source, expected_output, true);
 }
 
-pub fn render_err(renderer: Renderer, source: &str, expected_error: &str) {
+/// Assert that rendering fails with a specific error message.
+pub fn render_err(renderer: &Renderer, source: &str, expected_error: &str) {
     let crate_data = inspect_crate(source, true, false);
 
     // Render the crate data
@@ -167,6 +174,7 @@ pub fn render_err(renderer: Renderer, source: &str, expected_error: &str) {
     );
 }
 
+#[doc = "Generate grouped integration tests with consistent naming prefixes."]
 #[macro_export]
 macro_rules! gen_tests {
     ($prefix:ident, {
@@ -194,6 +202,7 @@ macro_rules! gen_tests {
             }
         })*
     }) => {
+        #[cfg(test)]
         mod $prefix {
             use super::*;
 
@@ -215,7 +224,7 @@ macro_rules! gen_tests {
                 #[test]
                 fn $rt_custom_name() {
                     let custom_renderer = $rt_custom_renderer;
-                    render(custom_renderer, $rt_custom_input, $rt_custom_output, false);
+                    render(&custom_renderer, $rt_custom_input, $rt_custom_output, false);
                 }
             )*
 
@@ -223,7 +232,7 @@ macro_rules! gen_tests {
                 #[test]
                 fn $rt_err_name() {
                     let custom_renderer = $rt_err_renderer;
-                    render_err(custom_renderer, $rt_err_input, $rt_err_error);
+                    render_err(&custom_renderer, $rt_err_input, $rt_err_error);
                 }
             )*
         }

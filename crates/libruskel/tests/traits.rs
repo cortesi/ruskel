@@ -1,3 +1,4 @@
+//! Integration tests ensuring trait rendering stays stable.
 mod utils;
 use utils::*;
 
