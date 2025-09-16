@@ -1,6 +1,11 @@
 use rustdoc_types::Crate;
 
-use super::{cargoutils::*, error::*, render::*};
+use super::{
+    cargoutils::*,
+    error::*,
+    render::*,
+    search::{SearchIndex, SearchOptions, SearchResponse, build_render_selection},
+};
 
 /// Ruskel generates a skeletonized version of a Rust crate in a single page.
 /// It produces syntactically valid Rust code with all implementations omitted.
@@ -104,14 +109,49 @@ impl Ruskel {
         )
     }
 
-    /// Generates a skeletonized version of the crate as a string of Rust code.
+    /// Execute a search against the crate and return the matched items along with a rendered skeleton.
     ///
-    /// # Arguments
-    /// * `target` - The target specification (see new() documentation for format)
-    /// * `no_default_features` - Whether to build without default features
-    /// * `all_features` - Whether to build with all features
-    /// * `features` - List of specific features to enable
-    /// * `private_items` - Whether to include private items in the rendered output
+    /// The search respects the same target resolution logic as [`Self::render`], but only the
+    /// matched items and their ancestors are emitted in the final skeleton.
+    pub fn search(
+        &self,
+        target: &str,
+        no_default_features: bool,
+        all_features: bool,
+        features: Vec<String>,
+        options: &SearchOptions,
+    ) -> Result<SearchResponse> {
+        let rt = resolve_target(target, self.offline)?;
+        let crate_data = rt.read_crate(
+            no_default_features,
+            all_features,
+            features,
+            options.include_private,
+            self.silent,
+        )?;
+
+        let index = SearchIndex::build(&crate_data, options.include_private);
+        let results = index.search(options);
+
+        if results.is_empty() {
+            return Ok(SearchResponse {
+                results,
+                rendered: String::new(),
+            });
+        }
+
+        let selection = build_render_selection(&results);
+        let renderer = Renderer::default()
+            .with_filter(&rt.filter)
+            .with_auto_impls(self.auto_impls)
+            .with_private_items(options.include_private)
+            .with_selection(selection);
+        let rendered = renderer.render(&crate_data)?;
+
+        Ok(SearchResponse { results, rendered })
+    }
+
+    /// Render the crate target into a Rust skeleton without filtering.
     pub fn render(
         &self,
         target: &str,

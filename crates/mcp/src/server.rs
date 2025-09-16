@@ -1,6 +1,6 @@
 use std::io::stdout;
 
-use libruskel::Ruskel;
+use libruskel::{Ruskel, SearchDomain, SearchOptions};
 use serde::{Deserialize, Serialize};
 use tenx_mcp::{Result, Server, ServerCtx, mcp_server, schema::CallToolResult, schemars, tool};
 use tracing::error;
@@ -14,6 +14,30 @@ pub struct RuskelSkeletonTool {
     /// Include non‑public (private / crate‑private) items.
     #[serde(default)]
     pub private: bool,
+
+    /// Restrict output to matches for this search query instead of rendering the entire target.
+    #[serde(default)]
+    pub search: Option<String>,
+
+    /// Include item names when evaluating search matches.
+    #[serde(default)]
+    pub search_names: bool,
+
+    /// Include documentation text when evaluating search matches.
+    #[serde(default)]
+    pub search_docs: bool,
+
+    /// Include canonical module and item paths when evaluating search matches.
+    #[serde(default)]
+    pub search_paths: bool,
+
+    /// Include rendered signatures when evaluating search matches.
+    #[serde(default)]
+    pub search_signatures: bool,
+
+    /// Require case-sensitive matches.
+    #[serde(default)]
+    pub search_case_sensitive: bool,
 
     /// Disable the crate's default Cargo features.
     #[serde(default)]
@@ -71,26 +95,121 @@ impl RuskelServer {
     /// - Pass `all_features=true` or `features=[…]` when a symbol is behind a feature gate.
     /// - Pass private=true to include non‑public items. Useful if you're looking up details of
     ///   items in the current codebase for development.
+    /// - Pass `search="pattern"` (with optional `search_*` flags) to restrict output to matched
+    ///   items instead of rendering the entire target.
     async fn ruskel(&self, _ctx: &ServerCtx, params: RuskelSkeletonTool) -> Result<CallToolResult> {
-        match self.ruskel.render(
-            &params.target,
-            params.no_default_features,
-            params.all_features,
-            params.features,
-            params.private,
-        ) {
-            Ok(output) => Ok(CallToolResult::new().with_text_content(output)),
-            Err(e) => {
-                error!("Failed to generate skeleton: {}", e);
-                Ok(CallToolResult::new()
-                    .with_text_content(format!(
-                        "Failed to generate skeleton for '{}': {}",
-                        params.target, e
-                    ))
-                    .is_error(true))
+        if let Some(query) = params
+            .search
+            .as_ref()
+            .map(|q| q.trim())
+            .filter(|q| !q.is_empty())
+        {
+            let mut options = SearchOptions::new(query);
+            options.include_private = params.private;
+            options.case_sensitive = params.search_case_sensitive;
+
+            let mut domains = SearchDomain::empty();
+            if params.search_names {
+                domains |= SearchDomain::NAMES;
+            }
+            if params.search_docs {
+                domains |= SearchDomain::DOCS;
+            }
+            if params.search_paths {
+                domains |= SearchDomain::PATHS;
+            }
+            if params.search_signatures {
+                domains |= SearchDomain::SIGNATURES;
+            }
+            if !domains.is_empty() {
+                options.domains = domains;
+            }
+
+            match self.ruskel.search(
+                &params.target,
+                params.no_default_features,
+                params.all_features,
+                params.features.clone(),
+                &options,
+            ) {
+                Ok(response) => {
+                    if response.results.is_empty() {
+                        return Ok(CallToolResult::new()
+                            .with_text_content(format!("No matches found for \"{}\".", query)));
+                    }
+
+                    let mut summary = String::new();
+                    summary.push_str(&format!(
+                        "Found {} matches for \"{}\":\n",
+                        response.results.len(),
+                        query
+                    ));
+                    for result in &response.results {
+                        let labels = describe_domains(result.matched);
+                        if labels.is_empty() {
+                            summary.push_str(&format!(" - {}\n", result.path_string));
+                        } else {
+                            summary.push_str(&format!(
+                                " - {} [{}]\n",
+                                result.path_string,
+                                labels.join(", ")
+                            ));
+                        }
+                    }
+                    summary.push('\n');
+                    summary.push_str(&response.rendered);
+
+                    Ok(CallToolResult::new().with_text_content(summary))
+                }
+                Err(e) => {
+                    error!("Failed to generate search results: {}", e);
+                    Ok(CallToolResult::new()
+                        .with_text_content(format!(
+                            "Failed to search '{}' with query '{}': {}",
+                            params.target, query, e
+                        ))
+                        .is_error(true))
+                }
+            }
+        } else {
+            match self.ruskel.render(
+                &params.target,
+                params.no_default_features,
+                params.all_features,
+                params.features,
+                params.private,
+            ) {
+                Ok(output) => Ok(CallToolResult::new().with_text_content(output)),
+                Err(e) => {
+                    error!("Failed to generate skeleton: {}", e);
+                    Ok(CallToolResult::new()
+                        .with_text_content(format!(
+                            "Failed to generate skeleton for '{}': {}",
+                            params.target, e
+                        ))
+                        .is_error(true))
+                }
             }
         }
     }
+}
+
+/// Describe which search domains contributed to a match.
+fn describe_domains(domains: SearchDomain) -> Vec<&'static str> {
+    let mut labels = Vec::new();
+    if domains.contains(SearchDomain::NAMES) {
+        labels.push("names");
+    }
+    if domains.contains(SearchDomain::DOCS) {
+        labels.push("docs");
+    }
+    if domains.contains(SearchDomain::PATHS) {
+        labels.push("paths");
+    }
+    if domains.contains(SearchDomain::SIGNATURES) {
+        labels.push("signatures");
+    }
+    labels
 }
 
 /// Serve the ruskel MCP API over TCP or stdio depending on configuration.

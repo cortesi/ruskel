@@ -20,6 +20,32 @@ Ruskel is great for:
 For example, here is the skeleton of the very tiny `termsize` crate. Note that
 the entire public API is included, but all implementation is omitted.
 
+---
+
+## Search Mode
+
+Use `--search` to focus on specific items instead of rendering an entire crate.
+The query runs across multiple domains and returns a skeleton containing only
+the matches and their ancestors.
+
+```sh
+# Show methods and fields matching "timeout" within the reqwest crate
+ruskel reqwest --search timeout --search-names --search-signatures
+```
+
+By default the query matches names, documentation, and canonical paths
+(case-insensitive). Toggle individual domains with:
+
+- `--search-names` – enable name matching
+- `--search-docs` – enable documentation matching
+- `--search-paths` – enable canonical path matching
+- `--search-signatures` – enable rendered signature matching
+- `--search-case-sensitive` – require exact case matches
+
+The search output respects existing flags like `--private`, feature controls, and
+syntax highlighting options.
+
+
 ````rust
 pub mod termsize {
     //! Termsize is a tiny crate that provides a simple
@@ -98,6 +124,13 @@ The `ruskel_skeleton` tool accepts the following parameters:
 - `target` (required): The crate/module to generate a skeleton for
 - `auto_impls`: Include auto-implemented traits (default: false)
 - `private`: Include private items (default: false)
+- `search`: Restrict the response to matches for this query instead of rendering the entire
+  target (default: null)
+- `search_names`: Include item names when matching search results (default: false)
+- `search_docs`: Include documentation text when matching search results (default: false)
+- `search_paths`: Include canonical module paths when matching search results (default: false)
+- `search_signatures`: Include rendered signatures when matching search results (default: false)
+- `search_case_sensitive`: Require exact-case matches when searching (default: false)
 - `no_default_features`: Disable default features (default: false)
 - `all_features`: Enable all features (default: false)
 - `features`: Array of features to enable (default: [])
@@ -119,6 +152,7 @@ Want to contribute? Have ideas or feature requests? Come tell us about it on
 
 - Generate a skeletonized view of any Rust crate
 - Support for both local crates and remote crates from crates.io
+- Filter output to matched items using `--search` with domain toggles
 - Syntax highlighting for terminal output 
 - Optionally include private items and auto-implemented traits
 - Support for custom feature flags and version specification
@@ -257,5 +291,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
-
 

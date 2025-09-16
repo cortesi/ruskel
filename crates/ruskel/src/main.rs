@@ -10,7 +10,7 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
-use libruskel::{Ruskel, highlight};
+use libruskel::{Ruskel, SearchDomain, SearchOptions, highlight};
 use shell_words::split;
 use tokio::runtime::Runtime;
 
@@ -74,6 +74,30 @@ struct Cli {
     /// Output raw JSON instead of rendered Rust code
     #[arg(long, default_value_t = false)]
     raw: bool,
+
+    /// Search query used to filter the generated skeleton instead of rendering everything.
+    #[arg(long)]
+    search: Option<String>,
+
+    /// Include names when matching search results.
+    #[arg(long, default_value_t = false)]
+    search_names: bool,
+
+    /// Include documentation strings when matching search results.
+    #[arg(long, default_value_t = false)]
+    search_docs: bool,
+
+    /// Include canonical module paths when matching search results.
+    #[arg(long, default_value_t = false)]
+    search_paths: bool,
+
+    /// Include rendered signatures when matching search results.
+    #[arg(long, default_value_t = false)]
+    search_signatures: bool,
+
+    /// Execute the search in a case sensitive manner.
+    #[arg(long, default_value_t = false)]
+    search_case_sensitive: bool,
 
     /// Render auto-implemented traits
     #[arg(long, default_value_t = false)]
@@ -207,6 +231,10 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
         .with_auto_impls(cli.auto_impls)
         .with_silent(!cli.verbose);
 
+    if let Some(query) = cli.search.as_deref() {
+        return run_search(cli, &rs, query, should_highlight);
+    }
+
     let mut output = if cli.raw {
         rs.raw_json(
             &cli.target,
@@ -234,6 +262,82 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
         page_output(output)?;
     } else {
         println!("{output}");
+    }
+
+    Ok(())
+}
+
+/// Execute the search flow and print the filtered skeleton to stdout.
+fn run_search(
+    cli: &Cli,
+    rs: &Ruskel,
+    query: &str,
+    should_highlight: bool,
+) -> Result<(), Box<dyn Error>> {
+    if cli.raw {
+        return Err("--raw cannot be combined with --search".into());
+    }
+
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        println!("Search query is empty; nothing to do.");
+        return Ok(());
+    }
+
+    let mut options = SearchOptions::new(trimmed);
+    options.include_private = cli.private;
+    options.case_sensitive = cli.search_case_sensitive;
+
+    let mut domains = SearchDomain::empty();
+    if cli.search_names {
+        domains |= SearchDomain::NAMES;
+    }
+    if cli.search_docs {
+        domains |= SearchDomain::DOCS;
+    }
+    if cli.search_paths {
+        domains |= SearchDomain::PATHS;
+    }
+    if cli.search_signatures {
+        domains |= SearchDomain::SIGNATURES;
+    }
+    if !domains.is_empty() {
+        options.domains = domains;
+    }
+
+    let response = rs.search(
+        &cli.target,
+        cli.no_default_features,
+        cli.all_features,
+        cli.features.clone(),
+        &options,
+    )?;
+
+    if response.results.is_empty() {
+        println!("No matches found for \"{}\".", trimmed);
+        return Ok(());
+    }
+
+    println!("Found {} matches:", response.results.len());
+    for result in &response.results {
+        let labels = describe_domains(result.matched);
+        if labels.is_empty() {
+            println!(" - {}", result.path_string);
+        } else {
+            println!(" - {} [{}]", result.path_string, labels.join(", "));
+        }
+    }
+    println!();
+
+    let mut output = response.rendered;
+    if should_highlight {
+        output = highlight::highlight_code(&output)?;
+    }
+
+    if io::stdout().is_terminal() && !cli.no_page {
+        page_output(output)?;
+    } else {
+        print!("{}", output);
     }
 
     Ok(())
@@ -268,6 +372,24 @@ fn main() {
         eprintln!("{e}");
         process::exit(1);
     }
+}
+
+/// Format matched search domains for display.
+fn describe_domains(domains: SearchDomain) -> Vec<&'static str> {
+    let mut labels = Vec::new();
+    if domains.contains(SearchDomain::NAMES) {
+        labels.push("names");
+    }
+    if domains.contains(SearchDomain::DOCS) {
+        labels.push("docs");
+    }
+    if domains.contains(SearchDomain::PATHS) {
+        labels.push("paths");
+    }
+    if domains.contains(SearchDomain::SIGNATURES) {
+        labels.push("signatures");
+    }
+    labels
 }
 
 /// Check whether the given command is discoverable on the current `PATH`.

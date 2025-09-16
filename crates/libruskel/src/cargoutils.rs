@@ -783,7 +783,6 @@ mod tests {
     };
 
     use once_cell::sync::Lazy;
-
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 

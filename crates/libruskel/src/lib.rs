@@ -1,3 +1,4 @@
+#![warn(missing_docs)]
 //! Ruskel generates skeletonized versions of Rust crates.
 //!
 //! It produces a single-page, syntactically valid Rust code representation of a crate,
@@ -25,6 +26,8 @@ mod keywords;
 mod render;
 /// Public API surface for driving the renderer.
 mod ruskel;
+/// Search and indexing utilities used by the CLI.
+pub mod search;
 /// Target parsing helpers for user-provided specifications.
 mod target;
 
@@ -33,4 +36,8 @@ pub use ruskel::Ruskel;
 pub use crate::{
     error::{Result, RuskelError},
     render::Renderer,
+    search::{
+        SearchDomain, SearchIndex, SearchItemKind, SearchOptions, SearchPathSegment,
+        SearchResponse, SearchResult,
+    },
 };
