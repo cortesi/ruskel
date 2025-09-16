@@ -92,10 +92,16 @@ impl Ruskel {
         no_default_features: bool,
         all_features: bool,
         features: Vec<String>,
-        _private_items: bool,
+        private_items: bool,
     ) -> Result<Crate> {
         let rt = resolve_target(target, self.offline)?;
-        rt.read_crate(no_default_features, all_features, features, self.silent)
+        rt.read_crate(
+            no_default_features,
+            all_features,
+            features,
+            private_items,
+            self.silent,
+        )
     }
 
     /// Generates a skeletonized version of the crate as a string of Rust code.
@@ -115,7 +121,13 @@ impl Ruskel {
         private_items: bool,
     ) -> Result<String> {
         let rt = resolve_target(target, self.offline)?;
-        let crate_data = rt.read_crate(no_default_features, all_features, features, self.silent)?;
+        let crate_data = rt.read_crate(
+            no_default_features,
+            all_features,
+            features,
+            true,
+            self.silent,
+        )?;
 
         let renderer = Renderer::default()
             .with_filter(&rt.filter)

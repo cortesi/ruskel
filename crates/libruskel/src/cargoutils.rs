@@ -218,6 +218,7 @@ impl CargoPath {
         no_default_features: bool,
         all_features: bool,
         features: Vec<String>,
+        private_items: bool,
         silent: bool,
     ) -> Result<Crate> {
         // Handle standard library crates specially
@@ -248,7 +249,7 @@ impl CargoPath {
         let json_path = rustdoc_json::Builder::default()
             .toolchain("nightly")
             .manifest_path(self.manifest_path())
-            .document_private_items(true)
+            .document_private_items(private_items)
             .no_default_features(no_default_features)
             .all_features(all_features)
             .features(&features)
@@ -515,10 +516,16 @@ impl ResolvedTarget {
         no_default_features: bool,
         all_features: bool,
         features: Vec<String>,
+        private_items: bool,
         silent: bool,
     ) -> Result<Crate> {
-        self.package_path
-            .read_crate(no_default_features, all_features, features, silent)
+        self.package_path.read_crate(
+            no_default_features,
+            all_features,
+            features,
+            private_items,
+            silent,
+        )
     }
 
     pub fn from_target(target: Target, offline: bool) -> Result<Self> {

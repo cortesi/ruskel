@@ -5,6 +5,7 @@
 use libruskel::{Renderer, Ruskel};
 use pretty_assertions::assert_eq;
 use rust_format::{Formatter, RustFmt};
+use rustdoc_types::Crate;
 use std::fs;
 use tempfile::TempDir;
 
@@ -55,8 +56,7 @@ fn strip_module_declaration(s: &str) -> String {
     lines[1..lines.len() - 1].join("\n")
 }
 
-pub fn render(renderer: Renderer, source: &str, expected_output: &str, is_proc_macro: bool) {
-    // Create a temporary directory for our dummy crate
+pub fn inspect_crate(source: &str, private_items: bool, is_proc_macro: bool) -> Crate {
     let temp_dir = TempDir::new().unwrap();
     let crate_path = temp_dir.path().join("src");
     fs::create_dir(&crate_path).unwrap();
@@ -83,17 +83,20 @@ pub fn render(renderer: Renderer, source: &str, expected_output: &str, is_proc_m
     };
     fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml_content).unwrap();
 
-    // Parse the crate using Ruskel
     let ruskel = Ruskel::new().with_offline(true).with_silent(true);
-    let crate_data = ruskel
+    ruskel
         .inspect(
             temp_dir.path().to_str().unwrap(),
             false,
             false,
             Vec::new(),
-            renderer.render_private_items,
+            private_items,
         )
-        .unwrap();
+        .unwrap()
+}
+
+pub fn render(renderer: Renderer, source: &str, expected_output: &str, is_proc_macro: bool) {
+    let crate_data = inspect_crate(source, true, is_proc_macro);
 
     // Render the crate data
     let normalized_rendered = normalize_whitespace(&strip_module_declaration(
@@ -144,32 +147,7 @@ pub fn rt_procmacro(source: &str, expected_output: &str) {
 }
 
 pub fn render_err(renderer: Renderer, source: &str, expected_error: &str) {
-    // Create a temporary directory for our dummy crate
-    let temp_dir = TempDir::new().unwrap();
-    let crate_path = temp_dir.path().join("src");
-    fs::create_dir(&crate_path).unwrap();
-    let lib_rs_path = crate_path.join("lib.rs");
-    fs::write(&lib_rs_path, source).unwrap();
-
-    let cargo_toml_content = r#"
-        [package]
-        name = "dummy_crate"
-        version = "0.1.0"
-        edition = "2021"
-    "#;
-    fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml_content).unwrap();
-
-    // Parse the crate using Ruskel
-    let ruskel = Ruskel::new().with_offline(true).with_silent(true);
-    let crate_data = ruskel
-        .inspect(
-            temp_dir.path().to_str().unwrap(),
-            false,
-            false,
-            Vec::new(),
-            renderer.render_private_items,
-        )
-        .unwrap();
+    let crate_data = inspect_crate(source, true, false);
 
     // Render the crate data
     let result = renderer.render(&crate_data);
