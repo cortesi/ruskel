@@ -112,12 +112,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Test provides invalid Rust code (unescaped reserved keyword 'try') that rustdoc cannot parse"]
     fn test_macro_with_reserved_name() {
         let source = r#"
             /// A macro named try (reserved keyword)
             #[macro_export]
-            macro_rules! try {
+            macro_rules! r#try {
                 ($expr:expr) => {
                     match $expr {
                         Ok(val) => val,

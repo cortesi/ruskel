@@ -6,7 +6,6 @@ mod utils;
 mod tests {
     use super::utils::*;
     #[test]
-    #[ignore = "Rustdoc JSON limitation: macro-expanded items cannot be distinguished from regular items"]
     fn test_macro_expansion_with_dollar_signs() {
         // This test reproduces the issue with $ signs in macro expansions
         let source = r#"
@@ -32,8 +31,11 @@ mod tests {
         "#;
 
         // The expected output should show the macro definitions
-        // but not the unexpanded macro invocations
+        // but not the unexpanded macro invocations. Macro-generated items should
+        // remain visible when they are part of the public API.
         let expected_output = r#"
+            pub type f32x1 = Simd<f32, 1>;
+
             #[macro_export]
             macro_rules! define_simd_type {
                 ($name:ident, $size:expr, $elems:expr) => { ... };
