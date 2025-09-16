@@ -2,11 +2,12 @@
 // the pub items.
 #![allow(dead_code)]
 
+use std::fs;
+
 use libruskel::{Renderer, Ruskel};
 use pretty_assertions::assert_eq;
 use rust_format::{Formatter, RustFmt};
 use rustdoc_types::Crate;
-use std::fs;
 use tempfile::TempDir;
 
 fn normalize_whitespace(s: &str) -> String {

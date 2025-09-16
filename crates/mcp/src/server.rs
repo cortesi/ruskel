@@ -1,9 +1,12 @@
+use std::io::stdout;
+
 use libruskel::Ruskel;
 use serde::{Deserialize, Serialize};
 use tenx_mcp::{Result, Server, ServerCtx, mcp_server, schema::CallToolResult, schemars, tool};
 use tracing::error;
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+/// Parameters accepted by the ruskel MCP tool.
 pub struct RuskelSkeletonTool {
     /// Crate, module path, or filesystem path (optionally with @<semver>) whose API skeleton should be produced.
     pub target: String,
@@ -26,18 +29,19 @@ pub struct RuskelSkeletonTool {
 }
 
 #[derive(Clone)]
+/// MCP server implementation that forwards requests to an underlying `Ruskel` instance.
 pub struct RuskelServer {
+    /// Code skeleton renderer shared across tool invocations.
     ruskel: Ruskel,
-}
-
-impl RuskelServer {
-    pub fn new(ruskel: Ruskel) -> Self {
-        Self { ruskel }
-    }
 }
 
 #[mcp_server]
 impl RuskelServer {
+    /// Create a new server wrapper around the provided `Ruskel` renderer.
+    pub fn new(ruskel: Ruskel) -> Self {
+        Self { ruskel }
+    }
+
     #[tool]
     /// **ruskel** returns a Rust skeleton that shows the API of any item with implementation
     /// bodies stripped. Useful for models that need to look up names, signatures, derives, APIs,
@@ -89,6 +93,10 @@ impl RuskelServer {
     }
 }
 
+/// Serve the ruskel MCP API over TCP or stdio depending on configuration.
+///
+/// When `addr` is provided a TCP listener is started; otherwise the server exposes
+/// stdio pipes suitable for process integration.
 pub async fn run_mcp_server(
     ruskel: Ruskel,
     addr: Option<String>,
@@ -101,7 +109,7 @@ pub async fn run_mcp_server(
 
         tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
-            .with_writer(std::io::stdout)
+            .with_writer(stdout)
             .without_time()
             .init();
     }

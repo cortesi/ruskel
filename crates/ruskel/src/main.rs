@@ -1,41 +1,71 @@
+//! Command-line interface for the `ruskel` API skeleton generator.
+
+use std::{
+    env,
+    error::Error,
+    fmt::{self, Display, Formatter},
+    io::{self, IsTerminal, Write},
+    process::{self, Command, Stdio},
+    thread,
+};
+
 use clap::{Parser, ValueEnum};
 use libruskel::{Ruskel, highlight};
 use shell_words::split;
-use std::env;
-use std::error::Error;
-use std::fmt::{self, Display, Formatter};
-use std::io::{self, IsTerminal, Write};
-use std::process::{self, Command, Stdio};
-use std::thread;
+use tokio::runtime::Runtime;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+/// Controls when ANSI coloring is applied to CLI output.
 enum ColorMode {
+    /// Detect terminal capabilities automatically.
     Auto,
+    /// Always emit ANSI escape sequences.
     Always,
+    /// Never include color sequences.
     Never,
 }
 
 impl Display for ColorMode {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
-            ColorMode::Auto => write!(f, "auto"),
-            ColorMode::Always => write!(f, "always"),
-            ColorMode::Never => write!(f, "never"),
+            Self::Auto => write!(f, "auto"),
+            Self::Always => write!(f, "always"),
+            Self::Never => write!(f, "never"),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
+/// Tracing verbosity levels supported when running as an MCP server.
 enum LogLevel {
+    /// Log only errors.
     Error,
+    /// Log warnings and errors.
     Warn,
+    /// Log informational messages.
     Info,
+    /// Log debugging details.
     Debug,
+    /// Log the most verbose, trace-level diagnostics.
     Trace,
+}
+
+impl LogLevel {
+    /// Convert the enum into the tracing filter string expected by `EnvFilter`.
+    fn as_filter(self) -> &'static str {
+        match self {
+            Self::Error => "error",
+            Self::Warn => "warn",
+            Self::Info => "info",
+            Self::Debug => "debug",
+            Self::Trace => "trace",
+        }
+    }
 }
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
+/// Parsed command-line options for the ruskel CLI.
 struct Cli {
     /// Target to generate - a directory, file path, or a module name
     #[arg(default_value = "./")]
@@ -94,6 +124,7 @@ struct Cli {
     log: Option<LogLevel>,
 }
 
+/// Ensure the nightly toolchain and rust-docs JSON component are present.
 fn check_nightly_toolchain() -> Result<(), String> {
     // Check if nightly toolchain is installed
     let output = Command::new("rustup")
@@ -130,6 +161,7 @@ fn check_nightly_toolchain() -> Result<(), String> {
     Ok(())
 }
 
+/// Launch the MCP server variant of ruskel using the provided CLI configuration.
 fn run_mcp(cli: &Cli) -> Result<(), Box<dyn Error>> {
     // Validate that only configuration arguments are provided with --mcp
     if cli.target != "./"
@@ -152,25 +184,17 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn Error>> {
         .with_silent(!cli.verbose);
 
     // Run the MCP server
-    let runtime = tokio::runtime::Runtime::new()?;
+    let runtime = Runtime::new()?;
     runtime.block_on(ruskel_mcp::run_mcp_server(
         ruskel,
         cli.addr.clone(),
-        cli.log.map(|l| {
-            match l {
-                LogLevel::Error => "error",
-                LogLevel::Warn => "warn",
-                LogLevel::Info => "info",
-                LogLevel::Debug => "debug",
-                LogLevel::Trace => "trace",
-            }
-            .to_string()
-        }),
+        cli.log.map(|level| level.as_filter().to_string()),
     ))?;
 
     Ok(())
 }
 
+/// Render a skeleton locally and stream it to stdout or a pager.
 fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
     let should_highlight = match cli.color {
         ColorMode::Never => false,
@@ -246,10 +270,12 @@ fn main() {
     }
 }
 
+/// Check whether the given command is discoverable on the current `PATH`.
 fn is_command_available(cmd: &str) -> bool {
     which::which(cmd).is_ok()
 }
 
+/// Parse the pager command and arguments from the `PAGER` environment variable.
 fn pager_command_from_env() -> (String, Vec<String>) {
     const DEFAULT_PAGER: &str = "less";
 
@@ -282,6 +308,7 @@ fn pager_command_from_env() -> (String, Vec<String>) {
     }
 }
 
+/// Display the generated content through a pager when available.
 fn page_output(content: String) -> Result<(), Box<dyn Error>> {
     let (pager_command, pager_args) = pager_command_from_env();
 

@@ -3,8 +3,10 @@ use rustdoc_types::{
     Crate, Id, Impl, Item, ItemEnum, MacroKind, StructKind, VariantKind, Visibility,
 };
 
-use crate::crateutils::*;
-use crate::error::{Result, RuskelError};
+use crate::{
+    crateutils::*,
+    error::{Result, RuskelError},
+};
 
 // List of traits that we want to render as a derive inline, above a struct declaration
 const DERIVE_TRAITS: &[&str] = &[

@@ -1,21 +1,22 @@
 //! Build-time code generation and project maintenance tasks
 
+use std::{collections::HashMap, error::Error, fs, path::PathBuf, process::Command};
+
 use clap::{Parser, Subcommand};
 use rustdoc_types::{Crate, ItemEnum, Visibility};
-use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
-use std::process::Command;
 
 #[derive(Parser)]
 #[command(name = "xtask")]
 #[command(about = "Development tasks for ruskel")]
+/// Command-line interface entry point for the `xtask` binary.
 struct Cli {
+    /// Subcommand dispatched by the CLI.
     #[command(subcommand)]
     command: Commands,
 }
 
 #[derive(Subcommand)]
+/// Supported automation commands.
 enum Commands {
     /// Generate the standard library module mapping
     GenStdMapping {
@@ -25,7 +26,8 @@ enum Commands {
     },
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// Run the CLI and dispatch to the selected subcommand.
+fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -33,7 +35,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 }
 
-fn get_sysroot() -> Result<PathBuf, Box<dyn std::error::Error>> {
+/// Locate the nightly toolchain sysroot used for documentation JSON artifacts.
+fn get_sysroot() -> Result<PathBuf, Box<dyn Error>> {
     let output = Command::new("rustc")
         .args(["+nightly", "--print", "sysroot"])
         .output()?;
@@ -46,7 +49,8 @@ fn get_sysroot() -> Result<PathBuf, Box<dyn std::error::Error>> {
     Ok(PathBuf::from(sysroot))
 }
 
-fn load_crate_json(crate_name: &str) -> Result<Crate, Box<dyn std::error::Error>> {
+/// Load the rustdoc JSON metadata for the provided crate name.
+fn load_crate_json(crate_name: &str) -> Result<Crate, Box<dyn Error>> {
     let sysroot = get_sysroot()?;
     let json_path = sysroot
         .join("share/doc/rust/json")
@@ -64,7 +68,8 @@ fn load_crate_json(crate_name: &str) -> Result<Crate, Box<dyn std::error::Error>
     Ok(crate_data)
 }
 
-fn find_std_reexports() -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
+/// Map top-level `std` modules to the crate that actually provides them.
+fn find_std_reexports() -> Result<HashMap<String, String>, Box<dyn Error>> {
     // Load std crate
     let std_crate = load_crate_json("std")?;
 
@@ -216,6 +221,7 @@ fn find_std_reexports() -> Result<HashMap<String, String>, Box<dyn std::error::E
     Ok(mapping)
 }
 
+/// Render the module mapping into Rust source code.
 fn generate_rust_code(mapping: &HashMap<String, String>) -> String {
     let mut output = String::new();
 
@@ -266,7 +272,8 @@ fn generate_rust_code(mapping: &HashMap<String, String>) -> String {
     output
 }
 
-fn generate_std_mapping(write: bool) -> Result<(), Box<dyn std::error::Error>> {
+/// Build the std module mapping and optionally write it to the repository.
+fn generate_std_mapping(write: bool) -> Result<(), Box<dyn Error>> {
     eprintln!("Analyzing standard library structure...");
 
     let mapping = find_std_reexports()?;

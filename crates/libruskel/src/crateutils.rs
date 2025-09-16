@@ -507,8 +507,9 @@ pub fn render_associated_type(item: &Item) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rustdoc_types::{GenericBound, Id, Path, TraitBoundModifier};
+
+    use super::*;
 
     #[test]
     fn test_render_generic_bound_with_const_modifier() {

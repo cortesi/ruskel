@@ -1,13 +1,15 @@
-use std::fs;
-use std::io::Write;
-use std::path::{Path, PathBuf, absolute};
-use std::process::Command;
+use std::{
+    collections::HashMap,
+    fs,
+    io::Write,
+    path::{Path, PathBuf, absolute},
+    process::Command,
+};
 
 use cargo::{core::Workspace, ops, util::context::GlobalContext};
 use once_cell::sync::Lazy;
 use rustdoc_types::Crate;
 use semver::Version;
-use std::collections::HashMap;
 use tempfile::TempDir;
 
 use super::target::{Entrypoint, Target};
@@ -725,10 +727,12 @@ fn to_import_name(package_name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
     use std::fs;
+
+    use pretty_assertions::assert_eq;
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn test_to_import_name() {

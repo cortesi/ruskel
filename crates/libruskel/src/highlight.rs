@@ -1,9 +1,11 @@
 //! Syntax highlighting functionality for Rust code.
 
-use syntect::easy::HighlightLines;
-use syntect::highlighting::ThemeSet;
-use syntect::parsing::SyntaxSet;
-use syntect::util::{LinesWithEndings, as_24_bit_terminal_escaped};
+use syntect::{
+    easy::HighlightLines,
+    highlighting::ThemeSet,
+    parsing::SyntaxSet,
+    util::{LinesWithEndings, as_24_bit_terminal_escaped},
+};
 
 use crate::{Result, RuskelError};
 

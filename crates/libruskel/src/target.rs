@@ -1,5 +1,6 @@
-use semver::Version;
 use std::path::PathBuf;
+
+use semver::Version;
 
 use crate::error::{Result, RuskelError};
 
