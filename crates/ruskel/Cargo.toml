@@ -14,4 +14,5 @@ ruskel-mcp = { workspace=true }
 clap = { version = "4.5.45", features = ["derive", "env"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 which = "8.0"
+shell-words = "1.1.0"
 

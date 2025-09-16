@@ -3709,6 +3709,7 @@ dependencies = [
  "clap",
  "libruskel",
  "ruskel-mcp",
+ "shell-words",
  "tokio",
  "which",
 ]

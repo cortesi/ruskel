@@ -3,7 +3,7 @@
 1. High-Priority Bugs
 
 1. [x] Respect the `--private` flag when emitting JSON: plumb the `private_items` toggle through `Ruskel::inspect` so `rs.raw_json` can strip private entries instead of always returning the full graph (crates/libruskel/src/ruskel.rs:95).
-2. [ ] Harden pager execution by parsing the `PAGER` value into a command + args before the availability check/spawn, otherwise settings like `less -R` crash due to spawning a non-existent binary name (crates/ruskel/src/main.rs:248).
+2. [x] Harden pager execution by parsing the `PAGER` value into a command + args before the availability check/spawn, otherwise settings like `less -R` crash due to spawning a non-existent binary name (crates/ruskel/src/main.rs:248).
 3. [ ] Prefer workspace crates before crates.io: when resolving `Entrypoint::Name`, inspect the current workspace members instead of immediately falling back to a dummy fetch so local packages are used offline and stay in sync (crates/libruskel/src/cargoutils.rs:574).
 
 2. Reliability & Robustness

@@ -1,7 +1,12 @@
 use clap::{Parser, ValueEnum};
 use libruskel::{Ruskel, highlight};
+use shell_words::split;
+use std::env;
+use std::error::Error;
+use std::fmt::{self, Display, Formatter};
 use std::io::{self, IsTerminal, Write};
-use std::process::{Command, Stdio};
+use std::process::{self, Command, Stdio};
+use std::thread;
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum ColorMode {
@@ -10,8 +15,8 @@ enum ColorMode {
     Never,
 }
 
-impl std::fmt::Display for ColorMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl Display for ColorMode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         match self {
             ColorMode::Auto => write!(f, "auto"),
             ColorMode::Always => write!(f, "always"),
@@ -125,7 +130,7 @@ fn check_nightly_toolchain() -> Result<(), String> {
     Ok(())
 }
 
-fn run_mcp(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
+fn run_mcp(cli: &Cli) -> Result<(), Box<dyn Error>> {
     // Validate that only configuration arguments are provided with --mcp
     if cli.target != "./"
         || cli.raw
@@ -166,7 +171,7 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
+fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
     let should_highlight = match cli.color {
         ColorMode::Never => false,
         ColorMode::Always => true,
@@ -216,13 +221,13 @@ fn main() {
     // Validate that --addr is only used with --mcp
     if cli.addr.is_some() && !cli.mcp {
         eprintln!("Error: --addr can only be used with --mcp");
-        std::process::exit(1);
+        process::exit(1);
     }
 
     // Validate that --log is only used with --mcp --addr
     if cli.log.is_some() && (cli.addr.is_none() || !cli.mcp) {
         eprintln!("Error: --log can only be used with --mcp --addr");
-        std::process::exit(1);
+        process::exit(1);
     }
 
     let result = if cli.mcp {
@@ -230,14 +235,14 @@ fn main() {
     } else {
         if let Err(e) = check_nightly_toolchain() {
             eprintln!("{e}");
-            std::process::exit(1);
+            process::exit(1);
         }
         run_cmdline(&cli)
     };
 
     if let Err(e) = result {
         eprintln!("{e}");
-        std::process::exit(1);
+        process::exit(1);
     }
 }
 
@@ -245,30 +250,62 @@ fn is_command_available(cmd: &str) -> bool {
     which::which(cmd).is_ok()
 }
 
-fn page_output(content: String) -> Result<(), Box<dyn std::error::Error>> {
-    let pager = std::env::var("PAGER").unwrap_or_else(|_| "less".to_string());
+fn pager_command_from_env() -> (String, Vec<String>) {
+    const DEFAULT_PAGER: &str = "less";
 
-    // Check if the pager command is available
-    if !is_command_available(&pager) {
-        // If pager is not available, just print to stdout
+    let raw_value = env::var("PAGER")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| DEFAULT_PAGER.to_string());
+
+    match split(&raw_value) {
+        Ok(mut parts) => {
+            if parts.is_empty() {
+                return (DEFAULT_PAGER.to_string(), Vec::new());
+            }
+
+            let command = parts.remove(0);
+            (command, parts)
+        }
+        Err(_) => {
+            let mut fallback: Vec<String> =
+                raw_value.split_whitespace().map(str::to_owned).collect();
+
+            if fallback.is_empty() {
+                return (DEFAULT_PAGER.to_string(), Vec::new());
+            }
+
+            let command = fallback.remove(0);
+            (command, fallback)
+        }
+    }
+}
+
+fn page_output(content: String) -> Result<(), Box<dyn Error>> {
+    let (pager_command, pager_args) = pager_command_from_env();
+
+    if !is_command_available(&pager_command) {
         println!("{content}");
         return Ok(());
     }
 
-    let mut child = Command::new(&pager).stdin(Stdio::piped()).spawn()?;
+    let mut command = Command::new(&pager_command);
+    command.args(&pager_args);
+    command.stdin(Stdio::piped());
+
+    let mut child = command.spawn()?;
 
     let mut stdin = child
         .stdin
         .take()
         .ok_or_else(|| io::Error::other("Failed to open stdin for pager"))?;
 
-    std::thread::spawn(move || {
+    thread::spawn(move || {
         stdin.write_all(content.as_bytes()).ok();
-        // Explicitly drop stdin to signal EOF to the pager
         drop(stdin);
     });
 
-    // Wait for the pager to exit
     match child.wait() {
         Ok(status) => {
             if !status.success() {
@@ -276,8 +313,8 @@ fn page_output(content: String) -> Result<(), Box<dyn std::error::Error>> {
             }
             Ok(())
         }
-        Err(e) => Err(Box::new(io::Error::other(format!(
-            "Failed to wait for pager: {e}"
+        Err(error) => Err(Box::new(io::Error::other(format!(
+            "Failed to wait for pager: {error}"
         )))),
     }
 }
