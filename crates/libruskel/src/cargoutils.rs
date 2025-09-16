@@ -239,7 +239,7 @@ impl CargoPath {
         }
 
         // First check if this crate has a library target by reading Cargo.toml
-        let manifest_path = self.manifest_path();
+        let manifest_path = self.manifest_path()?;
         let manifest_content = fs::read_to_string(&manifest_path)?;
         let manifest: cargo_toml::Manifest = cargo_toml::Manifest::from_str(&manifest_content)
             .map_err(|e| RuskelError::ManifestParse(e.to_string()))?;
@@ -255,7 +255,7 @@ impl CargoPath {
 
         let json_path = rustdoc_json::Builder::default()
             .toolchain("nightly")
-            .manifest_path(self.manifest_path())
+            .manifest_path(manifest_path)
             .document_private_items(private_items)
             .no_default_features(no_default_features)
             .all_features(all_features)
@@ -300,45 +300,51 @@ impl CargoPath {
     }
 
     /// Compute the absolute `Cargo.toml` path for this source.
-    pub fn manifest_path(&self) -> PathBuf {
+    pub fn manifest_path(&self) -> Result<PathBuf> {
         match self {
-            Self::StdLibrary(_, _) => {
-                panic!("Standard library crates don't have a manifest path")
+            Self::StdLibrary(_, _) => Err(RuskelError::Generate(
+                "Standard library crates don't have a manifest path".to_string(),
+            )),
+            _ => {
+                let manifest_path = self.as_path().join("Cargo.toml");
+                absolute(&manifest_path).map_err(|err| {
+                    RuskelError::Generate(format!(
+                        "Failed to resolve manifest path for '{}': {err}",
+                        manifest_path.display()
+                    ))
+                })
             }
-            _ => absolute(self.as_path().join("Cargo.toml")).unwrap(),
         }
     }
 
     /// Return whether this cargo path includes a `Cargo.toml`.
-    pub fn has_manifest(&self) -> bool {
+    pub fn has_manifest(&self) -> Result<bool> {
         match self {
-            Self::StdLibrary(_, _) => false,
-            _ => self.manifest_path().exists(),
+            Self::StdLibrary(_, _) => Ok(false),
+            _ => Ok(self.as_path().join("Cargo.toml").exists()),
         }
     }
 
     /// Identify if the path is a standalone package manifest.
-    pub fn is_package(&self) -> bool {
+    pub fn is_package(&self) -> Result<bool> {
         match self {
-            Self::StdLibrary(_, _) => false,
-            _ => self.has_manifest() && !self.is_workspace(),
+            Self::StdLibrary(_, _) => Ok(false),
+            _ => Ok(self.has_manifest()? && !self.is_workspace()?),
         }
     }
 
     /// Identify if the path is a workspace manifest without a package section.
-    pub fn is_workspace(&self) -> bool {
+    pub fn is_workspace(&self) -> Result<bool> {
         match self {
-            Self::StdLibrary(_, _) => false,
+            Self::StdLibrary(_, _) => Ok(false),
             _ => {
-                if !self.has_manifest() {
-                    return false;
+                if !self.has_manifest()? {
+                    return Ok(false);
                 }
-                let manifest = cargo_toml::Manifest::from_path(self.manifest_path())
-                    .map_err(|_| ())
-                    .ok();
-                manifest
-                    .as_ref()
-                    .is_some_and(|m| m.workspace.is_some() && m.package.is_none())
+                let manifest_path = self.manifest_path()?;
+                let manifest = cargo_toml::Manifest::from_path(&manifest_path)
+                    .map_err(|err| RuskelError::ManifestParse(err.to_string()))?;
+                Ok(manifest.workspace.is_some() && manifest.package.is_none())
             }
         }
     }
@@ -350,9 +356,10 @@ impl CargoPath {
         }
 
         let config = create_quiet_cargo_config(offline)?;
+        let manifest_path = self.manifest_path()?;
 
-        let workspace = Workspace::new(&self.manifest_path(), &config)
-            .map_err(|err| convert_cargo_error(&err))?;
+        let workspace =
+            Workspace::new(&manifest_path, &config).map_err(|err| convert_cargo_error(&err))?;
 
         let (_, ps) = ops::fetch(
             &workspace,
@@ -399,7 +406,7 @@ impl CargoPath {
 
     /// Find a package in the current workspace by name.
     fn find_workspace_package(&self, module_name: &str) -> Result<Option<ResolvedTarget>> {
-        let workspace_manifest_path = self.manifest_path();
+        let workspace_manifest_path = self.manifest_path()?;
 
         // Try both hyphenated and underscored versions
         let alt_name = if module_name.contains('_') {
@@ -550,9 +557,9 @@ impl ResolvedTarget {
                     Self::from_rust_file(path, &target.path)
                 } else {
                     let cargo_path = CargoPath::Path(path.clone());
-                    if cargo_path.is_package() {
+                    if cargo_path.is_package()? {
                         Ok(Self::new(cargo_path, &target.path))
-                    } else if cargo_path.is_workspace() {
+                    } else if cargo_path.is_workspace()? {
                         if target.path.is_empty() {
                             Err(RuskelError::InvalidTarget(
                                 "No package specified in workspace".to_string(),
@@ -596,6 +603,11 @@ impl ResolvedTarget {
                 let current_dir = env::current_dir()?;
                 match CargoPath::nearest_manifest(&current_dir) {
                     Some(root) => {
+                        if let Some(workspace_member) = root.find_workspace_package(&name)? {
+                            let Self { package_path, .. } = workspace_member;
+                            return Ok(Self::new(package_path, &target.path));
+                        }
+
                         if let Some(dependency) = root.find_dependency(&name, offline)? {
                             Ok(Self::new(dependency, &target.path))
                         } else {
@@ -668,13 +680,31 @@ impl ResolvedTarget {
         let version_str = version.map(|v| v.to_string());
         let dummy = create_dummy_crate(name, version_str, None)?;
 
-        // Find the dependency within the dummy crate
-        if let Some(dependency_path) = dummy.find_dependency(name, offline)? {
-            Ok(Self::new(dependency_path, path))
-        } else {
-            Err(RuskelError::ModuleNotFound(format!(
+        match dummy.find_dependency(name, offline) {
+            Ok(Some(dependency_path)) => Ok(Self::new(dependency_path, path)),
+            Ok(None) => Err(RuskelError::ModuleNotFound(format!(
                 "Dependency '{name}' not found in dummy crate"
-            )))
+            ))),
+            Err(err) => {
+                if offline {
+                    match err {
+                        RuskelError::DependencyNotFound => Err(RuskelError::Generate(format!(
+                            "crate '{name}' is not cached locally for offline use. Run 'cargo fetch {name}' without --offline first or retry without --offline."
+                        ))),
+                        RuskelError::CargoError(message)
+                            if message.contains("--offline")
+                                || message.contains("offline mode") =>
+                        {
+                            Err(RuskelError::Generate(format!(
+                                "crate '{name}' is unavailable in offline mode: {message}"
+                            )))
+                        }
+                        other => Err(other),
+                    }
+                } else {
+                    Err(err)
+                }
+            }
         }
     }
 }
@@ -744,12 +774,72 @@ fn to_import_name(package_name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{
+        env,
+        ffi::OsString,
+        fs,
+        path::{Path, PathBuf},
+        sync::{Mutex, MutexGuard},
+    };
+
+    use once_cell::sync::Lazy;
 
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;
 
     use super::*;
+
+    struct DirGuard {
+        original: PathBuf,
+    }
+
+    impl DirGuard {
+        fn change_to(path: &Path) -> Result<Self> {
+            let original = env::current_dir()?;
+            env::set_current_dir(path)?;
+            Ok(Self { original })
+        }
+    }
+
+    impl Drop for DirGuard {
+        fn drop(&mut self) {
+            if let Err(err) = env::set_current_dir(&self.original) {
+                panic!("failed to restore current directory: {err}");
+            }
+        }
+    }
+
+    static ENV_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<OsString>,
+        _guard: MutexGuard<'static, ()>,
+    }
+
+    impl EnvVarGuard {
+        fn set_path(key: &'static str, value: &Path) -> Self {
+            let guard = ENV_LOCK.lock().expect("env mutex poisoned");
+            let original = env::var_os(key);
+            // SAFETY: the mutex ensures exclusive access while we mutate process environment.
+            unsafe { env::set_var(key, value) };
+            Self {
+                key,
+                original,
+                _guard: guard,
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: still holding the mutex guard so this mutation is synchronized.
+            match &self.original {
+                Some(value) => unsafe { env::set_var(self.key, value) },
+                None => unsafe { env::remove_var(self.key) },
+            }
+        }
+    }
 
     #[test]
     fn test_to_import_name() {
@@ -845,15 +935,20 @@ mod tests {
             [workspace]
             members = ["member1", "member2"]
         "#;
-        fs::write(cargo_path.manifest_path(), manifest)?;
-        assert!(cargo_path.is_workspace());
+        let manifest_path = cargo_path.manifest_path()?;
+        fs::write(&manifest_path, manifest)?;
+        assert!(cargo_path.is_workspace()?);
 
         // Create a regular Cargo.toml
         fs::write(
-            cargo_path.manifest_path(),
-            r#"[package] name = "test-crate""#,
+            &manifest_path,
+            r#"
+[package]
+name = "test-crate"
+version = "0.1.0"
+"#,
         )?;
-        assert!(!cargo_path.is_workspace());
+        assert!(!cargo_path.is_workspace()?);
 
         Ok(())
     }
@@ -921,6 +1016,69 @@ mod tests {
                 .find_workspace_package("non-existent-package")?
                 .is_none()
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_resolve_name_prefers_workspace_members() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let workspace_root = temp_dir.path().join("workspace");
+        let localcrate_dir = workspace_root.join("localcrate");
+
+        fs::create_dir_all(localcrate_dir.join("src"))?;
+        fs::write(
+            workspace_root.join("Cargo.toml"),
+            r#"
+            [workspace]
+            members = ["localcrate"]
+            "#,
+        )?;
+        fs::write(
+            localcrate_dir.join("Cargo.toml"),
+            r#"
+            [package]
+            name = "localcrate"
+            version = "0.1.0"
+            "#,
+        )?;
+        fs::write(localcrate_dir.join("src/lib.rs"), "// localcrate lib")?;
+
+        let _guard = DirGuard::change_to(&workspace_root)?;
+        let resolved = resolve_target("localcrate", true)?;
+
+        let ResolvedTarget {
+            package_path,
+            filter,
+        } = resolved;
+        let path = match package_path {
+            CargoPath::Path(path) => fs::canonicalize(path)?,
+            other => panic!("Expected workspace path, got {other:?}"),
+        };
+        let expected = fs::canonicalize(&localcrate_dir)?;
+
+        assert_eq!(path, expected);
+        assert!(filter.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_offline_dummy_crate_error_message() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let _cargo_home_guard = EnvVarGuard::set_path("CARGO_HOME", temp_dir.path());
+        let path: Vec<String> = Vec::new();
+
+        match ResolvedTarget::from_dummy_crate("serde", None, &path, true) {
+            Err(err) => {
+                let message = err.to_string();
+                assert!(
+                    message.contains("not cached locally for offline use"),
+                    "{message}"
+                );
+            }
+            Ok(_) => panic!("Expected offline resolution to fail"),
+        }
 
         Ok(())
     }

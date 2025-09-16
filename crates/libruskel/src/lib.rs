@@ -6,7 +6,7 @@
 //!
 //! Ruskel works by first fetching all dependencies, then using the nightly Rust toolchain
 //! to generate JSON documentation data. This data is then parsed and rendered into
-//! the skeletonized format. The skeltonized code is then formatted with rustfmt, and optionally
+//! the skeletonized format. The skeletonized code is then formatted with rustfmt, and optionally
 //! has syntax highlighting applied.
 //!
 //!
@@ -19,6 +19,8 @@ mod crateutils;
 /// Error types exposed by the libruskel crate.
 mod error;
 pub mod highlight;
+/// Identifier helpers shared across rendering code.
+mod keywords;
 /// Rendering logic that turns rustdoc data into skeleton code.
 mod render;
 /// Public API surface for driving the renderer.

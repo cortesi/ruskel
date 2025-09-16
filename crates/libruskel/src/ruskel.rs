@@ -11,7 +11,7 @@ use super::{cargoutils::*, error::*, render::*};
 /// Rust toolchain installed and available.
 #[derive(Debug, Default, Clone)]
 pub struct Ruskel {
-    /// In offline mode Ruskell will not attempt to fetch dependencies from the network.
+    /// In offline mode Ruskel will not attempt to fetch dependencies from the network.
     offline: bool,
 
     /// Whether to render auto-implemented traits.

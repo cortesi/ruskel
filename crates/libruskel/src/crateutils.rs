@@ -4,6 +4,8 @@ use rustdoc_types::{
     Path, PolyTrait, Term, TraitBoundModifier, Type, Visibility, WherePredicate,
 };
 
+use crate::keywords::is_reserved_word;
+
 /// Convenience macro to destructure `rustdoc_types::Item` variants during rendering.
 macro_rules! extract_item {
     ($item:expr, $variant:path) => {
@@ -43,18 +45,10 @@ pub fn render_vis(item: &Item) -> String {
 
 /// Render an item name, escaping Rust keywords when necessary.
 pub fn render_name(item: &Item) -> String {
-    const RESERVED_WORDS: &[&str] = &[
-        "abstract", "as", "become", "box", "break", "const", "continue", "crate", "do", "else",
-        "enum", "extern", "false", "final", "fn", "for", "if", "impl", "in", "let", "loop",
-        "macro", "match", "mod", "move", "mut", "override", "priv", "pub", "ref", "return", "self",
-        "Self", "static", "struct", "super", "trait", "true", "try", "type", "typeof", "unsafe",
-        "unsized", "use", "virtual", "where", "while", "yield",
-    ];
-
     item.name.as_deref().map_or_else(
         || "?".to_string(),
         |n| {
-            if RESERVED_WORDS.contains(&n) {
+            if is_reserved_word(n) {
                 format!("r#{n}")
             } else {
                 n.to_string()

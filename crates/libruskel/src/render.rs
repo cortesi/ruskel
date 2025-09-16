@@ -1,3 +1,5 @@
+use once_cell::sync::Lazy;
+use regex::Regex;
 use rust_format::{Config, Formatter, RustFmt};
 use rustdoc_types::{
     Crate, Id, Impl, Item, ItemEnum, MacroKind, StructKind, VariantKind, Visibility,
@@ -6,6 +8,7 @@ use rustdoc_types::{
 use crate::{
     crateutils::*,
     error::{Result, RuskelError},
+    keywords::is_reserved_word,
 };
 
 /// Traits that we render via `#[derive(...)]` annotations instead of explicit impl blocks.
@@ -30,14 +33,9 @@ const DERIVE_TRAITS: &[&str] = &[
     "Deserialize",
 ];
 
-/// Rust reserved words that require the `r#` raw identifier syntax.
-const RESERVED_WORDS: &[&str] = &[
-    "abstract", "as", "become", "box", "break", "const", "continue", "crate", "do", "else", "enum",
-    "extern", "false", "final", "fn", "for", "if", "impl", "in", "let", "loop", "macro", "match",
-    "mod", "move", "mut", "override", "priv", "pub", "ref", "return", "self", "Self", "static",
-    "struct", "super", "trait", "true", "try", "type", "typeof", "unsafe", "unsized", "use",
-    "virtual", "where", "while", "yield",
-];
+/// Reusable pattern for removing placeholder bodies from macro output.
+static MACRO_PLACEHOLDER_REGEX: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\}\s*\{\s*\.\.\.\s*\}\s*$").expect("valid macro fallback pattern"));
 
 /// Retrieve an item from the crate index, panicking if it is missing.
 fn must_get<'a>(crate_data: &'a Crate, id: &Id) -> &'a Item {
@@ -60,7 +58,7 @@ fn escape_path(path: &str) -> String {
             // Some keywords like 'crate', 'self', 'super' cannot be raw identifiers
             if segment == "crate" || segment == "self" || segment == "super" || segment == "Self" {
                 segment.to_string()
-            } else if RESERVED_WORDS.contains(&segment) {
+            } else if is_reserved_word(segment) {
                 format!("r#{}", segment)
             } else {
                 segment.to_string()
@@ -348,10 +346,9 @@ impl RenderState<'_, '_> {
             if macro_str.starts_with("macro ") && !macro_str.starts_with("macro_rules!") {
                 // This is a new-style declarative macro
                 // Look for the problematic pattern where we have "} { ... }" at the end
-                let problematic_pattern = regex::Regex::new(r"\}\s*\{\s*\.\.\.\s*\}\s*$").unwrap();
-                if problematic_pattern.is_match(&macro_str) {
+                if MACRO_PLACEHOLDER_REGEX.is_match(&macro_str) {
                     // Remove the invalid "{ ... }" part, just end after the pattern
-                    problematic_pattern.replace(&macro_str, "}").to_string()
+                    MACRO_PLACEHOLDER_REGEX.replace(&macro_str, "}").to_string()
                 } else {
                     macro_str
                 }
@@ -370,7 +367,7 @@ impl RenderState<'_, '_> {
                 let suffix = &trimmed[name_end..];
 
                 // Check if the name is a reserved word
-                if RESERVED_WORDS.contains(&name) {
+                if is_reserved_word(name) {
                     output.push_str(&format!("{prefix} r#{name}{suffix}\n"));
                 } else {
                     output.push_str(&fixed_macro_str);
@@ -440,7 +437,7 @@ impl RenderState<'_, '_> {
         let mut output = docs(item);
         if import.name != import.source.split("::").last().unwrap_or(&import.source) {
             // Check if the alias itself needs escaping
-            let escaped_name = if RESERVED_WORDS.contains(&import.name.as_str()) {
+            let escaped_name = if is_reserved_word(import.name.as_str()) {
                 format!("r#{}", import.name)
             } else {
                 import.name.clone()
