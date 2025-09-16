@@ -45,6 +45,18 @@ By default the query matches names, documentation, and canonical paths
 The search output respects existing flags like `--private`, feature controls, and
 syntax highlighting options.
 
+### Frontmatter Metadata
+
+By default Ruskel prefixes every rendered skeleton with a concise comment block
+that documents the invocation context. The frontmatter spells out the target,
+active visibility mode, and—in search mode—the query along with matched items
+grouped by domain labels. This makes it easy to track how the skeleton was
+produced while keeping the output valid Rust code.
+
+Disable frontmatter with `--no-frontmatter` when you need pristine skeletons or
+when another tool expects raw Rust without commentary. The flag is also exposed
+through the MCP integration and library API.
+
 
 ````rust
 pub mod termsize {
@@ -124,6 +136,7 @@ The `ruskel_skeleton` tool accepts the following parameters:
 - `target` (required): The crate/module to generate a skeleton for
 - `auto_impls`: Include auto-implemented traits (default: false)
 - `private`: Include private items (default: false)
+- `frontmatter`: Include comment frontmatter describing the invocation (default: true)
 - `search`: Restrict the response to matches for this query instead of rendering the entire
   target (default: null)
 - `search_names`: Include item names when matching search results (default: false)
@@ -291,4 +304,3 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
-

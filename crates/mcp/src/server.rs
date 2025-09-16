@@ -1,6 +1,6 @@
 use std::io::stdout;
 
-use libruskel::{Ruskel, SearchDomain, SearchOptions};
+use libruskel::{Ruskel, SearchDomain, SearchOptions, describe_domains};
 use serde::{Deserialize, Serialize};
 use tenx_mcp::{Result, Server, ServerCtx, mcp_server, schema::CallToolResult, schemars, tool};
 use tracing::error;
@@ -18,6 +18,10 @@ pub struct RuskelSkeletonTool {
     /// Restrict output to matches for this search query instead of rendering the entire target.
     #[serde(default)]
     pub search: Option<String>,
+
+    /// Include frontmatter comments describing the invocation context.
+    #[serde(default = "default_frontmatter_enabled")]
+    pub frontmatter: bool,
 
     /// Include item names when evaluating search matches.
     #[serde(default)]
@@ -97,7 +101,11 @@ impl RuskelServer {
     ///   items in the current codebase for development.
     /// - Pass `search="pattern"` (with optional `search_*` flags) to restrict output to matched
     ///   items instead of rendering the entire target.
+    /// - Pass `frontmatter=false` when you need the raw Rust skeleton without the leading comment
+    ///   block summarising context.
     async fn ruskel(&self, _ctx: &ServerCtx, params: RuskelSkeletonTool) -> Result<CallToolResult> {
+        let ruskel = self.ruskel.clone().with_frontmatter(params.frontmatter);
+
         if let Some(query) = params
             .search
             .as_ref()
@@ -125,7 +133,7 @@ impl RuskelServer {
                 options.domains = domains;
             }
 
-            match self.ruskel.search(
+            match ruskel.search(
                 &params.target,
                 params.no_default_features,
                 params.all_features,
@@ -172,7 +180,7 @@ impl RuskelServer {
                 }
             }
         } else {
-            match self.ruskel.render(
+            match ruskel.render(
                 &params.target,
                 params.no_default_features,
                 params.all_features,
@@ -194,22 +202,8 @@ impl RuskelServer {
     }
 }
 
-/// Describe which search domains contributed to a match.
-fn describe_domains(domains: SearchDomain) -> Vec<&'static str> {
-    let mut labels = Vec::new();
-    if domains.contains(SearchDomain::NAMES) {
-        labels.push("names");
-    }
-    if domains.contains(SearchDomain::DOCS) {
-        labels.push("docs");
-    }
-    if domains.contains(SearchDomain::PATHS) {
-        labels.push("paths");
-    }
-    if domains.contains(SearchDomain::SIGNATURES) {
-        labels.push("signatures");
-    }
-    labels
+const fn default_frontmatter_enabled() -> bool {
+    true
 }
 
 /// Serve the ruskel MCP API over TCP or stdio depending on configuration.

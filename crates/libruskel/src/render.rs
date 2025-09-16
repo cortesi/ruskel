@@ -10,6 +10,7 @@ use rustdoc_types::{
 use crate::{
     crateutils::*,
     error::{Result, RuskelError},
+    frontmatter::FrontmatterConfig,
     keywords::is_reserved_word,
 };
 
@@ -126,6 +127,8 @@ pub struct Renderer {
     filter: String,
     /// Optional selection restricting which items are rendered.
     selection: Option<RenderSelection>,
+    /// Optional frontmatter configuration rendered before crate content.
+    frontmatter: Option<FrontmatterConfig>,
 }
 
 /// Mutable rendering context shared across helper functions.
@@ -155,6 +158,7 @@ impl Renderer {
             render_blanket_impls: false,
             filter: String::new(),
             selection: None,
+            frontmatter: None,
         }
     }
 
@@ -188,6 +192,12 @@ impl Renderer {
         self
     }
 
+    /// Attach optional frontmatter metadata to the rendered output.
+    pub fn with_frontmatter(mut self, frontmatter: FrontmatterConfig) -> Self {
+        self.frontmatter = Some(frontmatter);
+        self
+    }
+
     /// Render a crate into formatted Rust source text.
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
         let mut state = RenderState {
@@ -209,7 +219,19 @@ impl RenderState<'_, '_> {
             return Err(RuskelError::FilterNotMatched(self.config.filter.clone()));
         }
 
-        Ok(self.config.formatter.format_str(&output)?)
+        let mut composed = String::new();
+        if let Some(frontmatter) = &self.config.frontmatter
+            && let Some(prefix) = frontmatter.render(
+                self.config.render_private_items,
+                self.config.render_auto_impls,
+                self.config.render_blanket_impls,
+            )
+        {
+            composed.push_str(&prefix);
+        }
+        composed.push_str(&output);
+
+        Ok(self.config.formatter.format_str(&composed)?)
     }
 
     /// Return the active render selection, if any.
@@ -1073,7 +1095,10 @@ mod tests {
     };
 
     use super::*;
-    use crate::search::{SearchDomain, SearchIndex, SearchOptions, build_render_selection};
+    use crate::{
+        frontmatter::{FrontmatterConfig, FrontmatterHit, FrontmatterSearch},
+        search::{SearchDomain, SearchIndex, SearchOptions, build_render_selection},
+    };
 
     fn empty_generics() -> Generics {
         Generics {
@@ -1376,6 +1401,37 @@ mod tests {
         }
     }
 
+    #[allow(clippy::needless_pass_by_value)]
+    fn render_allowing_format_errors(renderer: Renderer, crate_data: &Crate) -> String {
+        match renderer.render(crate_data) {
+            Ok(output) => output,
+            Err(RuskelError::Format(_)) => {
+                let mut state = super::RenderState {
+                    config: &renderer,
+                    crate_data,
+                    filter_matched: false,
+                };
+                let mut composed = String::new();
+                if let Some(frontmatter) = &renderer.frontmatter
+                    && let Some(prefix) = frontmatter.render(
+                        renderer.render_private_items,
+                        renderer.render_auto_impls,
+                        renderer.render_blanket_impls,
+                    )
+                {
+                    composed.push_str(&prefix);
+                }
+                composed.push_str(&state.render_item(
+                    "",
+                    super::must_get(crate_data, &crate_data.root),
+                    false,
+                ));
+                composed
+            }
+            Err(err) => panic!("unexpected render failure: {err}"),
+        }
+    }
+
     fn render_with_selection(crate_data: &Crate, selection: RenderSelection) -> String {
         let renderer = Renderer::new().with_selection(selection);
         match renderer.render(crate_data) {
@@ -1449,5 +1505,64 @@ mod tests {
         assert!(rendered.contains("Named"));
         assert!(rendered.contains("pub label: String"));
         assert!(!rendered.contains("Unspecified"));
+    }
+
+    #[test]
+    fn frontmatter_inserts_target_visibility_and_path() {
+        let crate_data = fixture_crate();
+        let frontmatter = FrontmatterConfig::for_target("fixture::Widget")
+            .with_filter(Some("fixture::Widget".into()));
+        let output = render_allowing_format_errors(
+            Renderer::new().with_frontmatter(frontmatter),
+            &crate_data,
+        );
+
+        assert!(output.starts_with(
+            "// Ruskel skeleton - syntactically valid Rust with implementation omitted."
+        ));
+        assert!(output.contains("target=fixture::Widget"));
+        assert!(output.contains("path=fixture::Widget"));
+        assert!(output.contains("visibility=public"));
+        assert!(output.contains("auto_impls=false"));
+        assert!(output.contains("blanket_impls=false"));
+        assert!(!output.contains("ruskel::frontmatter"));
+        assert!(!output.contains("validity:"));
+    }
+
+    #[test]
+    fn frontmatter_can_be_disabled() {
+        let crate_data = fixture_crate();
+        let output = render_allowing_format_errors(Renderer::new(), &crate_data);
+
+        assert!(!output.starts_with(
+            "// Ruskel skeleton - syntactically valid Rust with implementation omitted."
+        ));
+    }
+
+    #[test]
+    fn frontmatter_lists_search_hits_with_domains() {
+        let crate_data = fixture_crate();
+        let hits = vec![FrontmatterHit {
+            path: "fixture::Widget".into(),
+            domains: SearchDomain::NAMES,
+        }];
+        let search_meta = FrontmatterSearch {
+            query: "Widget".into(),
+            domains: SearchDomain::NAMES | SearchDomain::DOCS,
+            case_sensitive: false,
+            hits,
+        };
+        let frontmatter = FrontmatterConfig::for_target("fixture")
+            .with_filter(Some("fixture".into()))
+            .with_search(search_meta);
+        let output = Renderer::new().with_frontmatter(frontmatter);
+        let output = render_allowing_format_errors(output, &crate_data);
+
+        assert!(
+            output
+                .contains("// search: query=\"Widget\"; case_sensitive=false; domains=names, docs")
+        );
+        assert!(output.contains("// hits (1):"));
+        assert!(output.contains("//   - fixture::Widget [names]"));
     }
 }

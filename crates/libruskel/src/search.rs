@@ -1026,6 +1026,24 @@ pub fn build_render_selection(results: &[SearchResult]) -> RenderSelection {
     RenderSelection::new(matches, context)
 }
 
+/// Format the set of matched domains into human-friendly labels.
+pub fn describe_domains(domains: SearchDomain) -> Vec<&'static str> {
+    let mut labels = Vec::new();
+    if domains.contains(SearchDomain::NAMES) {
+        labels.push("names");
+    }
+    if domains.contains(SearchDomain::DOCS) {
+        labels.push("docs");
+    }
+    if domains.contains(SearchDomain::PATHS) {
+        labels.push("paths");
+    }
+    if domains.contains(SearchDomain::SIGNATURES) {
+        labels.push("signatures");
+    }
+    labels
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1353,5 +1371,18 @@ mod tests {
         let index = build_index();
         let options = SearchOptions::new("missing");
         assert!(index.search(&options).is_empty());
+    }
+
+    #[test]
+    fn describe_domains_lists_selected_flags() {
+        assert_eq!(
+            super::describe_domains(SearchDomain::empty()),
+            Vec::<&str>::new()
+        );
+        assert_eq!(super::describe_domains(SearchDomain::NAMES), vec!["names"]);
+        assert_eq!(
+            super::describe_domains(SearchDomain::NAMES | SearchDomain::DOCS),
+            vec!["names", "docs"]
+        );
     }
 }

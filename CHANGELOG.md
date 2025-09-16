@@ -1,3 +1,7 @@
+# Unreleased
+
+- [feat] Add frontmatter comments summarizing renders with a `--no-frontmatter` toggle
+
 # v0.0.11
 
 - [bug] Include struct field docs in output
@@ -31,4 +35,3 @@ based on based on the `--auto-impls` flag.
 - Silence cargo output during rendering
 - Correct error when running ruskel with no argument outside a crate
 - Many bugfixes in target specification and filtering
-

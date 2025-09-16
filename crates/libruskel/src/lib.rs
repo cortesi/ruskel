@@ -19,6 +19,8 @@ mod cargoutils;
 mod crateutils;
 /// Error types exposed by the libruskel crate.
 mod error;
+/// Frontmatter formatting and configuration helpers.
+mod frontmatter;
 pub mod highlight;
 /// Identifier helpers shared across rendering code.
 mod keywords;
@@ -38,6 +40,6 @@ pub use crate::{
     render::Renderer,
     search::{
         SearchDomain, SearchIndex, SearchItemKind, SearchOptions, SearchPathSegment,
-        SearchResponse, SearchResult,
+        SearchResponse, SearchResult, describe_domains,
     },
 };

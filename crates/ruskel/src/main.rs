@@ -10,7 +10,7 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
-use libruskel::{Ruskel, SearchDomain, SearchOptions, highlight};
+use libruskel::{Ruskel, SearchDomain, SearchOptions, describe_domains, highlight};
 use shell_words::split;
 use tokio::runtime::Runtime;
 
@@ -106,6 +106,10 @@ struct Cli {
     /// Render private items
     #[arg(long, default_value_t = false)]
     private: bool,
+
+    /// Disable frontmatter comments in the rendered skeleton
+    #[arg(long, default_value_t = false)]
+    no_frontmatter: bool,
 
     /// Disable default features
     #[arg(long, default_value_t = false)]
@@ -205,6 +209,7 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn Error>> {
     let ruskel = Ruskel::new()
         .with_offline(cli.offline)
         .with_auto_impls(cli.auto_impls)
+        .with_frontmatter(!cli.no_frontmatter)
         .with_silent(!cli.verbose);
 
     // Run the MCP server
@@ -229,6 +234,7 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
     let rs = Ruskel::new()
         .with_offline(cli.offline)
         .with_auto_impls(cli.auto_impls)
+        .with_frontmatter(!cli.no_frontmatter)
         .with_silent(!cli.verbose);
 
     if let Some(query) = cli.search.as_deref() {
@@ -372,24 +378,6 @@ fn main() {
         eprintln!("{e}");
         process::exit(1);
     }
-}
-
-/// Format matched search domains for display.
-fn describe_domains(domains: SearchDomain) -> Vec<&'static str> {
-    let mut labels = Vec::new();
-    if domains.contains(SearchDomain::NAMES) {
-        labels.push("names");
-    }
-    if domains.contains(SearchDomain::DOCS) {
-        labels.push("docs");
-    }
-    if domains.contains(SearchDomain::PATHS) {
-        labels.push("paths");
-    }
-    if domains.contains(SearchDomain::SIGNATURES) {
-        labels.push("signatures");
-    }
-    labels
 }
 
 /// Check whether the given command is discoverable on the current `PATH`.
