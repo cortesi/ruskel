@@ -10,7 +10,7 @@ use std::{
 };
 
 use clap::{Parser, ValueEnum};
-use libruskel::{Ruskel, SearchDomain, SearchOptions, describe_domains, highlight};
+use libruskel::{Ruskel, SearchDomain, SearchOptions, highlight};
 use shell_words::split;
 use tokio::runtime::Runtime;
 
@@ -340,17 +340,6 @@ fn run_search(
         println!("No matches found for \"{}\".", trimmed);
         return Ok(());
     }
-
-    println!("Found {} matches:", response.results.len());
-    for result in &response.results {
-        let labels = describe_domains(result.matched);
-        if labels.is_empty() {
-            println!(" - {}", result.path_string);
-        } else {
-            println!(" - {} [{}]", result.path_string, labels.join(", "));
-        }
-    }
-    println!();
 
     let mut output = response.rendered;
     if should_highlight {
