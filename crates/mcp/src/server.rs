@@ -19,7 +19,7 @@ pub struct RuskelSkeletonTool {
     #[serde(default)]
     pub search: Option<String>,
 
-    /// Limit search to specific domains (names, docs, paths, signatures). Defaults to all domains.
+    /// Limit search to specific domains (name, doc, signature, path). Defaults to name, doc, signature.
     #[serde(default)]
     pub search_spec: Option<Vec<SearchSpecParam>>,
 
@@ -76,22 +76,22 @@ pub struct RuskelServer {
 /// Search domains accepted by the MCP `search_spec` parameter.
 pub enum SearchSpecParam {
     /// Match against item names.
-    Names,
+    Name,
     /// Match against documentation text.
-    Docs,
+    Doc,
     /// Match against canonical module paths.
-    Paths,
+    Path,
     /// Match against rendered signatures.
-    Signatures,
+    Signature,
 }
 
 impl From<SearchSpecParam> for SearchDomain {
     fn from(spec: SearchSpecParam) -> Self {
         match spec {
-            SearchSpecParam::Names => Self::NAMES,
-            SearchSpecParam::Docs => Self::DOCS,
-            SearchSpecParam::Paths => Self::PATHS,
-            SearchSpecParam::Signatures => Self::SIGNATURES,
+            SearchSpecParam::Name => Self::NAMES,
+            SearchSpecParam::Doc => Self::DOCS,
+            SearchSpecParam::Path => Self::PATHS,
+            SearchSpecParam::Signature => Self::SIGNATURES,
         }
     }
 }

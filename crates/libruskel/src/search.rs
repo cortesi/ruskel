@@ -31,7 +31,7 @@ bitflags! {
 
 impl Default for SearchDomain {
     fn default() -> Self {
-        Self::all()
+        Self::NAMES | Self::DOCS | Self::SIGNATURES
     }
 }
 
@@ -1073,16 +1073,16 @@ pub fn build_render_selection(
 pub fn describe_domains(domains: SearchDomain) -> Vec<&'static str> {
     let mut labels = Vec::new();
     if domains.contains(SearchDomain::NAMES) {
-        labels.push("names");
+        labels.push("name");
     }
     if domains.contains(SearchDomain::DOCS) {
-        labels.push("docs");
+        labels.push("doc");
     }
     if domains.contains(SearchDomain::PATHS) {
-        labels.push("paths");
+        labels.push("path");
     }
     if domains.contains(SearchDomain::SIGNATURES) {
-        labels.push("signatures");
+        labels.push("signature");
     }
     labels
 }
@@ -1381,6 +1381,15 @@ mod tests {
     }
 
     #[test]
+    fn default_domains_exclude_paths() {
+        let defaults = SearchDomain::default();
+        assert!(defaults.contains(SearchDomain::NAMES));
+        assert!(defaults.contains(SearchDomain::DOCS));
+        assert!(defaults.contains(SearchDomain::SIGNATURES));
+        assert!(!defaults.contains(SearchDomain::PATHS));
+    }
+
+    #[test]
     fn path_domain_matches_impl_member() {
         let index = build_index();
         let mut options = SearchOptions::new("fixture::Widget::render");
@@ -1422,10 +1431,10 @@ mod tests {
             super::describe_domains(SearchDomain::empty()),
             Vec::<&str>::new()
         );
-        assert_eq!(super::describe_domains(SearchDomain::NAMES), vec!["names"]);
+        assert_eq!(super::describe_domains(SearchDomain::NAMES), vec!["name"]);
         assert_eq!(
             super::describe_domains(SearchDomain::NAMES | SearchDomain::DOCS),
-            vec!["names", "docs"]
+            vec!["name", "doc"]
         );
     }
 }

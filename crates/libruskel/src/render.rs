@@ -1806,9 +1806,9 @@ mod tests {
         let output = render_allowing_format_errors(output, &crate_data);
 
         assert!(output.contains(
-            "// search: query=\"Widget\"; case_sensitive=false; domains=names, docs; expand_containers=true"
+            "// search: query=\"Widget\"; case_sensitive=false; domains=name, doc; expand_containers=true"
         ));
         assert!(output.contains("// hits (1):"));
-        assert!(output.contains("//   - fixture::Widget [names]"));
+        assert!(output.contains("//   - fixture::Widget [name]"));
     }
 }

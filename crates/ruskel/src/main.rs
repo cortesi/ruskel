@@ -67,22 +67,22 @@ impl LogLevel {
 /// Available search domains accepted by `--search-spec`.
 enum SearchSpec {
     /// Match against item names.
-    Names,
+    Name,
     /// Match against documentation comments.
-    Docs,
+    Doc,
     /// Match against canonical module paths.
-    Paths,
+    Path,
     /// Match against rendered signatures.
-    Signatures,
+    Signature,
 }
 
 impl From<SearchSpec> for SearchDomain {
     fn from(spec: SearchSpec) -> Self {
         match spec {
-            SearchSpec::Names => Self::NAMES,
-            SearchSpec::Docs => Self::DOCS,
-            SearchSpec::Paths => Self::PATHS,
-            SearchSpec::Signatures => Self::SIGNATURES,
+            SearchSpec::Name => Self::NAMES,
+            SearchSpec::Doc => Self::DOCS,
+            SearchSpec::Path => Self::PATHS,
+            SearchSpec::Signature => Self::SIGNATURES,
         }
     }
 }
@@ -103,12 +103,12 @@ struct Cli {
     #[arg(long)]
     search: Option<String>,
 
-    /// Comma-separated list of search domains (names, docs, paths, signatures). Defaults to all.
+    /// Comma-separated list of search domains (name, doc, signature, path). Defaults to name, doc, signature.
     #[arg(
         long = "search-spec",
         value_delimiter = ',',
         value_name = "DOMAIN[,DOMAIN...]",
-        default_value = "names,docs,paths,signatures"
+        default_value = "name,doc,signature"
     )]
     search_spec: Vec<SearchSpec>,
 
@@ -317,7 +317,7 @@ fn run_search(
     options.expand_containers = !cli.direct_match_only;
 
     let domains = if cli.search_spec.is_empty() {
-        SearchDomain::all()
+        SearchDomain::default()
     } else {
         cli.search_spec
             .iter()

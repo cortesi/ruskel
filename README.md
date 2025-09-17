@@ -30,13 +30,14 @@ the matches and their ancestors.
 
 ```sh
 # Show methods and fields matching "timeout" within the reqwest crate
-ruskel reqwest --search timeout --search-spec names,signatures
+ruskel reqwest --search timeout --search-spec name,signature
 ```
 
-By default the query matches every domain (names, docs, paths, signatures) with case-insensitive
-comparisons. Use `--search-spec names,paths` to narrow the domains or
-`--search-spec docs` to inspect documentation only. Combine with
-`--search-case-sensitive` to require exact letter case.
+By default the query matches the name, doc, and signature domains with case-insensitive
+comparisons. Include the optional `path` domain when you need canonical path
+matches by passing `--search-spec name,path`, or use `--search-spec doc` to
+inspect documentation only. Combine with `--search-case-sensitive` to require
+exact letter case.
 Add `--direct-match-only` when you want container matches (modules, structs, traits) to stay
 collapsed and show only the exact hits.
 
@@ -137,8 +138,8 @@ The `ruskel_skeleton` tool accepts the following parameters:
 - `frontmatter`: Include comment frontmatter describing the invocation (default: true)
 - `search`: Restrict the response to matches for this query instead of rendering the entire
   target (default: null)
-- `search_spec`: Comma-separated search domains (names, docs, paths, signatures). When omitted
-  all domains are searched (default: null)
+- `search_spec`: Comma-separated search domains (name, doc, signature, path). When omitted
+  name, doc, and signature are searched (default: null)
 - `search_names`: Legacy domain toggle kept for compatibility (default: false)
 - `search_docs`: Legacy domain toggle kept for compatibility (default: false)
 - `search_paths`: Legacy domain toggle kept for compatibility (default: false)
