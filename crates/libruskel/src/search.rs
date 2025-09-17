@@ -31,7 +31,7 @@ bitflags! {
 
 impl Default for SearchDomain {
     fn default() -> Self {
-        Self::NAMES | Self::DOCS | Self::PATHS
+        Self::all()
     }
 }
 
@@ -46,6 +46,8 @@ pub struct SearchOptions {
     pub case_sensitive: bool,
     /// Whether to include private or crate-private items.
     pub include_private: bool,
+    /// Whether matched container items should expand to include their children.
+    pub expand_containers: bool,
 }
 
 impl SearchOptions {
@@ -56,6 +58,7 @@ impl SearchOptions {
             domains: SearchDomain::default(),
             case_sensitive: false,
             include_private: false,
+            expand_containers: true,
         }
     }
 
@@ -1014,16 +1017,56 @@ fn contains(haystack: &str, needle: &str, case_sensitive: bool) -> bool {
     }
 }
 
-/// Build a renderer selection set covering matches and their ancestors.
-pub fn build_render_selection(results: &[SearchResult]) -> RenderSelection {
+/// Build a renderer selection set covering matches, their ancestors, and optionally their children.
+pub fn build_render_selection(
+    index: &SearchIndex,
+    results: &[SearchResult],
+    expand_containers: bool,
+) -> RenderSelection {
     let mut matches = HashSet::new();
     let mut context = HashSet::new();
+    let mut expanded = HashSet::new();
     for result in results {
         matches.insert(result.item_id);
         context.insert(result.item_id);
         context.extend(result.ancestors.iter().copied());
     }
-    RenderSelection::new(matches, context)
+    if expand_containers {
+        let containers: HashSet<Id> = results
+            .iter()
+            .filter(|result| {
+                matches!(
+                    result.kind,
+                    SearchItemKind::Crate
+                        | SearchItemKind::Module
+                        | SearchItemKind::Struct
+                        | SearchItemKind::Trait
+                )
+            })
+            .map(|result| result.item_id)
+            .collect();
+
+        if !containers.is_empty() {
+            expanded.extend(containers.iter().copied());
+            let mut descendant_containers = HashSet::new();
+            for entry in index.entries() {
+                if let Some(pos) = entry
+                    .ancestors
+                    .iter()
+                    .position(|ancestor| containers.contains(ancestor))
+                {
+                    context.insert(entry.item_id);
+                    for descendant in entry.ancestors.iter().skip(pos + 1) {
+                        context.insert(*descendant);
+                        descendant_containers.insert(*descendant);
+                    }
+                }
+            }
+            expanded.extend(descendant_containers);
+        }
+    }
+
+    RenderSelection::new(matches, context, expanded)
 }
 
 /// Format the set of matched domains into human-friendly labels.

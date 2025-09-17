@@ -4,7 +4,7 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use rust_format::{Config, Formatter, RustFmt};
 use rustdoc_types::{
-    Crate, Id, Impl, Item, ItemEnum, MacroKind, StructKind, VariantKind, Visibility,
+    Crate, Id, Impl, Item, ItemEnum, MacroKind, StructKind, Type, VariantKind, Visibility,
 };
 
 use crate::{
@@ -91,15 +91,21 @@ pub struct RenderSelection {
     matches: HashSet<Id>,
     /// Ancestor identifiers retained to preserve module hierarchy in output.
     context: HashSet<Id>,
+    /// Matched containers whose children should be fully expanded.
+    expanded: HashSet<Id>,
 }
 
 impl RenderSelection {
     /// Create a selection from explicit match and context sets.
-    pub fn new(matches: HashSet<Id>, mut context: HashSet<Id>) -> Self {
+    pub fn new(matches: HashSet<Id>, mut context: HashSet<Id>, expanded: HashSet<Id>) -> Self {
         for id in &matches {
             context.insert(*id);
         }
-        Self { matches, context }
+        Self {
+            matches,
+            context,
+            expanded,
+        }
     }
 
     /// Identifiers for items that should be fully rendered.
@@ -110,6 +116,11 @@ impl RenderSelection {
     /// Identifiers for items that should be kept to preserve hierarchy context.
     pub fn context(&self) -> &HashSet<Id> {
         &self.context
+    }
+
+    /// Containers that should expand to include all of their children.
+    pub fn expanded(&self) -> &HashSet<Id> {
+        &self.expanded
     }
 }
 
@@ -255,12 +266,20 @@ impl RenderState<'_, '_> {
         }
     }
 
+    /// Determine whether a matched container should expand its children in the rendered output.
+    fn selection_expands(&self, id: &Id) -> bool {
+        match self.selection() {
+            Some(selection) => selection.expanded().contains(id),
+            None => true,
+        }
+    }
+
     /// Determine whether a child item should be rendered based on its parent and selection context.
     fn selection_allows_child(&self, parent_id: &Id, child_id: &Id) -> bool {
         if self.selection().is_none() {
             return true;
         }
-        self.selection_matches(parent_id) || self.selection_context_contains(child_id)
+        self.selection_expands(parent_id) || self.selection_context_contains(child_id)
     }
 
     /// Determine whether an item should be rendered based on visibility settings.
@@ -559,7 +578,12 @@ impl RenderState<'_, '_> {
         }
 
         let selection_active = self.selection().is_some();
-        let include_all_items = selection_active && self.selection_matches(&item.id);
+        let parent_expanded = match &impl_.for_ {
+            Type::ResolvedPath(path) => self.selection_expands(&path.id),
+            _ => false,
+        };
+        let expand_children =
+            !selection_active || self.selection_expands(&item.id) || parent_expanded;
 
         if let Some(trait_) = &impl_.trait_
             && let Some(trait_item) = self.crate_data.index.get(&trait_.id)
@@ -601,11 +625,11 @@ impl RenderState<'_, '_> {
             if let Some(item) = self.crate_data.index.get(item_id) {
                 let is_trait_impl = impl_.trait_.is_some();
                 if (!selection_active
-                    || include_all_items
+                    || expand_children
                     || self.selection_context_contains(item_id))
                     && (is_trait_impl || self.is_visible(item))
                 {
-                    let rendered = self.render_impl_item(&path_prefix, item, include_all_items);
+                    let rendered = self.render_impl_item(&path_prefix, item, expand_children);
                     if !rendered.is_empty() {
                         output.push_str(&rendered);
                         has_content = true;
@@ -653,7 +677,7 @@ impl RenderState<'_, '_> {
         }
 
         let selection_active = self.selection().is_some();
-        let include_all_variants = selection_active && self.selection_matches(&item.id);
+        let include_all_variants = self.selection_expands(&item.id);
 
         // Collect inline traits
         let mut inline_traits = Vec::new();
@@ -694,8 +718,9 @@ impl RenderState<'_, '_> {
                 || self.selection_context_contains(variant_id)
             {
                 let variant_item = must_get(self.crate_data, variant_id);
-                let include_variant_fields = selection_active
-                    && (include_all_variants || self.selection_matches(&variant_item.id));
+                let include_variant_fields = include_all_variants
+                    || !selection_active
+                    || self.selection_matches(&variant_item.id);
                 let rendered = self.render_enum_variant(variant_item, include_variant_fields);
                 if !rendered.is_empty() {
                     output.push_str(&rendered);
@@ -791,7 +816,7 @@ impl RenderState<'_, '_> {
         }
 
         let selection_active = self.selection().is_some();
-        let include_all_items = selection_active && self.selection_matches(&item.id);
+        let expand_children = self.selection_expands(&item.id);
 
         let generics = render_generics(&trait_.generics);
         let where_clause = render_where_clause(&trait_.generics);
@@ -815,9 +840,9 @@ impl RenderState<'_, '_> {
         ));
 
         for item_id in &trait_.items {
-            if !selection_active || include_all_items || self.selection_context_contains(item_id) {
+            if !selection_active || expand_children || self.selection_context_contains(item_id) {
                 let item = must_get(self.crate_data, item_id);
-                output.push_str(&self.render_trait_item(item, include_all_items));
+                output.push_str(&self.render_trait_item(item, expand_children));
             }
         }
 
@@ -883,7 +908,12 @@ impl RenderState<'_, '_> {
         }
 
         let selection_active = self.selection().is_some();
-        let include_all_fields = selection_active && self.selection_matches(&item.id);
+        let expand_children = if selection_active {
+            self.selection_expands(&item.id)
+        } else {
+            false
+        };
+        let force_fields = selection_active && expand_children;
 
         // Collect inline traits
         let mut inline_traits = Vec::new();
@@ -925,7 +955,7 @@ impl RenderState<'_, '_> {
                     .iter()
                     .filter_map(|field| {
                         field.as_ref().and_then(|id| {
-                            if !include_all_fields && !self.selection_context_contains(id) {
+                            if !expand_children && !self.selection_context_contains(id) {
                                 return None;
                             }
                             let field_item = must_get(self.crate_data, id);
@@ -940,7 +970,7 @@ impl RenderState<'_, '_> {
                     .collect::<Vec<_>>()
                     .join(", ");
 
-                if include_all_fields || !fields_str.is_empty() {
+                if expand_children || !fields_str.is_empty() {
                     output.push_str(&format!(
                         "{}struct {}{}({}){};\n\n",
                         render_vis(item),
@@ -960,7 +990,7 @@ impl RenderState<'_, '_> {
                     where_clause
                 ));
                 for field in fields {
-                    let rendered = self.render_struct_field(field, include_all_fields);
+                    let rendered = self.render_struct_field(field, force_fields);
                     if !rendered.is_empty() {
                         output.push_str(&rendered);
                     }
@@ -1087,7 +1117,7 @@ impl RenderState<'_, '_> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{collections::HashMap, slice};
 
     use rustdoc_types::{
         Abi, Crate, Function, FunctionHeader, FunctionSignature, Generics, Id, Impl, Item,
@@ -1130,6 +1160,8 @@ mod tests {
         let unspecified_variant = Id(10);
         let widget_private_impl = Id(11);
         let private_helper_method = Id(12);
+        let tools_module = Id(13);
+        let tool_function = Id(14);
 
         let mut index = HashMap::new();
 
@@ -1153,6 +1185,7 @@ mod tests {
                         palette_enum,
                         widget_impl,
                         widget_private_impl,
+                        tools_module,
                     ],
                     is_stripped: false,
                 }),
@@ -1347,6 +1380,51 @@ mod tests {
         );
 
         index.insert(
+            tools_module,
+            Item {
+                id: tools_module,
+                crate_id: 0,
+                name: Some("tools".into()),
+                span: None,
+                visibility: Visibility::Public,
+                docs: Some("Utility helpers".into()),
+                links: HashMap::new(),
+                attrs: Vec::new(),
+                deprecation: None,
+                inner: ItemEnum::Module(Module {
+                    is_crate: false,
+                    items: vec![tool_function],
+                    is_stripped: false,
+                }),
+            },
+        );
+
+        index.insert(
+            tool_function,
+            Item {
+                id: tool_function,
+                crate_id: 0,
+                name: Some("instrument".into()),
+                span: None,
+                visibility: Visibility::Public,
+                docs: Some("Instrument a widget".into()),
+                links: HashMap::new(),
+                attrs: Vec::new(),
+                deprecation: None,
+                inner: ItemEnum::Function(Function {
+                    sig: FunctionSignature {
+                        inputs: Vec::new(),
+                        output: None,
+                        is_c_variadic: false,
+                    },
+                    generics: empty_generics(),
+                    header: default_header(),
+                    has_body: true,
+                }),
+            },
+        );
+
+        index.insert(
             private_helper_method,
             Item {
                 id: private_helper_method,
@@ -1529,7 +1607,7 @@ mod tests {
             .into_iter()
             .find(|r| r.path_string.ends_with("Widget::id"))
             .expect("field result");
-        let selection = build_render_selection(&[field]);
+        let selection = build_render_selection(&index, slice::from_ref(&field), true);
         let rendered = render_with_selection(&crate_data, selection);
 
         assert!(rendered.contains("struct Widget"));
@@ -1549,7 +1627,7 @@ mod tests {
             .into_iter()
             .find(|r| r.path_string.ends_with("Widget::render"))
             .expect("method result");
-        let selection = build_render_selection(&[method]);
+        let selection = build_render_selection(&index, slice::from_ref(&method), true);
         let rendered = render_with_selection(&crate_data, selection);
 
         assert!(rendered.contains("impl"));
@@ -1568,13 +1646,89 @@ mod tests {
             .into_iter()
             .find(|r| r.path_string.ends_with("Palette::Named"))
             .expect("variant result");
-        let selection = build_render_selection(&[variant]);
+        let selection = build_render_selection(&index, slice::from_ref(&variant), true);
         let rendered = render_with_selection(&crate_data, selection);
 
         assert!(rendered.contains("enum Palette"));
         assert!(rendered.contains("Named"));
         assert!(rendered.contains("pub label: String"));
         assert!(!rendered.contains("Unspecified"));
+    }
+
+    #[test]
+    fn struct_match_expands_children_by_default() {
+        let crate_data = fixture_crate();
+        let index = SearchIndex::build(&crate_data, false);
+        let mut options = SearchOptions::new("Widget");
+        options.domains = SearchDomain::NAMES;
+        let results = index.search(&options);
+        let widget = results
+            .into_iter()
+            .find(|r| r.path_string.ends_with("Widget"))
+            .expect("struct result");
+        let selection = build_render_selection(&index, slice::from_ref(&widget), true);
+        let rendered = render_with_selection(&crate_data, selection);
+
+        assert!(rendered.contains("struct Widget"));
+        assert!(rendered.contains("id: u32"));
+        assert!(rendered.contains("name: String"));
+        assert!(rendered.contains("fn render"));
+    }
+
+    #[test]
+    fn struct_match_respects_direct_match_only() {
+        let crate_data = fixture_crate();
+        let index = SearchIndex::build(&crate_data, false);
+        let mut options = SearchOptions::new("Widget");
+        options.domains = SearchDomain::NAMES;
+        let results = index.search(&options);
+        let widget = results
+            .into_iter()
+            .find(|r| r.path_string.ends_with("Widget"))
+            .expect("struct result");
+        let selection = build_render_selection(&index, slice::from_ref(&widget), false);
+        let rendered = render_with_selection(&crate_data, selection);
+
+        assert!(rendered.contains("struct Widget"));
+        assert!(!rendered.contains("id: u32"));
+        assert!(!rendered.contains("name: String"));
+        assert!(!rendered.contains("fn render"));
+    }
+
+    #[test]
+    fn module_match_expands_children_by_default() {
+        let crate_data = fixture_crate();
+        let index = SearchIndex::build(&crate_data, false);
+        let mut options = SearchOptions::new("tools");
+        options.domains = SearchDomain::NAMES;
+        let results = index.search(&options);
+        let module = results
+            .into_iter()
+            .find(|r| r.path_string.ends_with("tools"))
+            .expect("module result");
+        let selection = build_render_selection(&index, slice::from_ref(&module), true);
+        let rendered = render_with_selection(&crate_data, selection);
+
+        assert!(rendered.contains("mod tools"));
+        assert!(rendered.contains("fn instrument"));
+    }
+
+    #[test]
+    fn module_match_respects_direct_match_only() {
+        let crate_data = fixture_crate();
+        let index = SearchIndex::build(&crate_data, false);
+        let mut options = SearchOptions::new("tools");
+        options.domains = SearchDomain::NAMES;
+        let results = index.search(&options);
+        let module = results
+            .into_iter()
+            .find(|r| r.path_string.ends_with("tools"))
+            .expect("module result");
+        let selection = build_render_selection(&index, slice::from_ref(&module), false);
+        let rendered = render_with_selection(&crate_data, selection);
+
+        assert!(rendered.contains("mod tools"));
+        assert!(!rendered.contains("fn instrument"));
     }
 
     #[test]
@@ -1642,6 +1796,7 @@ mod tests {
             query: "Widget".into(),
             domains: SearchDomain::NAMES | SearchDomain::DOCS,
             case_sensitive: false,
+            expand_containers: true,
             hits,
         };
         let frontmatter = FrontmatterConfig::for_target("fixture")
@@ -1650,10 +1805,9 @@ mod tests {
         let output = Renderer::new().with_frontmatter(frontmatter);
         let output = render_allowing_format_errors(output, &crate_data);
 
-        assert!(
-            output
-                .contains("// search: query=\"Widget\"; case_sensitive=false; domains=names, docs")
-        );
+        assert!(output.contains(
+            "// search: query=\"Widget\"; case_sensitive=false; domains=names, docs; expand_containers=true"
+        ));
         assert!(output.contains("// hits (1):"));
         assert!(output.contains("//   - fixture::Widget [names]"));
     }

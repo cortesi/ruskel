@@ -30,17 +30,15 @@ the matches and their ancestors.
 
 ```sh
 # Show methods and fields matching "timeout" within the reqwest crate
-ruskel reqwest --search timeout --search-names --search-signatures
+ruskel reqwest --search timeout --search-spec names,signatures
 ```
 
-By default the query matches names, documentation, and canonical paths
-(case-insensitive). Toggle individual domains with:
-
-- `--search-names` – enable name matching
-- `--search-docs` – enable documentation matching
-- `--search-paths` – enable canonical path matching
-- `--search-signatures` – enable rendered signature matching
-- `--search-case-sensitive` – require exact case matches
+By default the query matches every domain (names, docs, paths, signatures) with case-insensitive
+comparisons. Use `--search-spec names,paths` to narrow the domains or
+`--search-spec docs` to inspect documentation only. Combine with
+`--search-case-sensitive` to require exact letter case.
+Add `--direct-match-only` when you want container matches (modules, structs, traits) to stay
+collapsed and show only the exact hits.
 
 The search output respects existing flags like `--private`, feature controls, and
 syntax highlighting options.
@@ -139,11 +137,14 @@ The `ruskel_skeleton` tool accepts the following parameters:
 - `frontmatter`: Include comment frontmatter describing the invocation (default: true)
 - `search`: Restrict the response to matches for this query instead of rendering the entire
   target (default: null)
-- `search_names`: Include item names when matching search results (default: false)
-- `search_docs`: Include documentation text when matching search results (default: false)
-- `search_paths`: Include canonical module paths when matching search results (default: false)
-- `search_signatures`: Include rendered signatures when matching search results (default: false)
+- `search_spec`: Comma-separated search domains (names, docs, paths, signatures). When omitted
+  all domains are searched (default: null)
+- `search_names`: Legacy domain toggle kept for compatibility (default: false)
+- `search_docs`: Legacy domain toggle kept for compatibility (default: false)
+- `search_paths`: Legacy domain toggle kept for compatibility (default: false)
+- `search_signatures`: Legacy domain toggle kept for compatibility (default: false)
 - `search_case_sensitive`: Require exact-case matches when searching (default: false)
+- `direct_match_only`: Suppress container expansion so only direct hits are rendered (default: false)
 - `no_default_features`: Disable default features (default: false)
 - `all_features`: Enable all features (default: false)
 - `features`: Array of features to enable (default: [])
@@ -165,7 +166,8 @@ Want to contribute? Have ideas or feature requests? Come tell us about it on
 
 - Generate a skeletonized view of any Rust crate
 - Support for both local crates and remote crates from crates.io
-- Filter output to matched items using `--search` with domain toggles
+- Filter output to matched items using `--search` with the `--search-spec` domain selector and
+  `--direct-match-only` when you want to avoid container expansion
 - Syntax highlighting for terminal output 
 - Optionally include private items and auto-implemented traits
 - Support for custom feature flags and version specification

@@ -100,6 +100,8 @@ pub struct FrontmatterSearch {
     pub domains: SearchDomain,
     /// Whether matching respected case sensitivity.
     pub case_sensitive: bool,
+    /// Whether matched containers were expanded to include their children.
+    pub expand_containers: bool,
     /// Matched items included in the rendered skeleton.
     pub hits: Vec<FrontmatterHit>,
 }
@@ -130,6 +132,16 @@ fn write_search_section(buffer: &mut String, search: &FrontmatterSearch) {
         details.push_str("domains=");
         details.push_str(&domains.join(", "));
     }
+
+    if !details.is_empty() {
+        details.push_str("; ");
+    }
+    details.push_str("expand_containers=");
+    details.push_str(if search.expand_containers {
+        "true"
+    } else {
+        "false"
+    });
 
     writeln!(
         buffer,

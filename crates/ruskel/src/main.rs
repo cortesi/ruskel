@@ -63,6 +63,30 @@ impl LogLevel {
     }
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+/// Available search domains accepted by `--search-spec`.
+enum SearchSpec {
+    /// Match against item names.
+    Names,
+    /// Match against documentation comments.
+    Docs,
+    /// Match against canonical module paths.
+    Paths,
+    /// Match against rendered signatures.
+    Signatures,
+}
+
+impl From<SearchSpec> for SearchDomain {
+    fn from(spec: SearchSpec) -> Self {
+        match spec {
+            SearchSpec::Names => Self::NAMES,
+            SearchSpec::Docs => Self::DOCS,
+            SearchSpec::Paths => Self::PATHS,
+            SearchSpec::Signatures => Self::SIGNATURES,
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 /// Parsed command-line options for the ruskel CLI.
@@ -79,25 +103,22 @@ struct Cli {
     #[arg(long)]
     search: Option<String>,
 
-    /// Include names when matching search results.
-    #[arg(long, default_value_t = false)]
-    search_names: bool,
-
-    /// Include documentation strings when matching search results.
-    #[arg(long, default_value_t = false)]
-    search_docs: bool,
-
-    /// Include canonical module paths when matching search results.
-    #[arg(long, default_value_t = false)]
-    search_paths: bool,
-
-    /// Include rendered signatures when matching search results.
-    #[arg(long, default_value_t = false)]
-    search_signatures: bool,
+    /// Comma-separated list of search domains (names, docs, paths, signatures). Defaults to all.
+    #[arg(
+        long = "search-spec",
+        value_delimiter = ',',
+        value_name = "DOMAIN[,DOMAIN...]",
+        default_value = "names,docs,paths,signatures"
+    )]
+    search_spec: Vec<SearchSpec>,
 
     /// Execute the search in a case sensitive manner.
     #[arg(long, default_value_t = false)]
     search_case_sensitive: bool,
+
+    /// Suppress automatic expansion of matched containers when searching.
+    #[arg(long, default_value_t = false)]
+    direct_match_only: bool,
 
     /// Render auto-implemented traits
     #[arg(long, default_value_t = false)]
@@ -293,23 +314,19 @@ fn run_search(
     let mut options = SearchOptions::new(trimmed);
     options.include_private = cli.private;
     options.case_sensitive = cli.search_case_sensitive;
+    options.expand_containers = !cli.direct_match_only;
 
-    let mut domains = SearchDomain::empty();
-    if cli.search_names {
-        domains |= SearchDomain::NAMES;
-    }
-    if cli.search_docs {
-        domains |= SearchDomain::DOCS;
-    }
-    if cli.search_paths {
-        domains |= SearchDomain::PATHS;
-    }
-    if cli.search_signatures {
-        domains |= SearchDomain::SIGNATURES;
-    }
-    if !domains.is_empty() {
-        options.domains = domains;
-    }
+    let domains = if cli.search_spec.is_empty() {
+        SearchDomain::all()
+    } else {
+        cli.search_spec
+            .iter()
+            .fold(SearchDomain::empty(), |mut acc, spec| {
+                acc |= SearchDomain::from(*spec);
+                acc
+            })
+    };
+    options.domains = domains;
 
     let response = rs.search(
         &cli.target,

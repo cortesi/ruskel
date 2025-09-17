@@ -157,7 +157,7 @@ impl Ruskel {
             });
         }
 
-        let selection = build_render_selection(&results);
+        let selection = build_render_selection(&index, &results, options.expand_containers);
         let mut renderer = Renderer::default()
             .with_filter(&rt.filter)
             .with_auto_impls(self.auto_impls)
@@ -175,6 +175,7 @@ impl Ruskel {
                 query: options.query.clone(),
                 domains: options.domains,
                 case_sensitive: options.case_sensitive,
+                expand_containers: options.expand_containers,
                 hits,
             };
             let filter = if rt.filter.is_empty() {

@@ -19,6 +19,10 @@ pub struct RuskelSkeletonTool {
     #[serde(default)]
     pub search: Option<String>,
 
+    /// Limit search to specific domains (names, docs, paths, signatures). Defaults to all domains.
+    #[serde(default)]
+    pub search_spec: Option<Vec<SearchSpecParam>>,
+
     /// Include frontmatter comments describing the invocation context.
     #[serde(default = "default_frontmatter_enabled")]
     pub frontmatter: bool,
@@ -43,6 +47,10 @@ pub struct RuskelSkeletonTool {
     #[serde(default)]
     pub search_case_sensitive: bool,
 
+    /// Render only the direct matches without expanding container contents.
+    #[serde(default)]
+    pub direct_match_only: bool,
+
     /// Disable the crate's default Cargo features.
     #[serde(default)]
     pub no_default_features: bool,
@@ -61,6 +69,31 @@ pub struct RuskelSkeletonTool {
 pub struct RuskelServer {
     /// Code skeleton renderer shared across tool invocations.
     ruskel: Ruskel,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+/// Search domains accepted by the MCP `search_spec` parameter.
+pub enum SearchSpecParam {
+    /// Match against item names.
+    Names,
+    /// Match against documentation text.
+    Docs,
+    /// Match against canonical module paths.
+    Paths,
+    /// Match against rendered signatures.
+    Signatures,
+}
+
+impl From<SearchSpecParam> for SearchDomain {
+    fn from(spec: SearchSpecParam) -> Self {
+        match spec {
+            SearchSpecParam::Names => Self::NAMES,
+            SearchSpecParam::Docs => Self::DOCS,
+            SearchSpecParam::Paths => Self::PATHS,
+            SearchSpecParam::Signatures => Self::SIGNATURES,
+        }
+    }
 }
 
 #[mcp_server]
@@ -99,8 +132,9 @@ impl RuskelServer {
     /// - Pass `all_features=true` or `features=[…]` when a symbol is behind a feature gate.
     /// - Pass private=true to include non‑public items. Useful if you're looking up details of
     ///   items in the current codebase for development.
-    /// - Pass `search="pattern"` (with optional `search_*` flags) to restrict output to matched
+    /// - Pass `search="pattern"` (optionally with `search_spec=[…]`) to restrict output to matched
     ///   items instead of rendering the entire target.
+    /// - Pass `direct_match_only=true` to keep container matches focused on the exact hits.
     /// - Pass `frontmatter=false` when you need the raw Rust skeleton without the leading comment
     ///   block summarising context.
     async fn ruskel(&self, _ctx: &ServerCtx, params: RuskelSkeletonTool) -> Result<CallToolResult> {
@@ -112,91 +146,120 @@ impl RuskelServer {
             .map(|q| q.trim())
             .filter(|q| !q.is_empty())
         {
-            let mut options = SearchOptions::new(query);
-            options.include_private = params.private;
-            options.case_sensitive = params.search_case_sensitive;
+            return Ok(self.run_search_mode(&ruskel, &params, query));
+        }
 
-            let mut domains = SearchDomain::empty();
-            if params.search_names {
-                domains |= SearchDomain::NAMES;
-            }
-            if params.search_docs {
-                domains |= SearchDomain::DOCS;
-            }
-            if params.search_paths {
-                domains |= SearchDomain::PATHS;
-            }
-            if params.search_signatures {
-                domains |= SearchDomain::SIGNATURES;
-            }
-            if !domains.is_empty() {
-                options.domains = domains;
-            }
+        Ok(self.run_render_mode(&ruskel, params))
+    }
 
-            match ruskel.search(
-                &params.target,
-                params.no_default_features,
-                params.all_features,
-                params.features.clone(),
-                &options,
-            ) {
-                Ok(response) => {
-                    if response.results.is_empty() {
-                        return Ok(CallToolResult::new()
-                            .with_text_content(format!("No matches found for \"{}\".", query)));
+    /// Build the MCP response for search invocations, including match summaries.
+    fn run_search_mode(
+        &self,
+        ruskel: &Ruskel,
+        params: &RuskelSkeletonTool,
+        query: &str,
+    ) -> CallToolResult {
+        let mut options = SearchOptions::new(query);
+        options.include_private = params.private;
+        options.case_sensitive = params.search_case_sensitive;
+
+        let domains = match params.search_spec.as_ref() {
+            Some(spec) if !spec.is_empty() => {
+                spec.iter().fold(SearchDomain::empty(), |mut acc, token| {
+                    acc |= SearchDomain::from(*token);
+                    acc
+                })
+            }
+            _ => {
+                let mut legacy = SearchDomain::empty();
+                if params.search_names {
+                    legacy |= SearchDomain::NAMES;
+                }
+                if params.search_docs {
+                    legacy |= SearchDomain::DOCS;
+                }
+                if params.search_paths {
+                    legacy |= SearchDomain::PATHS;
+                }
+                if params.search_signatures {
+                    legacy |= SearchDomain::SIGNATURES;
+                }
+                if legacy.is_empty() {
+                    SearchDomain::default()
+                } else {
+                    legacy
+                }
+            }
+        };
+        options.domains = domains;
+        options.expand_containers = !params.direct_match_only;
+
+        match ruskel.search(
+            &params.target,
+            params.no_default_features,
+            params.all_features,
+            params.features.clone(),
+            &options,
+        ) {
+            Ok(response) => {
+                if response.results.is_empty() {
+                    return CallToolResult::new()
+                        .with_text_content(format!("No matches found for \"{}\".", query));
+                }
+
+                let mut summary = String::new();
+                summary.push_str(&format!(
+                    "Found {} matches for \"{}\":\n",
+                    response.results.len(),
+                    query
+                ));
+                for result in &response.results {
+                    let labels = describe_domains(result.matched);
+                    if labels.is_empty() {
+                        summary.push_str(&format!(" - {}\n", result.path_string));
+                    } else {
+                        summary.push_str(&format!(
+                            " - {} [{}]\n",
+                            result.path_string,
+                            labels.join(", ")
+                        ));
                     }
-
-                    let mut summary = String::new();
-                    summary.push_str(&format!(
-                        "Found {} matches for \"{}\":\n",
-                        response.results.len(),
-                        query
-                    ));
-                    for result in &response.results {
-                        let labels = describe_domains(result.matched);
-                        if labels.is_empty() {
-                            summary.push_str(&format!(" - {}\n", result.path_string));
-                        } else {
-                            summary.push_str(&format!(
-                                " - {} [{}]\n",
-                                result.path_string,
-                                labels.join(", ")
-                            ));
-                        }
-                    }
-                    summary.push('\n');
-                    summary.push_str(&response.rendered);
-
-                    Ok(CallToolResult::new().with_text_content(summary))
                 }
-                Err(e) => {
-                    error!("Failed to generate search results: {}", e);
-                    Ok(CallToolResult::new()
-                        .with_text_content(format!(
-                            "Failed to search '{}' with query '{}': {}",
-                            params.target, query, e
-                        ))
-                        .is_error(true))
-                }
+                summary.push('\n');
+                summary.push_str(&response.rendered);
+
+                CallToolResult::new().with_text_content(summary)
             }
-        } else {
-            match ruskel.render(
-                &params.target,
-                params.no_default_features,
-                params.all_features,
-                params.features,
-                params.private,
-            ) {
-                Ok(output) => Ok(CallToolResult::new().with_text_content(output)),
-                Err(e) => {
-                    error!("Failed to generate skeleton: {}", e);
-                    Ok(CallToolResult::new()
-                        .with_text_content(format!(
-                            "Failed to generate skeleton for '{}': {}",
-                            params.target, e
-                        ))
-                        .is_error(true))
-                }
+            Err(e) => {
+                error!("Failed to generate search results: {}", e);
+                CallToolResult::new()
+                    .with_text_content(format!(
+                        "Failed to search '{}' with query '{}': {}",
+                        params.target, query, e
+                    ))
+                    .is_error(true)
+            }
+        }
+    }
+
+    /// Build the MCP response for render-only requests.
+    fn run_render_mode(&self, ruskel: &Ruskel, params: RuskelSkeletonTool) -> CallToolResult {
+        match ruskel.render(
+            &params.target,
+            params.no_default_features,
+            params.all_features,
+            params.features,
+            params.private,
+        ) {
+            Ok(output) => CallToolResult::new().with_text_content(output),
+            Err(e) => {
+                error!("Failed to generate skeleton: {}", e);
+                CallToolResult::new()
+                    .with_text_content(format!(
+                        "Failed to generate skeleton for '{}': {}",
+                        params.target, e
+                    ))
+                    .is_error(true)
             }
         }
     }
