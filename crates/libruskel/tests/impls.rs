@@ -98,17 +98,6 @@ gen_tests! {
             "#
         }
         idemp {
-            default_impl: r#"
-                trait DefaultTrait {
-                    fn default_method(&self) { }
-                }
-                
-                struct DefaultImpl;
-                
-                impl DefaultTrait for DefaultImpl {}
-            "#
-        }
-        idemp {
             impl_with_const_fn: r#"
                 struct ConstStruct;
                 
@@ -245,6 +234,27 @@ gen_tests! {
                     pub trait SomeTrait {
                         fn trait_method(&self);
                     }
+                "#
+            }
+        }
+        rt_custom {
+            default_impl: {
+                renderer: Renderer::default().with_private_items(true),
+                input: r#"
+                    trait DefaultTrait {
+                        fn default_method(&self) { }
+                    }
+
+                    struct DefaultImpl;
+
+                    impl DefaultTrait for DefaultImpl {}
+                "#,
+                output: r#"
+                    trait DefaultTrait {
+                        fn default_method(&self) { }
+                    }
+
+                    struct DefaultImpl;
                 "#
             }
         }

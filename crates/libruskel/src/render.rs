@@ -614,7 +614,7 @@ impl RenderState<'_, '_> {
             }
         }
 
-        if selection_active && !include_all_items && !has_content {
+        if !has_content {
             return String::new();
         }
 
@@ -1128,6 +1128,8 @@ mod tests {
         let named_variant = Id(8);
         let named_field = Id(9);
         let unspecified_variant = Id(10);
+        let widget_private_impl = Id(11);
+        let private_helper_method = Id(12);
 
         let mut index = HashMap::new();
 
@@ -1145,7 +1147,13 @@ mod tests {
                 deprecation: None,
                 inner: ItemEnum::Module(Module {
                     is_crate: true,
-                    items: vec![widget, helper_fn, palette_enum, widget_impl],
+                    items: vec![
+                        widget,
+                        helper_fn,
+                        palette_enum,
+                        widget_impl,
+                        widget_private_impl,
+                    ],
                     is_stripped: false,
                 }),
             },
@@ -1169,7 +1177,7 @@ mod tests {
                         has_stripped_fields: false,
                     },
                     generics: empty_generics(),
-                    impls: vec![widget_impl],
+                    impls: vec![widget_impl, widget_private_impl],
                 }),
             },
         );
@@ -1229,6 +1237,36 @@ mod tests {
                         args: None,
                     }),
                     items: vec![render_method],
+                    is_negative: false,
+                    is_synthetic: false,
+                    blanket_impl: None,
+                }),
+            },
+        );
+
+        index.insert(
+            widget_private_impl,
+            Item {
+                id: widget_private_impl,
+                crate_id: 0,
+                name: None,
+                span: None,
+                visibility: Visibility::Public,
+                docs: None,
+                links: HashMap::new(),
+                attrs: Vec::new(),
+                deprecation: None,
+                inner: ItemEnum::Impl(Impl {
+                    is_unsafe: false,
+                    generics: empty_generics(),
+                    provided_trait_methods: Vec::new(),
+                    trait_: None,
+                    for_: Type::ResolvedPath(Path {
+                        path: "Widget".into(),
+                        id: widget,
+                        args: None,
+                    }),
+                    items: vec![private_helper_method],
                     is_negative: false,
                     is_synthetic: false,
                     blanket_impl: None,
@@ -1299,6 +1337,38 @@ mod tests {
                             id: widget,
                             args: None,
                         })),
+                        is_c_variadic: false,
+                    },
+                    generics: empty_generics(),
+                    header: default_header(),
+                    has_body: true,
+                }),
+            },
+        );
+
+        index.insert(
+            private_helper_method,
+            Item {
+                id: private_helper_method,
+                crate_id: 0,
+                name: Some("internal_helper".into()),
+                span: None,
+                visibility: Visibility::Default,
+                docs: None,
+                links: HashMap::new(),
+                attrs: Vec::new(),
+                deprecation: None,
+                inner: ItemEnum::Function(Function {
+                    sig: FunctionSignature {
+                        inputs: vec![(
+                            "self".into(),
+                            Type::BorrowedRef {
+                                lifetime: None,
+                                is_mutable: true,
+                                type_: Box::new(Type::Generic("Self".into())),
+                            },
+                        )],
+                        output: None,
                         is_c_variadic: false,
                     },
                     generics: empty_generics(),
@@ -1505,6 +1575,28 @@ mod tests {
         assert!(rendered.contains("Named"));
         assert!(rendered.contains("pub label: String"));
         assert!(!rendered.contains("Unspecified"));
+    }
+
+    #[test]
+    fn renderer_omits_empty_impl_blocks_when_private_items_hidden() {
+        let crate_data = fixture_crate();
+        let output = render_allowing_format_errors(Renderer::new(), &crate_data);
+
+        assert!(
+            !output.contains("impl Widget {}"),
+            "expected renderer to omit empty impl blocks:\n{output}"
+        );
+    }
+
+    #[test]
+    fn renderer_keeps_impl_when_private_items_rendered() {
+        let crate_data = fixture_crate();
+        let output =
+            render_allowing_format_errors(Renderer::new().with_private_items(true), &crate_data);
+
+        assert!(output.contains("impl Widget {"));
+        assert!(output.contains("fn render"));
+        assert!(output.contains("fn internal_helper"));
     }
 
     #[test]
