@@ -26,8 +26,8 @@ add a flag to restrict output to direct matches when desired.
 3. Stage Three: Implement listing mode
 Provide a structured listing of crate items with their types and fully qualified paths.
 
-1. [ ] Add a `--list` argument to the CLI and thread it through to the libruskel API alongside
+1. [x] Add a `--list` argument to the CLI and thread it through to the libruskel API alongside
        optional search filters.
-2. [ ] Implement a listing routine in `crates/libruskel` that emits item type labels and full
+2. [x] Implement a listing routine in `crates/libruskel` that emits item type labels and full
        paths, reusing the search index when a query is provided.
-3. [ ] Document the listing output format and extend tests or fixtures to cover the new mode.
+3. [x] Document the listing output format and extend tests or fixtures to cover the new mode.

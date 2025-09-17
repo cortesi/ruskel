@@ -29,8 +29,8 @@ The query runs across multiple domains and returns a skeleton containing only
 the matches and their ancestors.
 
 ```sh
-# Show methods and fields matching "timeout" within the reqwest crate
-ruskel reqwest --search timeout --search-spec name,signature
+# Show methods and fields matching "status" within the reqwest crate
+ruskel reqwest --search status --search-spec name,signature
 ```
 
 By default the query matches the name, doc, and signature domains with case-insensitive
@@ -43,6 +43,26 @@ collapsed and show only the exact hits.
 
 The search output respects existing flags like `--private`, feature controls, and
 syntax highlighting options.
+
+## Listing Mode
+
+Use `--list` to print a concise catalog of crate items instead of rendering
+Rust code. Each line reports the item kind and its fully qualified path:
+
+```sh
+# Survey the high-level structure of tokio without emitting code
+ruskel tokio --list
+
+crate      crate
+module     crate::sync
+struct     crate::sync::Mutex
+trait      crate::io::AsyncRead
+```
+
+Combine `--list` with `--search` to filter the catalog using the same domain
+controls as skeleton search. The listing honours `--private`, feature flags, and
+paging choices, and it conflicts with `--raw` because the output is tabular
+text rather than Rust code.
 
 ### Frontmatter Metadata
 
@@ -169,6 +189,7 @@ Want to contribute? Have ideas or feature requests? Come tell us about it on
 - Support for both local crates and remote crates from crates.io
 - Filter output to matched items using `--search` with the `--search-spec` domain selector and
   `--direct-match-only` when you want to avoid container expansion
+- Generate tabular item listings with `--list`, optionally filtered by `--search`
 - Syntax highlighting for terminal output 
 - Optionally include private items and auto-implemented traits
 - Support for custom feature flags and version specification
@@ -247,6 +268,15 @@ ruskel /my/path::foo
 
 # A crate from crates.io with a specific version
 ruskel serde@1.0.0
+
+# Search for "status" across names, signatures and doc comments
+ruskel reqwest --search status 
+
+# Search for "status" in only names and signatures 
+ruskel reqwest --search status --search-spec name,signature
+
+# Search for "status" in docs only
+ruskel reqwest --search status --search-spec doc
 ```
 
 ### Standard Library Support

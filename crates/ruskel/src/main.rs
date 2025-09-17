@@ -103,6 +103,10 @@ struct Cli {
     #[arg(long)]
     search: Option<String>,
 
+    /// Output a structured item listing instead of rendered code.
+    #[arg(long, default_value_t = false, conflicts_with = "raw")]
+    list: bool,
+
     /// Comma-separated list of search domains (name, doc, signature, path). Defaults to name, doc, signature.
     #[arg(
         long = "search-spec",
@@ -258,6 +262,10 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
         .with_frontmatter(!cli.no_frontmatter)
         .with_silent(!cli.verbose);
 
+    if cli.list {
+        return run_list(cli, &rs);
+    }
+
     if let Some(query) = cli.search.as_deref() {
         return run_search(cli, &rs, query, should_highlight);
     }
@@ -294,6 +302,96 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// Resolve the active search domains specified by the CLI flags.
+fn search_domains_from_cli(cli: &Cli) -> SearchDomain {
+    if cli.search_spec.is_empty() {
+        SearchDomain::default()
+    } else {
+        cli.search_spec
+            .iter()
+            .fold(SearchDomain::empty(), |mut acc, spec| {
+                acc |= SearchDomain::from(*spec);
+                acc
+            })
+    }
+}
+
+/// Build a `SearchOptions` value using the provided CLI configuration and query.
+fn build_search_options(cli: &Cli, query: &str) -> SearchOptions {
+    let mut options = SearchOptions::new(query);
+    options.include_private = cli.private;
+    options.case_sensitive = cli.search_case_sensitive;
+    options.expand_containers = !cli.direct_match_only;
+    options.domains = search_domains_from_cli(cli);
+    options
+}
+
+/// Execute the list flow and print a structured item summary.
+fn run_list(cli: &Cli, rs: &Ruskel) -> Result<(), Box<dyn Error>> {
+    if cli.raw {
+        return Err("--raw cannot be combined with --list".into());
+    }
+
+    let mut search_options: Option<SearchOptions> = None;
+    let mut trimmed_query: Option<String> = None;
+
+    if let Some(query) = cli.search.as_deref() {
+        let trimmed = query.trim();
+        if trimmed.is_empty() {
+            println!("Search query is empty; nothing to do.");
+            return Ok(());
+        }
+        trimmed_query = Some(trimmed.to_string());
+        search_options = Some(build_search_options(cli, trimmed));
+    }
+
+    let listings = rs.list(
+        &cli.target,
+        cli.no_default_features,
+        cli.all_features,
+        cli.features.clone(),
+        cli.private,
+        search_options.as_ref(),
+    )?;
+
+    if listings.is_empty() {
+        if let Some(query) = trimmed_query {
+            println!("No matches found for \"{query}\".");
+        } else {
+            println!("No items found.");
+        }
+        return Ok(());
+    }
+
+    let label_width = listings
+        .iter()
+        .map(|entry| entry.kind.label().len())
+        .max()
+        .unwrap_or(0);
+
+    let mut buffer = String::new();
+    for entry in listings {
+        let label = entry.kind.label();
+        if label_width > 0 {
+            buffer.push_str(&format!(
+                "{label:<width$} {}\n",
+                entry.path,
+                width = label_width
+            ));
+        } else {
+            buffer.push_str(&format!("{label} {}\n", entry.path));
+        }
+    }
+
+    if io::stdout().is_terminal() && !cli.no_page {
+        page_output(buffer)?;
+    } else {
+        print!("{}", buffer);
+    }
+
+    Ok(())
+}
+
 /// Execute the search flow and print the filtered skeleton to stdout.
 fn run_search(
     cli: &Cli,
@@ -311,22 +409,7 @@ fn run_search(
         return Ok(());
     }
 
-    let mut options = SearchOptions::new(trimmed);
-    options.include_private = cli.private;
-    options.case_sensitive = cli.search_case_sensitive;
-    options.expand_containers = !cli.direct_match_only;
-
-    let domains = if cli.search_spec.is_empty() {
-        SearchDomain::default()
-    } else {
-        cli.search_spec
-            .iter()
-            .fold(SearchDomain::empty(), |mut acc, spec| {
-                acc |= SearchDomain::from(*spec);
-                acc
-            })
-    };
-    options.domains = domains;
+    let options = build_search_options(cli, trimmed);
 
     let response = rs.search(
         &cli.target,

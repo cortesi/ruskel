@@ -119,6 +119,36 @@ pub enum SearchItemKind {
     ImplTarget,
 }
 
+impl SearchItemKind {
+    /// Human-friendly label describing the item kind.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Crate => "crate",
+            Self::Module => "module",
+            Self::Struct => "struct",
+            Self::Union => "union",
+            Self::Enum => "enum",
+            Self::EnumVariant => "enum variant",
+            Self::Field => "field",
+            Self::Trait => "trait",
+            Self::TraitAlias => "trait alias",
+            Self::Function => "function",
+            Self::Method => "method",
+            Self::TraitMethod => "trait method",
+            Self::AssocConst => "assoc const",
+            Self::AssocType => "assoc type",
+            Self::Constant => "constant",
+            Self::Static => "static",
+            Self::TypeAlias => "type alias",
+            Self::Use => "use",
+            Self::Macro => "macro",
+            Self::ProcMacro => "proc macro",
+            Self::Primitive => "primitive",
+            Self::ImplTarget => "impl target",
+        }
+    }
+}
+
 /// Component in a canonical path leading to an item.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchPathSegment {
@@ -139,6 +169,15 @@ pub struct SearchResponse {
     pub results: Vec<SearchResult>,
     /// Rendered skeleton filtered to only include matched items.
     pub rendered: String,
+}
+
+/// Lightweight record describing an item for list mode output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListItem {
+    /// Kind classification for the item.
+    pub kind: SearchItemKind,
+    /// Canonical path rendered as a `::` separated string.
+    pub path: String,
 }
 
 /// Result of performing a query against a crate index.

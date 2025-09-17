@@ -39,7 +39,7 @@ pub use crate::{
     error::{Result, RuskelError},
     render::Renderer,
     search::{
-        SearchDomain, SearchIndex, SearchItemKind, SearchOptions, SearchPathSegment,
+        ListItem, SearchDomain, SearchIndex, SearchItemKind, SearchOptions, SearchPathSegment,
         SearchResponse, SearchResult, describe_domains,
     },
 };

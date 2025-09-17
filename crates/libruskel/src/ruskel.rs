@@ -5,7 +5,7 @@ use super::{
     error::*,
     frontmatter::{FrontmatterConfig, FrontmatterHit, FrontmatterSearch},
     render::*,
-    search::{SearchIndex, SearchOptions, SearchResponse, build_render_selection},
+    search::{ListItem, SearchIndex, SearchOptions, SearchResponse, build_render_selection},
 };
 
 /// Ruskel generates a skeletonized version of a Rust crate in a single page.
@@ -191,6 +191,56 @@ impl Ruskel {
         let rendered = renderer.render(&crate_data)?;
 
         Ok(SearchResponse { results, rendered })
+    }
+
+    /// Produce a lightweight listing of crate items, optionally filtered by a search query.
+    pub fn list(
+        &self,
+        target: &str,
+        no_default_features: bool,
+        all_features: bool,
+        features: Vec<String>,
+        include_private: bool,
+        search: Option<&SearchOptions>,
+    ) -> Result<Vec<ListItem>> {
+        let include_private = include_private
+            || search
+                .map(|options| options.include_private)
+                .unwrap_or(false);
+
+        let rt = resolve_target(target, self.offline)?;
+        let crate_data = rt.read_crate(
+            no_default_features,
+            all_features,
+            features,
+            include_private,
+            self.silent,
+        )?;
+
+        let index = SearchIndex::build(&crate_data, include_private);
+
+        let results: Vec<ListItem> = if let Some(options) = search {
+            index
+                .search(options)
+                .into_iter()
+                .map(|result| ListItem {
+                    kind: result.kind,
+                    path: result.path_string,
+                })
+                .collect()
+        } else {
+            index
+                .entries()
+                .iter()
+                .cloned()
+                .map(|entry| ListItem {
+                    kind: entry.kind,
+                    path: entry.path_string,
+                })
+                .collect()
+        };
+
+        Ok(results)
     }
 
     /// Render the crate target into a Rust skeleton without filtering.

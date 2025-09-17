@@ -60,13 +60,12 @@ fn strip_module_declaration(s: &str) -> String {
     lines[1..lines.len() - 1].join("\n")
 }
 
-/// Compile the provided source into rustdoc JSON for assertions.
-pub fn inspect_crate(source: &str, private_items: bool, is_proc_macro: bool) -> Crate {
+/// Write a temporary test crate to disk and return its directory path.
+pub fn create_test_crate(source: &str, is_proc_macro: bool) -> (TempDir, String) {
     let temp_dir = TempDir::new().unwrap();
     let crate_path = temp_dir.path().join("src");
     fs::create_dir(&crate_path).unwrap();
-    let lib_rs_path = crate_path.join("lib.rs");
-    fs::write(&lib_rs_path, source).unwrap();
+    fs::write(crate_path.join("lib.rs"), source).unwrap();
 
     let cargo_toml_content = if is_proc_macro {
         r#"
@@ -88,15 +87,16 @@ pub fn inspect_crate(source: &str, private_items: bool, is_proc_macro: bool) -> 
     };
     fs::write(temp_dir.path().join("Cargo.toml"), cargo_toml_content).unwrap();
 
+    let target = temp_dir.path().to_str().unwrap().to_string();
+    (temp_dir, target)
+}
+
+/// Compile the provided source into rustdoc JSON for assertions.
+pub fn inspect_crate(source: &str, private_items: bool, is_proc_macro: bool) -> Crate {
+    let (_temp_dir, target) = create_test_crate(source, is_proc_macro);
     let ruskel = Ruskel::new().with_offline(true).with_silent(true);
     ruskel
-        .inspect(
-            temp_dir.path().to_str().unwrap(),
-            false,
-            false,
-            Vec::new(),
-            private_items,
-        )
+        .inspect(&target, false, false, Vec::new(), private_items)
         .unwrap()
 }
 
