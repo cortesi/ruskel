@@ -37,11 +37,12 @@ to leave a broken system after any step, but certainly after a stage all tests
 and smoketests must pass. Always include enough information that you could pick
 it up again with zero context. Always wrap at 100 chars.
 
-The checklist is a live document, update it as you go - if you discover new
-items during your work, or leave items for a later commit, add them to the
+The checklist is a LIVE DOCUMENT, update it as you go - if you discover new
+items during your work or leave items for a later commit, add them to the
 checklist. Ensure that any new item you add is a also Markdown checklist item
 (i.e. starts with `[ ]`), and has a number in sequence with other items in the
-document.
+document. You should evaluate next steps continuously, and modify the checklist 
+to incorporate what you learn as you work.
 
 You may batch together todo items that you think belong in the same changeset
 without prompting me. After every batch, let me review the code before
@@ -229,12 +230,42 @@ the command with an extended timeout (e.g., 120 seconds) if needed.
 - Look up signatures or definitions of functions, traits, or structs.
 - Explore public or private APIs.
 - Find specific examples or crate documentation are needed.
+- When you are searching through a crate for keywords or concepts.
 
 ### ruskel Usage Tips
 - Request deep module paths (e.g., `ruskel tokio::sync::mpsc`) to stay within your
   token budget.
 - Use the `ruskel --private` flag to view non-public items, which can be useful for
   nspecting your current codebase.
+
+### Search
+
+Ruskel has powerful search capabilities that lets you search for keywords
+across crates using the `--search` flag. Here are the relevant flags:
+
+```
+      --search <SEARCH>
+          Search query used to filter the generated skeleton instead of rendering everything
+
+      --list
+          Output a structured item listing instead of rendered code
+
+      --search-spec <DOMAIN[,DOMAIN...]>
+          Comma-separated list of search domains (name, doc, signature, path). Defaults to name, doc,
+          signature
+
+          Possible values:
+          - name:      Match against item names
+          - doc:       Match against documentation comments
+          - path:      Match against canonical module paths
+          - signature: Match against rendered signatures
+
+          [default: name,doc,signature]
+
+      --search-case-sensitive
+          Execute the search in a case sensitive manner
+```
+
 
 #### Examples
 
@@ -265,6 +296,15 @@ ruskel /my/path::foo
 
 # Specific dependency version from crates.io
 ruskel serde@1.0.0
+
+# Search for "status" in the reqwest crate, matching names, signatures and doc comments
+ruskel reqwest --search status 
+
+# Search for "status" in the reqwest crate, matching only names and signatures 
+ruskel reqwest --search status --search-spec name,signature
+
+# Search for "status" in the reqwest crate, matching docs only
+ruskel reqwest --search status --search-spec doc
 ```
 
 </rust>

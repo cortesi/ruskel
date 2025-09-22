@@ -31,3 +31,10 @@ Provide a structured listing of crate items with their types and fully qualified
 2. [x] Implement a listing routine in `crates/libruskel` that emits item type labels and full
        paths, reusing the search index when a query is provided.
 3. [x] Document the listing output format and extend tests or fixtures to cover the new mode.
+
+4. Stage Four: Clarify rustdoc build failures
+Provide users with actionable error messages when rustdoc JSON generation fails.
+
+1. [x] Investigate rustdoc_json error handling paths to identify parse vs compile failures.
+2. [x] Improve error reporting so ruskel surfaces the specific failure cause to the user.
+3. [x] Update docs or tests if needed to cover the refined messaging.
