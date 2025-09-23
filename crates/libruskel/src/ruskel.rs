@@ -5,7 +5,10 @@ use super::{
     error::*,
     frontmatter::{FrontmatterConfig, FrontmatterHit, FrontmatterSearch},
     render::*,
-    search::{ListItem, SearchIndex, SearchOptions, SearchResponse, build_render_selection},
+    search::{
+        ListItem, SearchIndex, SearchItemKind, SearchOptions, SearchResponse,
+        build_render_selection,
+    },
 };
 
 /// Ruskel generates a skeletonized version of a Rust crate in a single page.
@@ -219,7 +222,7 @@ impl Ruskel {
 
         let index = SearchIndex::build(&crate_data, include_private);
 
-        let results: Vec<ListItem> = if let Some(options) = search {
+        let mut results: Vec<ListItem> = if let Some(options) = search {
             index
                 .search(options)
                 .into_iter()
@@ -239,6 +242,8 @@ impl Ruskel {
                 })
                 .collect()
         };
+
+        results.retain(|item| item.kind != SearchItemKind::Use);
 
         Ok(results)
     }

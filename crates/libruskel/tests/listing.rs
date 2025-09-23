@@ -3,7 +3,7 @@
 
 mod utils;
 
-use libruskel::{Ruskel, SearchDomain, SearchOptions};
+use libruskel::{Ruskel, SearchDomain, SearchItemKind, SearchOptions};
 use pretty_assertions::assert_eq;
 use utils::create_test_crate;
 
@@ -59,6 +59,28 @@ fn list_respects_visibility_flags() {
             .iter()
             .any(|path| path.ends_with("PrivateWidget"))
     );
+}
+
+#[test]
+fn list_omits_nameless_use_items() {
+    let source = r#"
+        pub mod inner {
+            pub fn exported() {}
+        }
+
+        pub use inner::exported;
+    "#;
+
+    let (_temp_dir, target) = create_test_crate(source, false);
+    let ruskel = Ruskel::new().with_offline(true).with_silent(true);
+
+    let items = ruskel
+        .list(&target, false, false, Vec::new(), false, None)
+        .unwrap();
+
+    assert!(items.iter().any(|item| item.path.ends_with("::exported")));
+
+    assert!(!items.iter().any(|item| item.kind == SearchItemKind::Use));
 }
 
 #[test]
