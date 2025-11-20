@@ -1,9 +1,10 @@
 use std::io::stdout;
 
-use libruskel::{Ruskel, SearchDomain, SearchOptions, describe_domains};
+use libruskel::{Ruskel, SearchDomain, SearchOptions, describe_domains, parse_domain_tokens};
 use serde::{Deserialize, Serialize};
 use tenx_mcp::{Result, Server, ServerCtx, mcp_server, schema::CallToolResult, schemars, tool};
 use tracing::error;
+use tracing_subscriber::filter::LevelFilter;
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 /// Parameters accepted by the ruskel MCP tool.
@@ -21,7 +22,7 @@ pub struct RuskelSkeletonTool {
 
     /// Limit search to specific domains (name, doc, signature, path). Defaults to name, doc, signature.
     #[serde(default)]
-    pub search_spec: Option<Vec<SearchSpecParam>>,
+    pub search_spec: Option<Vec<String>>,
 
     /// Include frontmatter comments describing the invocation context.
     #[serde(default = "default_frontmatter_enabled")]
@@ -69,31 +70,6 @@ pub struct RuskelSkeletonTool {
 pub struct RuskelServer {
     /// Code skeleton renderer shared across tool invocations.
     ruskel: Ruskel,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, schemars::JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-/// Search domains accepted by the MCP `search_spec` parameter.
-pub enum SearchSpecParam {
-    /// Match against item names.
-    Name,
-    /// Match against documentation text.
-    Doc,
-    /// Match against canonical module paths.
-    Path,
-    /// Match against rendered signatures.
-    Signature,
-}
-
-impl From<SearchSpecParam> for SearchDomain {
-    fn from(spec: SearchSpecParam) -> Self {
-        match spec {
-            SearchSpecParam::Name => Self::NAMES,
-            SearchSpecParam::Doc => Self::DOCS,
-            SearchSpecParam::Path => Self::PATHS,
-            SearchSpecParam::Signature => Self::SIGNATURES,
-        }
-    }
 }
 
 #[mcp_server]
@@ -164,12 +140,7 @@ impl RuskelServer {
         options.case_sensitive = params.search_case_sensitive;
 
         let domains = match params.search_spec.as_ref() {
-            Some(spec) if !spec.is_empty() => {
-                spec.iter().fold(SearchDomain::empty(), |mut acc, token| {
-                    acc |= SearchDomain::from(*token);
-                    acc
-                })
-            }
+            Some(spec) if !spec.is_empty() => parse_domain_tokens(spec.iter().map(|s| s.as_str())),
             _ => {
                 let mut legacy = SearchDomain::empty();
                 if params.search_names {
@@ -276,11 +247,11 @@ const fn default_frontmatter_enabled() -> bool {
 pub async fn run_mcp_server(
     ruskel: Ruskel,
     addr: Option<String>,
-    log_level: Option<String>,
+    log_level: Option<LevelFilter>,
 ) -> Result<()> {
     // Initialize tracing for TCP mode only
     if addr.is_some() {
-        let level = log_level.as_deref().unwrap_or("info");
+        let level = log_level.unwrap_or(LevelFilter::INFO);
         let filter = format!("ruskel_mcp={level},tenx_mcp={level}");
 
         tracing_subscriber::fmt()

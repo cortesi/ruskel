@@ -3712,6 +3712,7 @@ dependencies = [
  "ruskel-mcp",
  "shell-words",
  "tokio",
+ "tracing-subscriber",
  "which",
 ]
 
@@ -5456,6 +5457,7 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "clap",
+ "libruskel",
  "rustdoc-types",
  "serde_json",
 ]

@@ -3,89 +3,17 @@
 use std::{
     env,
     error::Error,
-    fmt::{self, Display, Formatter},
     io::{self, IsTerminal, Write},
     process::{self, Command, Stdio},
     thread,
 };
 
-use clap::{Parser, ValueEnum};
-use libruskel::{Ruskel, SearchDomain, SearchOptions, highlight};
+use clap::{ColorChoice, Parser};
+use libruskel::toolchain::ensure_nightly_with_docs;
+use libruskel::{Ruskel, SearchDomain, SearchOptions, highlight, parse_domain_token};
 use shell_words::split;
 use tokio::runtime::Runtime;
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-/// Controls when ANSI coloring is applied to CLI output.
-enum ColorMode {
-    /// Detect terminal capabilities automatically.
-    Auto,
-    /// Always emit ANSI escape sequences.
-    Always,
-    /// Never include color sequences.
-    Never,
-}
-
-impl Display for ColorMode {
-    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Auto => write!(f, "auto"),
-            Self::Always => write!(f, "always"),
-            Self::Never => write!(f, "never"),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-/// Tracing verbosity levels supported when running as an MCP server.
-enum LogLevel {
-    /// Log only errors.
-    Error,
-    /// Log warnings and errors.
-    Warn,
-    /// Log informational messages.
-    Info,
-    /// Log debugging details.
-    Debug,
-    /// Log the most verbose, trace-level diagnostics.
-    Trace,
-}
-
-impl LogLevel {
-    /// Convert the enum into the tracing filter string expected by `EnvFilter`.
-    fn as_filter(self) -> &'static str {
-        match self {
-            Self::Error => "error",
-            Self::Warn => "warn",
-            Self::Info => "info",
-            Self::Debug => "debug",
-            Self::Trace => "trace",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-/// Available search domains accepted by `--search-spec`.
-enum SearchSpec {
-    /// Match against item names.
-    Name,
-    /// Match against documentation comments.
-    Doc,
-    /// Match against canonical module paths.
-    Path,
-    /// Match against rendered signatures.
-    Signature,
-}
-
-impl From<SearchSpec> for SearchDomain {
-    fn from(spec: SearchSpec) -> Self {
-        match spec {
-            SearchSpec::Name => Self::NAMES,
-            SearchSpec::Doc => Self::DOCS,
-            SearchSpec::Path => Self::PATHS,
-            SearchSpec::Signature => Self::SIGNATURES,
-        }
-    }
-}
+use tracing_subscriber::filter::LevelFilter;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -112,9 +40,10 @@ struct Cli {
         long = "search-spec",
         value_delimiter = ',',
         value_name = "DOMAIN[,DOMAIN...]",
-        default_value = "name,doc,signature"
+        default_value = "name,doc,signature",
+        value_parser = parse_domain_token
     )]
-    search_spec: Vec<SearchSpec>,
+    search_spec: Vec<SearchDomain>,
 
     /// Execute the search in a case sensitive manner.
     #[arg(long, default_value_t = false)]
@@ -149,8 +78,8 @@ struct Cli {
     features: Vec<String>,
 
     /// Colorize output
-    #[arg(long, default_value_t = ColorMode::Auto, env = "RUSKEL_COLOR")]
-    color: ColorMode,
+    #[arg(long, default_value_t = ColorChoice::Auto, env = "RUSKEL_COLOR")]
+    color: ColorChoice,
 
     /// Disable paging
     #[arg(long, default_value_t = false)]
@@ -169,49 +98,28 @@ struct Cli {
     mcp: bool,
 
     /// Host:port to bind to when running as MCP server (requires --mcp)
-    #[arg(long)]
+    #[arg(long, requires = "mcp")]
     addr: Option<String>,
 
     /// Log level for tracing output (only used with --mcp --addr)
-    #[arg(long)]
-    log: Option<LogLevel>,
+    #[arg(long, requires_all = ["mcp", "addr"])]
+    log: Option<LevelFilter>,
 }
 
 /// Ensure the nightly toolchain and rust-docs JSON component are present.
 fn check_nightly_toolchain() -> Result<(), String> {
-    // Check if nightly toolchain is installed
-    let output = Command::new("rustup")
-        .args(["run", "nightly", "rustc", "--version"])
-        .stderr(Stdio::null())
-        .output()
-        .map_err(|e| format!("Failed to run rustup: {e}"))?;
-
-    if !output.status.success() {
-        return Err("ruskel requires the nightly toolchain to be installed.\nRun: rustup toolchain install nightly".to_string());
-    }
-
-    // Check if rust-docs-json component is available (for std library support)
-    let components_output = Command::new("rustup")
-        .args(["component", "list", "--toolchain", "nightly"])
-        .stderr(Stdio::null())
-        .output()
-        .map_err(|e| format!("Failed to check nightly components: {e}"))?;
-
-    if components_output.status.success() {
-        let components_str = String::from_utf8_lossy(&components_output.stdout);
-        let has_rust_docs_json = components_str
-            .lines()
-            .any(|line| line.starts_with("rust-docs-json") && line.contains("(installed)"));
-
-        if !has_rust_docs_json {
-            eprintln!(
-                "Warning: rust-docs-json component not installed. Standard library documentation will not be available."
-            );
-            eprintln!("To install: rustup component add rust-docs-json --toolchain nightly");
+    match ensure_nightly_with_docs() {
+        Ok(has_docs) => {
+            if !has_docs {
+                eprintln!(
+                    "Warning: rust-docs-json component not installed. Standard library documentation will not be available."
+                );
+                eprintln!("To install: rustup component add rust-docs-json --toolchain nightly");
+            }
+            Ok(())
         }
+        Err(err) => Err(err.to_string()),
     }
-
-    Ok(())
 }
 
 /// Launch the MCP server variant of ruskel using the provided CLI configuration.
@@ -222,7 +130,7 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn Error>> {
         || cli.no_default_features
         || cli.all_features
         || !cli.features.is_empty()
-        || !matches!(cli.color, ColorMode::Auto)
+        || !matches!(cli.color, ColorChoice::Auto)
         || cli.no_page
     {
         return Err(
@@ -242,7 +150,7 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn Error>> {
     runtime.block_on(ruskel_mcp::run_mcp_server(
         ruskel,
         cli.addr.clone(),
-        cli.log.map(|level| level.as_filter().to_string()),
+        cli.log,
     ))?;
 
     Ok(())
@@ -251,9 +159,9 @@ fn run_mcp(cli: &Cli) -> Result<(), Box<dyn Error>> {
 /// Render a skeleton locally and stream it to stdout or a pager.
 fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
     let should_highlight = match cli.color {
-        ColorMode::Never => false,
-        ColorMode::Always => true,
-        ColorMode::Auto => io::stdout().is_terminal(),
+        ColorChoice::Never => false,
+        ColorChoice::Always => true,
+        ColorChoice::Auto => io::stdout().is_terminal(),
     };
 
     let rs = Ruskel::new()
@@ -310,7 +218,7 @@ fn search_domains_from_cli(cli: &Cli) -> SearchDomain {
         cli.search_spec
             .iter()
             .fold(SearchDomain::empty(), |mut acc, spec| {
-                acc |= SearchDomain::from(*spec);
+                acc |= *spec;
                 acc
             })
     }
@@ -440,18 +348,6 @@ fn run_search(
 
 fn main() {
     let cli = Cli::parse();
-
-    // Validate that --addr is only used with --mcp
-    if cli.addr.is_some() && !cli.mcp {
-        eprintln!("Error: --addr can only be used with --mcp");
-        process::exit(1);
-    }
-
-    // Validate that --log is only used with --mcp --addr
-    if cli.log.is_some() && (cli.addr.is_none() || !cli.mcp) {
-        eprintln!("Error: --log can only be used with --mcp --addr");
-        process::exit(1);
-    }
 
     let result = if cli.mcp {
         run_mcp(&cli)

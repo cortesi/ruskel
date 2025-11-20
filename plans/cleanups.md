@@ -16,3 +16,11 @@
 1. [x] Centralize the reserved-word list so `render.rs` and `crateutils.rs` share a single source and stay consistent when Rust adds keywords (crates/libruskel/src/render.rs:30, crates/libruskel/src/crateutils.rs:23).
 2. [x] Cache syntect assets (syntax + theme + macro regex) behind a `Lazy` so repeated highlights avoid reloading large tables and recompiling regexes (crates/libruskel/src/highlight.rs:15, crates/libruskel/src/render.rs:259).
 3. [x] Fix typos in the public docs (`skeltonized`, `Ruskell`) to keep generated help text professional (crates/libruskel/src/lib.rs:8, crates/libruskel/src/ruskel.rs:21).
+
+4. Structural Simplification
+
+1. [x] Replace the bespoke `ColorMode` enum with clap's built-in `ColorChoice` so the CLI stops carrying its own Display impl and matching logic (crates/ruskel/src/main.rs), trimming code and letting clap handle color parsing.
+2. [x] Drop the custom `LogLevel` wrapper in favor of `tracing_subscriber::filter::LevelFilter` parsed directly by clap, removing the enum plus `as_filter` helper and their match arms (crates/ruskel/src/main.rs).
+3. [x] Eliminate the duplicate search-spec enums in the CLI and MCP crates by making `SearchDomain` parse/serialize string tokens in `crates/libruskel/src/search.rs`, then reusing it for `--search-spec` and `search_spec` so the extra enums and conversion loops can be deleted (crates/ruskel/src/main.rs; crates/mcp/src/server.rs).
+4. [x] Consolidate nightly/sysroot detection into a single helper reused by the CLI, libruskel, and xtask (current copies in crates/ruskel/src/main.rs, crates/libruskel/src/cargoutils.rs, xtask/src/main.rs) to avoid three nearly identical rustup probes and keep messaging consistent.
+5. [x] Encode the `--addr`/`--log` dependency on `--mcp` with clap `requires/conflicts_with` attributes instead of post-parse `if` checks, removing the manual validation branches and letting clap format the errors (crates/ruskel/src/main.rs).

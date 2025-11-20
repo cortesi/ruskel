@@ -32,6 +32,8 @@ mod ruskel;
 pub mod search;
 /// Target parsing helpers for user-provided specifications.
 mod target;
+/// Shared nightly/rustup helpers.
+pub mod toolchain;
 
 pub use ruskel::Ruskel;
 
@@ -40,6 +42,6 @@ pub use crate::{
     render::Renderer,
     search::{
         ListItem, SearchDomain, SearchIndex, SearchItemKind, SearchOptions, SearchPathSegment,
-        SearchResponse, SearchResult, describe_domains,
+        SearchResponse, SearchResult, describe_domains, parse_domain_token, parse_domain_tokens,
     },
 };

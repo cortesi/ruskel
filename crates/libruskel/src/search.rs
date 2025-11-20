@@ -1126,6 +1126,37 @@ pub fn describe_domains(domains: SearchDomain) -> Vec<&'static str> {
     labels
 }
 
+/// Parse a single domain token (case-insensitive) into a [`SearchDomain`] flag.
+pub fn parse_domain_token(token: &str) -> Result<SearchDomain, String> {
+    match token.to_ascii_lowercase().as_str() {
+        "name" | "names" => Ok(SearchDomain::NAMES),
+        "doc" | "docs" | "documentation" => Ok(SearchDomain::DOCS),
+        "path" | "paths" => Ok(SearchDomain::PATHS),
+        "signature" | "signatures" => Ok(SearchDomain::SIGNATURES),
+        other => Err(format!(
+            "invalid search domain '{other}'. Expected one of: name, doc, path, signature."
+        )),
+    }
+}
+
+/// Combine multiple domain tokens into a single [`SearchDomain`] set.
+pub fn parse_domain_tokens<'a, I>(tokens: I) -> SearchDomain
+where
+    I: IntoIterator<Item = &'a str>,
+{
+    let mut domains = SearchDomain::empty();
+    for token in tokens {
+        if let Ok(flag) = parse_domain_token(token) {
+            domains |= flag;
+        }
+    }
+    if domains.is_empty() {
+        SearchDomain::default()
+    } else {
+        domains
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;

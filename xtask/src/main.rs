@@ -1,8 +1,9 @@
 //! Build-time code generation and project maintenance tasks
 
-use std::{collections::HashMap, error::Error, fs, path::PathBuf, process::Command};
+use std::{collections::HashMap, error::Error, fs, path::PathBuf};
 
 use clap::{Parser, Subcommand};
+use libruskel::toolchain::nightly_sysroot;
 use rustdoc_types::{Crate, ItemEnum, Visibility};
 
 #[derive(Parser)]
@@ -35,23 +36,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 }
 
-/// Locate the nightly toolchain sysroot used for documentation JSON artifacts.
-fn get_sysroot() -> Result<PathBuf, Box<dyn Error>> {
-    let output = Command::new("rustc")
-        .args(["+nightly", "--print", "sysroot"])
-        .output()?;
-
-    if !output.status.success() {
-        return Err("Failed to get nightly sysroot - ensure nightly toolchain is installed".into());
-    }
-
-    let sysroot = String::from_utf8(output.stdout)?.trim().to_string();
-    Ok(PathBuf::from(sysroot))
-}
-
 /// Load the rustdoc JSON metadata for the provided crate name.
 fn load_crate_json(crate_name: &str) -> Result<Crate, Box<dyn Error>> {
-    let sysroot = get_sysroot()?;
+    let sysroot = nightly_sysroot()?;
     let json_path = sysroot
         .join("share/doc/rust/json")
         .join(format!("{}.json", crate_name));

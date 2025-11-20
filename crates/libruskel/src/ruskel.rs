@@ -33,6 +33,16 @@ pub struct Ruskel {
     frontmatter: bool,
 }
 
+fn prune_redundant_use_items(results: &mut Vec<ListItem>) {
+    let has_non_use = results
+        .iter()
+        .any(|item| !matches!(item.kind, SearchItemKind::Use | SearchItemKind::Crate));
+
+    if has_non_use {
+        results.retain(|item| item.kind != SearchItemKind::Use);
+    }
+}
+
 impl Default for Ruskel {
     fn default() -> Self {
         Self::new()
@@ -243,7 +253,7 @@ impl Ruskel {
                 .collect()
         };
 
-        results.retain(|item| item.kind != SearchItemKind::Use);
+        prune_redundant_use_items(&mut results);
 
         Ok(results)
     }
@@ -308,5 +318,66 @@ impl Ruskel {
             features,
             private_items,
         )?)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn list_item(kind: SearchItemKind, path: &str) -> ListItem {
+        ListItem {
+            kind,
+            path: path.to_string(),
+        }
+    }
+
+    #[test]
+    fn keeps_use_entries_when_they_are_the_only_members() {
+        let mut items = vec![
+            list_item(SearchItemKind::Crate, "only_use"),
+            list_item(SearchItemKind::Use, "only_use::Serialize"),
+        ];
+
+        prune_redundant_use_items(&mut items);
+
+        assert_eq!(
+            items,
+            vec![
+                list_item(SearchItemKind::Crate, "only_use"),
+                list_item(SearchItemKind::Use, "only_use::Serialize"),
+            ]
+        );
+    }
+
+    #[test]
+    fn removes_use_entries_when_other_items_are_present() {
+        let mut items = vec![
+            list_item(SearchItemKind::Crate, "widget"),
+            list_item(SearchItemKind::Use, "widget::prelude"),
+            list_item(SearchItemKind::Function, "widget::draw"),
+        ];
+
+        prune_redundant_use_items(&mut items);
+
+        assert_eq!(
+            items,
+            vec![
+                list_item(SearchItemKind::Crate, "widget"),
+                list_item(SearchItemKind::Function, "widget::draw"),
+            ]
+        );
+    }
+
+    #[test]
+    fn preserves_use_entries_when_no_crate_item_is_present() {
+        let mut items = vec![list_item(SearchItemKind::Use, "widget::prelude")];
+
+        prune_redundant_use_items(&mut items);
+
+        assert_eq!(
+            items,
+            vec![list_item(SearchItemKind::Use, "widget::prelude")]
+        );
     }
 }

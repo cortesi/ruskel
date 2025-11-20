@@ -3,7 +3,6 @@ use std::{
     env, fs,
     io::{self, Write},
     path::{Component, Path, PathBuf, absolute},
-    process::Command,
 };
 
 use cargo::{core::Workspace, ops, util::context::GlobalContext};
@@ -14,27 +13,7 @@ use tempfile::TempDir;
 
 use super::target::{Entrypoint, Target};
 use crate::error::{Result, RuskelError, convert_cargo_error};
-
-/// Get the sysroot path for the nightly toolchain
-fn get_sysroot() -> Result<PathBuf> {
-    let output = Command::new("rustc")
-        .args(["+nightly", "--print", "sysroot"])
-        .output()
-        .map_err(|e| RuskelError::Generate(format!("Failed to get sysroot: {e}")))?;
-
-    if !output.status.success() {
-        return Err(RuskelError::Generate(
-            "Failed to get nightly sysroot - ensure nightly toolchain is installed".to_string(),
-        ));
-    }
-
-    let sysroot = String::from_utf8(output.stdout)
-        .map_err(|e| RuskelError::Generate(format!("Invalid UTF-8 in sysroot path: {e}")))?
-        .trim()
-        .to_string();
-
-    Ok(PathBuf::from(sysroot))
-}
+use crate::toolchain::nightly_sysroot;
 
 /// Check if a crate name is a standard library crate
 fn is_std_library_crate(name: &str) -> bool {
@@ -162,7 +141,7 @@ fn resolve_std_reexport(target_str: &str) -> Option<String> {
 
 /// Load pre-built JSON documentation for a standard library crate
 fn load_std_library_json(crate_name: &str, display_name: Option<&str>) -> Result<Crate> {
-    let sysroot = get_sysroot()?;
+    let sysroot = nightly_sysroot()?;
     let json_path = sysroot
         .join("share")
         .join("doc")
