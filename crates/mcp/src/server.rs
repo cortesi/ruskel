@@ -1,4 +1,4 @@
-use std::io::stdout;
+use std::{env, io::stdout};
 
 use libruskel::{Ruskel, SearchDomain, SearchOptions, describe_domains, parse_domain_tokens};
 use serde::{Deserialize, Serialize};
@@ -114,6 +114,10 @@ impl RuskelServer {
     /// - Pass `frontmatter=false` when you need the raw Rust skeleton without the leading comment
     ///   block summarising context.
     async fn ruskel(&self, _ctx: &ServerCtx, params: RuskelSkeletonTool) -> Result<CallToolResult> {
+        if env::var_os("RUSKEL_MCP_TEST_MODE").is_some() {
+            return Ok(run_test_mode(params));
+        }
+
         let ruskel = self.ruskel.clone().with_frontmatter(params.frontmatter);
 
         if let Some(query) = params
@@ -234,6 +238,29 @@ impl RuskelServer {
             }
         }
     }
+}
+
+/// Lightweight stubbed response used when the MCP server is started in test mode.
+///
+/// This bypasses expensive rustdoc generation, allowing integration tests to run quickly
+/// while still exercising the MCP protocol surface.
+fn run_test_mode(params: RuskelSkeletonTool) -> CallToolResult {
+    let mut summary = String::new();
+    summary.push_str("ruskel test-mode output\n");
+    summary.push_str(&format!("target: {}\n", params.target));
+    summary.push_str(&format!("private: {}\n", params.private));
+
+    if let Some(search) = params.search {
+        summary.push_str(&format!("search: {}\n", search));
+    }
+
+    if let Some(spec) = params.search_spec {
+        if !spec.is_empty() {
+            summary.push_str(&format!("search_spec: {}\n", spec.join(",")));
+        }
+    }
+
+    CallToolResult::new().with_text_content(summary)
 }
 
 const fn default_frontmatter_enabled() -> bool {

@@ -2,56 +2,43 @@
 //!
 //! These tests verify the MCP server protocol implementation using the tenx-mcp client.
 
-use std::{io, path::Path, process::Command, time::Duration};
+use std::{io, sync::OnceLock, time::Duration};
 
-use tenx_mcp::{Arguments, Client, Result, ServerAPI, schema::InitializeResult};
+use libruskel::Ruskel;
+use ruskel_mcp::RuskelServer;
+use tenx_mcp::{Arguments, Client, Result, Server, ServerAPI, schema::InitializeResult};
 use tokio::{
-    process::{Child, Command as TokioCommand},
+    io::{duplex, split},
+    task::JoinHandle,
     time::timeout,
 };
 
-/// Helper to create a test MCP client connected to the ruskel server process
-async fn create_test_client() -> Result<(Client, Child)> {
-    // Get the workspace root by going up from the test directory
-    let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let workspace_root = Path::new(manifest_dir)
-        .parent() // crates
-        .unwrap()
-        .parent() // workspace root
-        .unwrap();
+static TEST_MODE_ENV: OnceLock<()> = OnceLock::new();
+type ServerTask = JoinHandle<()>;
 
-    // First ensure the binary is built
-    let output = Command::new("cargo")
-        .current_dir(workspace_root)
-        .args(["build", "--bin", "ruskel"])
-        .output()
-        .expect("Failed to build ruskel");
+/// Helper to create a test MCP client connected to an in-process server.
+async fn create_test_client() -> Result<(Client, ServerTask)> {
+    TEST_MODE_ENV.get_or_init(|| unsafe {
+        std::env::set_var("RUSKEL_MCP_TEST_MODE", "1");
+    });
 
-    if !output.status.success() {
-        panic!(
-            "Failed to build ruskel: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
+    let ruskel = Ruskel::new().with_silent(true);
+    let server = Server::default().with_connection(move || RuskelServer::new(ruskel.clone()));
 
-    // Find the target directory
-    let target_dir = workspace_root.join("target");
-    let profile = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        "release"
-    };
-    let binary_path = target_dir.join(profile).join("ruskel");
+    let (server_side, client_side) = duplex(64 * 1024);
+    let (server_reader, server_writer) = split(server_side);
+    let (client_reader, client_writer) = split(client_side);
 
-    // Create client
+    let server_task = tokio::spawn(async move {
+        if let Err(err) = server.serve_stream(server_reader, server_writer).await {
+            eprintln!("test MCP server stopped: {err}");
+        }
+    });
+
     let mut client = Client::new("test-client", "1.0.0");
+    client.connect_stream(client_reader, client_writer).await?;
 
-    let mut cmd = TokioCommand::new(binary_path);
-    cmd.arg("--mcp");
-
-    let child = client.connect_process(cmd).await?;
-
-    Ok((client, child))
+    Ok((client, server_task))
 }
 
 /// Initialize the client connection
@@ -60,8 +47,10 @@ async fn initialize_client(client: &mut Client) -> Result<InitializeResult> {
 }
 
 /// Terminate spawned MCP server process and surface unexpected failures.
-async fn terminate_child(child: &mut Child) -> io::Result<()> {
-    child.kill().await
+async fn terminate_child(child: &mut ServerTask) -> io::Result<()> {
+    child.abort();
+    let _ = child.await;
+    Ok(())
 }
 
 #[cfg(test)]
