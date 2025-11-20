@@ -2,7 +2,7 @@
 //!
 //! These tests verify the MCP server protocol implementation using the tenx-mcp client.
 
-use std::{io, sync::OnceLock, time::Duration};
+use std::{env, io, sync::OnceLock, time::Duration};
 
 use libruskel::Ruskel;
 use ruskel_mcp::RuskelServer;
@@ -19,7 +19,7 @@ type ServerTask = JoinHandle<()>;
 /// Helper to create a test MCP client connected to an in-process server.
 async fn create_test_client() -> Result<(Client, ServerTask)> {
     TEST_MODE_ENV.get_or_init(|| unsafe {
-        std::env::set_var("RUSKEL_MCP_TEST_MODE", "1");
+        env::set_var("RUSKEL_MCP_TEST_MODE", "1");
     });
 
     let ruskel = Ruskel::new().with_silent(true);
@@ -49,8 +49,11 @@ async fn initialize_client(client: &mut Client) -> Result<InitializeResult> {
 /// Terminate spawned MCP server process and surface unexpected failures.
 async fn terminate_child(child: &mut ServerTask) -> io::Result<()> {
     child.abort();
-    let _ = child.await;
-    Ok(())
+    match child.await {
+        Ok(()) => Ok(()),
+        Err(err) if err.is_cancelled() => Ok(()),
+        Err(err) => Err(io::Error::other(err)),
+    }
 }
 
 #[cfg(test)]

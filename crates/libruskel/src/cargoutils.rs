@@ -12,8 +12,10 @@ use semver::Version;
 use tempfile::TempDir;
 
 use super::target::{Entrypoint, Target};
-use crate::error::{Result, RuskelError, convert_cargo_error};
-use crate::toolchain::nightly_sysroot;
+use crate::{
+    error::{Result, RuskelError, convert_cargo_error},
+    toolchain::nightly_sysroot,
+};
 
 /// Check if a crate name is a standard library crate
 fn is_std_library_crate(name: &str) -> bool {

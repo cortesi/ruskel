@@ -9,8 +9,10 @@ use std::{
 };
 
 use clap::{ColorChoice, Parser};
-use libruskel::toolchain::ensure_nightly_with_docs;
-use libruskel::{Ruskel, SearchDomain, SearchOptions, highlight, parse_domain_token};
+use libruskel::{
+    Ruskel, SearchDomain, SearchOptions, highlight, parse_domain_token,
+    toolchain::ensure_nightly_with_docs,
+};
 use shell_words::split;
 use tokio::runtime::Runtime;
 use tracing_subscriber::filter::LevelFilter;

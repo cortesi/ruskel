@@ -254,15 +254,16 @@ fn run_test_mode(params: RuskelSkeletonTool) -> CallToolResult {
         summary.push_str(&format!("search: {}\n", search));
     }
 
-    if let Some(spec) = params.search_spec {
-        if !spec.is_empty() {
-            summary.push_str(&format!("search_spec: {}\n", spec.join(",")));
-        }
+    if let Some(spec) = params.search_spec
+        && !spec.is_empty()
+    {
+        summary.push_str(&format!("search_spec: {}\n", spec.join(",")));
     }
 
     CallToolResult::new().with_text_content(summary)
 }
 
+/// Frontmatter is enabled by default when no user preference is provided.
 const fn default_frontmatter_enabled() -> bool {
     true
 }

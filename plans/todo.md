@@ -38,3 +38,18 @@ Provide users with actionable error messages when rustdoc JSON generation fails.
 1. [x] Investigate rustdoc_json error handling paths to identify parse vs compile failures.
 2. [x] Improve error reporting so ruskel surfaces the specific failure cause to the user.
 3. [x] Update docs or tests if needed to cover the refined messaging.
+
+5. Stage Five: Restore list output for re-export-only crates
+Ensure list mode surfaces `pub use` re-exports so crates without direct items still show content.
+
+1. [x] Add regression coverage for list filtering when results contain only re-export entries.
+2. [x] Adjust `Ruskel::list` filtering so `use` items remain when they are the only matches.
+3. [x] Run formatting, linting, and tests to validate the changes.
+
+6. Stage Six: Update dependencies to latest majors
+Keep dependencies current and resolve any compatibility fallout from upgrades.
+
+1. [x] Run `cargo update --verbose` to refresh the lockfile within current constraints.
+2. [x] Upgrade workspace dependencies to the latest major versions and regenerate the lockfile.
+3. [x] Address build, lint, or doc issues caused by the upgrades.
+4. [x] Run formatting, linting, and the full test suite to ensure stability.
