@@ -1167,6 +1167,7 @@ mod tests {
     };
 
     use super::*;
+    use crate::error::{Result, RuskelError};
 
     fn empty_generics() -> Generics {
         Generics {
@@ -1437,7 +1438,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_domain_hits_report_all_matches() {
+    fn multi_domain_hits_report_all_matches() -> Result<()> {
         let index = build_index();
         let mut options = SearchOptions::new("Widget");
         options.domains = SearchDomain::NAMES | SearchDomain::DOCS;
@@ -1445,9 +1446,11 @@ mod tests {
         let widget = results
             .into_iter()
             .find(|r| r.raw_name == "Widget")
-            .expect("Widget result");
+            .ok_or_else(|| RuskelError::FilterNotMatched("Widget".into()))?;
         assert!(widget.matched.contains(SearchDomain::NAMES));
         assert!(widget.matched.contains(SearchDomain::DOCS));
+
+        Ok(())
     }
 
     #[test]

@@ -531,27 +531,27 @@ impl RenderState<'_, '_> {
         let import = try_extract_item!(item, ItemEnum::Use)?;
 
         if import.is_glob {
-            if let Some(source_id) = &import.id {
-                if let Ok(source_item) = must_get(self.crate_data, source_id) {
-                    let module = try_extract_item!(source_item, ItemEnum::Module)?;
-                    let mut output = String::new();
-                    for item_id in &module.items {
-                        let item = must_get(self.crate_data, item_id)?;
-                        if self.is_visible(item) {
-                            output.push_str(&self.render_item(path_prefix, item, true)?);
-                        }
+            if let Some(source_id) = &import.id
+                && let Ok(source_item) = must_get(self.crate_data, source_id)
+            {
+                let module = try_extract_item!(source_item, ItemEnum::Module)?;
+                let mut output = String::new();
+                for item_id in &module.items {
+                    let item = must_get(self.crate_data, item_id)?;
+                    if self.is_visible(item) {
+                        output.push_str(&self.render_item(path_prefix, item, true)?);
                     }
-                    return Ok(output);
                 }
+                return Ok(output);
             }
             // If we can't resolve the glob import, fall back to rendering it as-is
             return Ok(format!("pub use {}::*;\n", escape_path(&import.source)));
         }
 
-        if let Some(imported_id) = import.id.as_ref() {
-            if let Ok(imported_item) = must_get(self.crate_data, imported_id) {
-                return self.render_item(path_prefix, imported_item, true);
-            }
+        if let Some(imported_id) = import.id.as_ref()
+            && let Ok(imported_item) = must_get(self.crate_data, imported_id)
+        {
+            return self.render_item(path_prefix, imported_item, true);
         }
 
         let mut output = docs(item);
@@ -591,12 +591,11 @@ impl RenderState<'_, '_> {
         let expand_children =
             !selection_active || self.selection_expands(&item.id) || parent_expanded;
 
-        if let Some(trait_) = &impl_.trait_ {
-            if let Ok(trait_item) = must_get(self.crate_data, &trait_.id) {
-                if !self.is_visible(trait_item) {
-                    return Ok(String::new());
-                }
-            }
+        if let Some(trait_) = &impl_.trait_
+            && let Ok(trait_item) = must_get(self.crate_data, &trait_.id)
+            && !self.is_visible(trait_item)
+        {
+            return Ok(String::new());
         }
 
         let where_clause = render_where_clause(&impl_.generics);
@@ -1135,7 +1134,7 @@ mod tests {
     use super::*;
     use crate::{
         frontmatter::{FrontmatterConfig, FrontmatterHit, FrontmatterSearch},
-        search::{SearchDomain, SearchIndex, SearchOptions, build_render_selection},
+        search::{SearchDomain, SearchIndex, SearchOptions, SearchResult, build_render_selection},
     };
 
     fn empty_generics() -> Generics {
@@ -1602,182 +1601,179 @@ mod tests {
         }
     }
 
+    fn find_result_by_suffix(
+        results: impl IntoIterator<Item = SearchResult>,
+        suffix: &str,
+    ) -> Result<SearchResult> {
+        results
+            .into_iter()
+            .find(|r| r.path_string.ends_with(suffix))
+            .ok_or_else(|| RuskelError::FilterNotMatched(suffix.to_string()))
+    }
+
     #[test]
-    fn selection_renders_only_matching_struct_field() {
+    fn selection_renders_only_matching_struct_field() -> Result<()> {
         let crate_data = fixture_crate();
         let index = SearchIndex::build(&crate_data, false);
         let mut options = SearchOptions::new("Widget::id");
         options.domains = SearchDomain::PATHS;
         let results = index.search(&options);
-        let field = results
-            .into_iter()
-            .find(|r| r.path_string.ends_with("Widget::id"))
-            .expect("field result");
+        let field = find_result_by_suffix(results, "Widget::id")?;
         let selection = build_render_selection(&index, slice::from_ref(&field), true);
-        let rendered =
-            render_with_selection(&crate_data, selection).expect("render with selection");
+        let rendered = render_with_selection(&crate_data, selection)?;
 
         assert!(rendered.contains("struct Widget"));
         assert!(rendered.contains("id: u32"));
         assert!(!rendered.contains("name: String"));
         assert!(!rendered.contains("fn helper"));
+
+        Ok(())
     }
 
     #[test]
-    fn selection_renders_only_matching_impl_method() {
+    fn selection_renders_only_matching_impl_method() -> Result<()> {
         let crate_data = fixture_crate();
         let index = SearchIndex::build(&crate_data, false);
         let mut options = SearchOptions::new("render");
         options.domains = SearchDomain::NAMES;
         let results = index.search(&options);
-        let method = results
-            .into_iter()
-            .find(|r| r.path_string.ends_with("Widget::render"))
-            .expect("method result");
+        let method = find_result_by_suffix(results, "Widget::render")?;
         let selection = build_render_selection(&index, slice::from_ref(&method), true);
-        let rendered =
-            render_with_selection(&crate_data, selection).expect("render with selection");
+        let rendered = render_with_selection(&crate_data, selection)?;
 
         assert!(rendered.contains("impl"));
         assert!(rendered.contains("fn render"));
         assert!(!rendered.contains("fn helper"));
+
+        Ok(())
     }
 
     #[test]
-    fn selection_renders_only_matching_enum_variant() {
+    fn selection_renders_only_matching_enum_variant() -> Result<()> {
         let crate_data = fixture_crate();
         let index = SearchIndex::build(&crate_data, false);
         let mut options = SearchOptions::new("Named");
         options.domains = SearchDomain::NAMES;
         let results = index.search(&options);
-        let variant = results
-            .into_iter()
-            .find(|r| r.path_string.ends_with("Palette::Named"))
-            .expect("variant result");
+        let variant = find_result_by_suffix(results, "Palette::Named")?;
         let selection = build_render_selection(&index, slice::from_ref(&variant), true);
-        let rendered =
-            render_with_selection(&crate_data, selection).expect("render with selection");
+        let rendered = render_with_selection(&crate_data, selection)?;
 
         assert!(rendered.contains("enum Palette"));
         assert!(rendered.contains("Named"));
         assert!(rendered.contains("pub label: String"));
         assert!(!rendered.contains("Unspecified"));
+
+        Ok(())
     }
 
     #[test]
-    fn struct_match_expands_children_by_default() {
+    fn struct_match_expands_children_by_default() -> Result<()> {
         let crate_data = fixture_crate();
         let index = SearchIndex::build(&crate_data, false);
         let mut options = SearchOptions::new("Widget");
         options.domains = SearchDomain::NAMES;
         let results = index.search(&options);
-        let widget = results
-            .into_iter()
-            .find(|r| r.path_string.ends_with("Widget"))
-            .expect("struct result");
+        let widget = find_result_by_suffix(results, "Widget")?;
         let selection = build_render_selection(&index, slice::from_ref(&widget), true);
-        let rendered =
-            render_with_selection(&crate_data, selection).expect("render with selection");
+        let rendered = render_with_selection(&crate_data, selection)?;
 
         assert!(rendered.contains("struct Widget"));
         assert!(rendered.contains("id: u32"));
         assert!(rendered.contains("name: String"));
         assert!(rendered.contains("fn render"));
+
+        Ok(())
     }
 
     #[test]
-    fn struct_match_respects_direct_match_only() {
+    fn struct_match_respects_direct_match_only() -> Result<()> {
         let crate_data = fixture_crate();
         let index = SearchIndex::build(&crate_data, false);
         let mut options = SearchOptions::new("Widget");
         options.domains = SearchDomain::NAMES;
         let results = index.search(&options);
-        let widget = results
-            .into_iter()
-            .find(|r| r.path_string.ends_with("Widget"))
-            .expect("struct result");
+        let widget = find_result_by_suffix(results, "Widget")?;
         let selection = build_render_selection(&index, slice::from_ref(&widget), false);
-        let rendered =
-            render_with_selection(&crate_data, selection).expect("render with selection");
+        let rendered = render_with_selection(&crate_data, selection)?;
 
         assert!(rendered.contains("struct Widget"));
         assert!(!rendered.contains("id: u32"));
         assert!(!rendered.contains("name: String"));
         assert!(!rendered.contains("fn render"));
+
+        Ok(())
     }
 
     #[test]
-    fn module_match_expands_children_by_default() {
+    fn module_match_expands_children_by_default() -> Result<()> {
         let crate_data = fixture_crate();
         let index = SearchIndex::build(&crate_data, false);
         let mut options = SearchOptions::new("tools");
         options.domains = SearchDomain::NAMES;
         let results = index.search(&options);
-        let module = results
-            .into_iter()
-            .find(|r| r.path_string.ends_with("tools"))
-            .expect("module result");
+        let module = find_result_by_suffix(results, "tools")?;
         let selection = build_render_selection(&index, slice::from_ref(&module), true);
-        let rendered =
-            render_with_selection(&crate_data, selection).expect("render with selection");
+        let rendered = render_with_selection(&crate_data, selection)?;
 
         assert!(rendered.contains("mod tools"));
         assert!(rendered.contains("fn instrument"));
+
+        Ok(())
     }
 
     #[test]
-    fn module_match_respects_direct_match_only() {
+    fn module_match_respects_direct_match_only() -> Result<()> {
         let crate_data = fixture_crate();
         let index = SearchIndex::build(&crate_data, false);
         let mut options = SearchOptions::new("tools");
         options.domains = SearchDomain::NAMES;
         let results = index.search(&options);
-        let module = results
-            .into_iter()
-            .find(|r| r.path_string.ends_with("tools"))
-            .expect("module result");
+        let module = find_result_by_suffix(results, "tools")?;
         let selection = build_render_selection(&index, slice::from_ref(&module), false);
-        let rendered =
-            render_with_selection(&crate_data, selection).expect("render with selection");
+        let rendered = render_with_selection(&crate_data, selection)?;
 
         assert!(rendered.contains("mod tools"));
         assert!(!rendered.contains("fn instrument"));
+
+        Ok(())
     }
 
     #[test]
-    fn renderer_omits_empty_impl_blocks_when_private_items_hidden() {
+    fn renderer_omits_empty_impl_blocks_when_private_items_hidden() -> Result<()> {
         let crate_data = fixture_crate();
-        let output =
-            render_allowing_format_errors(Renderer::new(), &crate_data).expect("render crate");
+        let output = render_allowing_format_errors(Renderer::new(), &crate_data)?;
 
         assert!(
             !output.contains("impl Widget {}"),
             "expected renderer to omit empty impl blocks:\n{output}"
         );
+
+        Ok(())
     }
 
     #[test]
-    fn renderer_keeps_impl_when_private_items_rendered() {
+    fn renderer_keeps_impl_when_private_items_rendered() -> Result<()> {
         let crate_data = fixture_crate();
         let output =
-            render_allowing_format_errors(Renderer::new().with_private_items(true), &crate_data)
-                .expect("render crate");
+            render_allowing_format_errors(Renderer::new().with_private_items(true), &crate_data)?;
 
         assert!(output.contains("impl Widget {"));
         assert!(output.contains("fn render"));
         assert!(output.contains("fn internal_helper"));
+
+        Ok(())
     }
 
     #[test]
-    fn frontmatter_inserts_target_visibility_and_path() {
+    fn frontmatter_inserts_target_visibility_and_path() -> Result<()> {
         let crate_data = fixture_crate();
         let frontmatter = FrontmatterConfig::for_target("fixture::Widget")
             .with_filter(Some("fixture::Widget".into()));
         let output = render_allowing_format_errors(
             Renderer::new().with_frontmatter(frontmatter),
             &crate_data,
-        )
-        .expect("render crate");
+        )?;
 
         assert!(output.starts_with(
             "// Ruskel skeleton - syntactically valid Rust with implementation omitted."
@@ -1789,21 +1785,24 @@ mod tests {
         assert!(output.contains("blanket_impls=false"));
         assert!(!output.contains("ruskel::frontmatter"));
         assert!(!output.contains("validity:"));
+
+        Ok(())
     }
 
     #[test]
-    fn frontmatter_can_be_disabled() {
+    fn frontmatter_can_be_disabled() -> Result<()> {
         let crate_data = fixture_crate();
-        let output =
-            render_allowing_format_errors(Renderer::new(), &crate_data).expect("render crate");
+        let output = render_allowing_format_errors(Renderer::new(), &crate_data)?;
 
         assert!(!output.starts_with(
             "// Ruskel skeleton - syntactically valid Rust with implementation omitted."
         ));
+
+        Ok(())
     }
 
     #[test]
-    fn frontmatter_lists_search_hits_with_domains() {
+    fn frontmatter_lists_search_hits_with_domains() -> Result<()> {
         let crate_data = fixture_crate();
         let hits = vec![FrontmatterHit {
             path: "fixture::Widget".into(),
@@ -1820,12 +1819,14 @@ mod tests {
             .with_filter(Some("fixture".into()))
             .with_search(search_meta);
         let output = Renderer::new().with_frontmatter(frontmatter);
-        let output = render_allowing_format_errors(output, &crate_data).expect("render crate");
+        let output = render_allowing_format_errors(output, &crate_data)?;
 
         assert!(output.contains(
             "// search: query=\"Widget\"; case_sensitive=false; domains=name, doc; expand_containers=true"
         ));
         assert!(output.contains("// hits (1):"));
         assert!(output.contains("//   - fixture::Widget [name]"));
+
+        Ok(())
     }
 }

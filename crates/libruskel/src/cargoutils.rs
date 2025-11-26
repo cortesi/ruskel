@@ -189,14 +189,27 @@ enum CargoPath {
 
 impl CargoPath {
     /// Return the root directory tied to this Cargo source.
-    pub fn as_path(&self) -> &Path {
+    pub fn as_path(&self) -> Result<&Path> {
         match self {
-            Self::Path(path) => path.as_path(),
-            Self::TempDir(temp_dir) => temp_dir.path(),
-            Self::StdLibrary(_, _) => {
-                panic!("Standard library crates don't have a filesystem path")
-            }
+            Self::Path(path) => Ok(path.as_path()),
+            Self::TempDir(temp_dir) => Ok(temp_dir.path()),
+            Self::StdLibrary(actual, display) => Err(RuskelError::Generate(format!(
+                "Standard library crate '{display}' (resolved as '{actual}') does not have a filesystem path"
+            ))),
         }
+    }
+
+    /// Return the directory containing `manifest_path`, failing when no parent exists.
+    fn manifest_dir_from_path(manifest_path: &Path, package_name: &str) -> Result<PathBuf> {
+        manifest_path
+            .parent()
+            .map(Path::to_path_buf)
+            .ok_or_else(|| {
+                RuskelError::Generate(format!(
+                    "Package '{package_name}' manifest path '{}' has no parent directory",
+                    manifest_path.display()
+                ))
+            })
     }
 
     /// Load rustdoc JSON for the crate represented by this cargo path.
@@ -226,7 +239,7 @@ impl CargoPath {
             .map_err(|e| RuskelError::ManifestParse(e.to_string()))?;
 
         // Check if there's a [lib] section or if src/lib.rs exists
-        let has_lib = manifest.lib.is_some() || self.as_path().join("src/lib.rs").exists();
+        let has_lib = manifest.lib.is_some() || self.as_path()?.join("src/lib.rs").exists();
 
         if !has_lib {
             return Err(RuskelError::Generate(
@@ -275,7 +288,7 @@ impl CargoPath {
                 "Standard library crates don't have a manifest path".to_string(),
             )),
             _ => {
-                let manifest_path = self.as_path().join("Cargo.toml");
+                let manifest_path = self.as_path()?.join("Cargo.toml");
                 absolute(&manifest_path).map_err(|err| {
                     RuskelError::Generate(format!(
                         "Failed to resolve manifest path for '{}': {err}",
@@ -290,7 +303,7 @@ impl CargoPath {
     pub fn has_manifest(&self) -> Result<bool> {
         match self {
             Self::StdLibrary(_, _) => Ok(false),
-            _ => Ok(self.as_path().join("Cargo.toml").exists()),
+            _ => Ok(self.as_path()?.join("Cargo.toml").exists()),
         }
     }
 
@@ -349,9 +362,9 @@ impl CargoPath {
         for package in ps.packages() {
             let package_name = package.name().as_str();
             if package_name == dependency || package_name == alt_dependency {
-                return Ok(Some(Self::Path(
-                    package.manifest_path().parent().unwrap().to_path_buf(),
-                )));
+                let manifest_dir =
+                    Self::manifest_dir_from_path(package.manifest_path(), package_name)?;
+                return Ok(Some(Self::Path(manifest_dir)));
             }
         }
         Ok(None)
@@ -392,7 +405,8 @@ impl CargoPath {
         for package in workspace.members() {
             let package_name = package.name().as_str();
             if package_name == module_name || package_name == alt_name {
-                let package_path = package.manifest_path().parent().unwrap().to_path_buf();
+                let package_path =
+                    Self::manifest_dir_from_path(package.manifest_path(), package_name)?;
                 return Ok(Some(ResolvedTarget::new(Self::Path(package_path), &[])));
             }
         }
@@ -718,19 +732,19 @@ pub fn resolve_target(target_str: &str, offline: bool) -> Result<ResolvedTarget>
                 ResolvedTarget::from_dummy_crate(name, version.clone(), &target.path, offline)
             } else {
                 let resolved = ResolvedTarget::from_target(target.clone(), offline)?;
-                if !resolved.filter.is_empty() {
-                    let first_component = resolved.filter.split("::").next().unwrap().to_string();
-                    if let Some(cp) = resolved
+                if let Some(first_component) = resolved
+                    .filter
+                    .split("::")
+                    .next()
+                    .filter(|component| !component.is_empty())
+                    && let Some(cp) = resolved
                         .package_path
-                        .find_dependency(&first_component, offline)?
-                    {
-                        Ok(ResolvedTarget::new(cp, &target.path))
-                    } else {
-                        Ok(resolved)
-                    }
-                } else {
-                    Ok(resolved)
+                        .find_dependency(first_component, offline)?
+                {
+                    return Ok(ResolvedTarget::new(cp, &target.path));
                 }
+
+                Ok(resolved)
             }
         }
     }
@@ -850,7 +864,11 @@ fn extract_primary_diagnostic(stderr: &str) -> Option<String> {
                 break;
             }
 
-            snippet.push(lines.next().unwrap().trim_end().to_string());
+            if let Some(next_line) = lines.next() {
+                snippet.push(next_line.trim_end().to_string());
+            } else {
+                break;
+            }
         }
 
         return Some(snippet.join("\n"));
@@ -910,7 +928,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn primary_diagnostic_extracts_compiler_error() {
+    fn primary_diagnostic_extracts_compiler_error() -> Result<()> {
         let stderr = r#"
 error: expected pattern, found `=`
  --> src/lib.rs:3:9
@@ -921,11 +939,14 @@ error: expected pattern, found `=`
 error: Compilation failed, aborting rustdoc
 "#;
 
-        let diagnostic =
-            extract_primary_diagnostic(stderr).expect("should find primary diagnostic");
+        let diagnostic = extract_primary_diagnostic(stderr).ok_or_else(|| {
+            RuskelError::Generate("failed to find primary diagnostic".to_string())
+        })?;
         assert!(diagnostic.contains("expected pattern"));
         assert!(diagnostic.contains("src/lib.rs:3:9"));
         assert!(!diagnostic.contains("Compilation failed"));
+
+        Ok(())
     }
 
     #[test]
@@ -1046,7 +1067,7 @@ error: Compilation failed, aborting rustdoc
     #[test]
     fn test_create_dummy_crate() -> Result<()> {
         let cargo_path = create_dummy_crate("serde", None, None)?;
-        let path = cargo_path.as_path();
+        let path = cargo_path.as_path()?;
 
         assert!(path.join("Cargo.toml").exists());
 
@@ -1060,7 +1081,7 @@ error: Compilation failed, aborting rustdoc
     #[test]
     fn test_create_dummy_crate_with_features() -> Result<()> {
         let cargo_path = create_dummy_crate("serde", Some("1.0".to_string()), Some(&["derive"]))?;
-        let path = cargo_path.as_path();
+        let path = cargo_path.as_path()?;
 
         assert!(path.join("Cargo.toml").exists());
 
@@ -1146,7 +1167,7 @@ version = "0.1.0"
 
         // Test finding a package in the workspace
         if let Some(resolved) = cargo_path.find_workspace_package("member1")? {
-            assert_eq!(resolved.package_path.as_path(), member1_dir);
+            assert_eq!(resolved.package_path.as_path()?, member1_dir);
             assert_eq!(resolved.filter, "");
         } else {
             panic!("Failed to find package in the workspace");
@@ -1154,7 +1175,7 @@ version = "0.1.0"
 
         // Test finding another package in the workspace
         if let Some(resolved) = cargo_path.find_workspace_package("member2")? {
-            assert_eq!(resolved.package_path.as_path(), member2_dir);
+            assert_eq!(resolved.package_path.as_path()?, member2_dir);
             assert_eq!(resolved.filter, "");
         } else {
             panic!("Failed to find package in the workspace");

@@ -28,31 +28,31 @@ A structured list of improvements for elegance, simplicity, correctness, and mai
   - Details: Same pattern as above - convert panic to error propagation.
   - **DONE**: Fixed alongside C3.
 
-- [ ] **C5.** Replace expect calls in widget/item rendering
+- [x] **C5.** Replace expect calls in widget/item rendering
   - File: `crates/libruskel/src/render.rs:1609,1629,1648,1668,1688,1708,1726`
   - Details: Multiple `.expect()` calls for field/method/variant/struct/module results. Consider if these can fail and add proper error handling.
 
-- [ ] **C6.** Replace expect in search widget
+- [x] **C6.** Replace expect in search widget
   - File: `crates/libruskel/src/search.rs:1448`
   - Details: `.expect("Widget result")` - evaluate if this can fail and handle gracefully.
 
-- [ ] **C7.** Handle panic in CargoPath::path() for std library
+- [x] **C7.** Handle panic in CargoPath::path() for std library
   - File: `crates/libruskel/src/cargoutils.rs:197`
   - Details: `panic!("Standard library crates don't have a filesystem path")` - this could return an error variant instead.
 
-- [ ] **C8.** Replace unwrap in package path resolution
+- [x] **C8.** Replace unwrap in package path resolution
   - File: `crates/libruskel/src/cargoutils.rs:353,395`
   - Details: `.manifest_path().parent().unwrap()` - manifest paths should always have a parent, but an informative error would be clearer.
 
-- [ ] **C9.** Replace unwrap in filter component splitting
+- [x] **C9.** Replace unwrap in filter component splitting
   - File: `crates/libruskel/src/cargoutils.rs:722`
   - Details: `.split("::").next().unwrap()` - split always returns at least one element, but consider using `.split_once()` or pattern matching.
 
-- [ ] **C10.** Handle unwrap in diagnostic snippet extraction
+- [x] **C10.** Handle unwrap in diagnostic snippet extraction
   - File: `crates/libruskel/src/cargoutils.rs:853`
   - Details: `lines.next().unwrap()` - verify the iterator is non-empty before calling.
 
-- [ ] **C11.** Replace expect in diagnostic test assertion
+- [x] **C11.** Replace expect in diagnostic test assertion
   - File: `crates/libruskel/src/cargoutils.rs:925`
   - Details: `.expect("should find primary diagnostic")` in a test context - acceptable but consider `unwrap_or_else` with better message.
 
