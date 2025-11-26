@@ -40,9 +40,12 @@ const DERIVE_TRAITS: &[&str] = &[
 static MACRO_PLACEHOLDER_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\}\s*\{\s*\.\.\.\s*\}\s*$").expect("valid macro fallback pattern"));
 
-/// Retrieve an item from the crate index, panicking if it is missing.
-fn must_get<'a>(crate_data: &'a Crate, id: &Id) -> &'a Item {
-    crate_data.index.get(id).unwrap()
+/// Retrieve an item from the crate index, returning an error if it is missing.
+fn must_get<'a>(crate_data: &'a Crate, id: &Id) -> Result<&'a Item> {
+    crate_data
+        .index
+        .get(id)
+        .ok_or_else(|| RuskelError::ItemNotFound(format!("{id:?}")))
 }
 
 /// Append `name` to a path prefix using `::` separators.
@@ -224,7 +227,8 @@ impl RenderState<'_, '_> {
     /// Render the crate, applying filters and formatting output.
     pub fn render(&mut self) -> Result<String> {
         // The root item is always a module
-        let output = self.render_item("", must_get(self.crate_data, &self.crate_data.root), false);
+        let root_item = must_get(self.crate_data, &self.crate_data.root)?;
+        let output = self.render_item("", root_item, false)?;
 
         if !self.config.filter.is_empty() && !self.filter_matched {
             return Err(RuskelError::FilterNotMatched(self.config.filter.clone()));
@@ -373,43 +377,48 @@ impl RenderState<'_, '_> {
     }
 
     /// Render an item into Rust source text.
-    fn render_item(&mut self, path_prefix: &str, item: &Item, force_private: bool) -> String {
+    fn render_item(
+        &mut self,
+        path_prefix: &str,
+        item: &Item,
+        force_private: bool,
+    ) -> Result<String> {
         if !self.selection_context_contains(&item.id) {
-            return String::new();
+            return Ok(String::new());
         }
 
         if self.should_filter(path_prefix, item) {
-            return String::new();
+            return Ok(String::new());
         }
 
         let output = match &item.inner {
-            ItemEnum::Module(_) => self.render_module(path_prefix, item),
-            ItemEnum::Struct(_) => self.render_struct(path_prefix, item),
-            ItemEnum::Enum(_) => self.render_enum(path_prefix, item),
-            ItemEnum::Trait(_) => self.render_trait(item),
-            ItemEnum::Use(_) => self.render_use(path_prefix, item),
-            ItemEnum::Function(_) => self.render_function(item, false),
-            ItemEnum::Constant { .. } => self.render_constant(item),
-            ItemEnum::TypeAlias(_) => self.render_type_alias(item),
-            ItemEnum::Macro(_) => self.render_macro(item),
-            ItemEnum::ProcMacro(_) => self.render_proc_macro(item),
+            ItemEnum::Module(_) => self.render_module(path_prefix, item)?,
+            ItemEnum::Struct(_) => self.render_struct(path_prefix, item)?,
+            ItemEnum::Enum(_) => self.render_enum(path_prefix, item)?,
+            ItemEnum::Trait(_) => self.render_trait(item)?,
+            ItemEnum::Use(_) => self.render_use(path_prefix, item)?,
+            ItemEnum::Function(_) => self.render_function(item, false)?,
+            ItemEnum::Constant { .. } => self.render_constant(item)?,
+            ItemEnum::TypeAlias(_) => self.render_type_alias(item)?,
+            ItemEnum::Macro(_) => self.render_macro(item)?,
+            ItemEnum::ProcMacro(_) => self.render_proc_macro(item)?,
             _ => String::new(),
         };
 
         if !force_private && !self.is_visible(item) {
-            String::new()
+            Ok(String::new())
         } else {
-            output
+            Ok(output)
         }
     }
 
     /// Render a procedural macro definition.
-    fn render_proc_macro(&self, item: &Item) -> String {
+    fn render_proc_macro(&self, item: &Item) -> Result<String> {
         let mut output = docs(item);
 
         let fn_name = render_name(item);
 
-        let proc_macro = extract_item!(item, ItemEnum::ProcMacro);
+        let proc_macro = try_extract_item!(item, ItemEnum::ProcMacro)?;
         match proc_macro.kind {
             MacroKind::Derive => {
                 if !proc_macro.helpers.is_empty() {
@@ -439,14 +448,14 @@ impl RenderState<'_, '_> {
 
         output.push_str(&format!("pub fn {fn_name}({args}) -> {return_type} {{}}\n"));
 
-        output
+        Ok(output)
     }
 
     /// Render a macro_rules! definition.
-    fn render_macro(&self, item: &Item) -> String {
+    fn render_macro(&self, item: &Item) -> Result<String> {
         let mut output = docs(item);
 
-        let macro_def = extract_item!(item, ItemEnum::Macro);
+        let macro_def = try_extract_item!(item, ItemEnum::Macro)?;
         // Add #[macro_export] for public macros
         output.push_str("#[macro_export]\n");
 
@@ -496,12 +505,12 @@ impl RenderState<'_, '_> {
             output.push('\n');
         }
 
-        output
+        Ok(output)
     }
 
     /// Render a type alias with generics, bounds, and visibility.
-    fn render_type_alias(&self, item: &Item) -> String {
-        let type_alias = extract_item!(item, ItemEnum::TypeAlias);
+    fn render_type_alias(&self, item: &Item) -> Result<String> {
+        let type_alias = try_extract_item!(item, ItemEnum::TypeAlias)?;
         let mut output = docs(item);
 
         output.push_str(&format!(
@@ -514,38 +523,35 @@ impl RenderState<'_, '_> {
 
         output.push_str(&format!("= {};\n\n", render_type(&type_alias.type_)));
 
-        output
+        Ok(output)
     }
 
     /// Render a `use` statement, applying filter rules for private modules.
-    fn render_use(&mut self, path_prefix: &str, item: &Item) -> String {
-        let import = extract_item!(item, ItemEnum::Use);
+    fn render_use(&mut self, path_prefix: &str, item: &Item) -> Result<String> {
+        let import = try_extract_item!(item, ItemEnum::Use)?;
 
         if import.is_glob {
-            if let Some(source_id) = &import.id
-                && let Some(source_item) = self.crate_data.index.get(source_id)
-            {
-                let module = extract_item!(source_item, ItemEnum::Module);
-                let mut output = String::new();
-                for item_id in &module.items {
-                    if let Some(item) = self.crate_data.index.get(item_id)
-                        && self.is_visible(item)
-                    {
-                        output.push_str(&self.render_item(path_prefix, item, true));
+            if let Some(source_id) = &import.id {
+                if let Ok(source_item) = must_get(self.crate_data, source_id) {
+                    let module = try_extract_item!(source_item, ItemEnum::Module)?;
+                    let mut output = String::new();
+                    for item_id in &module.items {
+                        let item = must_get(self.crate_data, item_id)?;
+                        if self.is_visible(item) {
+                            output.push_str(&self.render_item(path_prefix, item, true)?);
+                        }
                     }
+                    return Ok(output);
                 }
-                return output;
             }
             // If we can't resolve the glob import, fall back to rendering it as-is
-            return format!("pub use {}::*;\n", escape_path(&import.source));
+            return Ok(format!("pub use {}::*;\n", escape_path(&import.source)));
         }
 
-        if let Some(imported_item) = import
-            .id
-            .as_ref()
-            .and_then(|id| self.crate_data.index.get(id))
-        {
-            return self.render_item(path_prefix, imported_item, true);
+        if let Some(imported_id) = import.id.as_ref() {
+            if let Ok(imported_item) = must_get(self.crate_data, imported_id) {
+                return self.render_item(path_prefix, imported_item, true);
+            }
         }
 
         let mut output = docs(item);
@@ -565,16 +571,16 @@ impl RenderState<'_, '_> {
             output.push_str(&format!("pub use {};\n", escape_path(&import.source)));
         }
 
-        output
+        Ok(output)
     }
 
     /// Render an implementation block, respecting filtering rules.
-    fn render_impl(&mut self, path_prefix: &str, item: &Item) -> String {
+    fn render_impl(&mut self, path_prefix: &str, item: &Item) -> Result<String> {
         let mut output = docs(item);
-        let impl_ = extract_item!(item, ItemEnum::Impl);
+        let impl_ = try_extract_item!(item, ItemEnum::Impl)?;
 
         if !self.selection_context_contains(&item.id) {
-            return String::new();
+            return Ok(String::new());
         }
 
         let selection_active = self.selection().is_some();
@@ -585,11 +591,12 @@ impl RenderState<'_, '_> {
         let expand_children =
             !selection_active || self.selection_expands(&item.id) || parent_expanded;
 
-        if let Some(trait_) = &impl_.trait_
-            && let Some(trait_item) = self.crate_data.index.get(&trait_.id)
-            && !self.is_visible(trait_item)
-        {
-            return String::new();
+        if let Some(trait_) = &impl_.trait_ {
+            if let Ok(trait_item) = must_get(self.crate_data, &trait_.id) {
+                if !self.is_visible(trait_item) {
+                    return Ok(String::new());
+                }
+            }
         }
 
         let where_clause = render_where_clause(&impl_.generics);
@@ -622,14 +629,14 @@ impl RenderState<'_, '_> {
         let path_prefix = ppush(path_prefix, &render_type(&impl_.for_));
         let mut has_content = false;
         for item_id in &impl_.items {
-            if let Some(item) = self.crate_data.index.get(item_id) {
+            if let Ok(item) = must_get(self.crate_data, item_id) {
                 let is_trait_impl = impl_.trait_.is_some();
                 if (!selection_active
                     || expand_children
                     || self.selection_context_contains(item_id))
                     && (is_trait_impl || self.is_visible(item))
                 {
-                    let rendered = self.render_impl_item(&path_prefix, item, expand_children);
+                    let rendered = self.render_impl_item(&path_prefix, item, expand_children)?;
                     if !rendered.is_empty() {
                         output.push_str(&rendered);
                         has_content = true;
@@ -639,41 +646,48 @@ impl RenderState<'_, '_> {
         }
 
         if !has_content {
-            return String::new();
+            return Ok(String::new());
         }
 
         output.push_str("}\n\n");
 
-        output
+        Ok(output)
     }
 
     /// Render the item inside an impl block.
-    fn render_impl_item(&mut self, path_prefix: &str, item: &Item, include_all: bool) -> String {
+    fn render_impl_item(
+        &mut self,
+        path_prefix: &str,
+        item: &Item,
+        include_all: bool,
+    ) -> Result<String> {
         if !include_all && !self.selection_context_contains(&item.id) {
-            return String::new();
+            return Ok(String::new());
         }
 
         if self.should_filter(path_prefix, item) {
-            return String::new();
+            return Ok(String::new());
         }
 
-        match &item.inner {
-            ItemEnum::Function(_) => self.render_function(item, false),
-            ItemEnum::Constant { .. } => self.render_constant(item),
+        let rendered = match &item.inner {
+            ItemEnum::Function(_) => self.render_function(item, false)?,
+            ItemEnum::Constant { .. } => self.render_constant(item)?,
             ItemEnum::AssocType { .. } => render_associated_type(item),
-            ItemEnum::TypeAlias(_) => self.render_type_alias(item),
+            ItemEnum::TypeAlias(_) => self.render_type_alias(item)?,
             _ => String::new(),
-        }
+        };
+
+        Ok(rendered)
     }
 
     /// Render an enum definition, including variants.
-    fn render_enum(&mut self, path_prefix: &str, item: &Item) -> String {
+    fn render_enum(&mut self, path_prefix: &str, item: &Item) -> Result<String> {
         let mut output = docs(item);
 
-        let enum_ = extract_item!(item, ItemEnum::Enum);
+        let enum_ = try_extract_item!(item, ItemEnum::Enum)?;
 
         if !self.selection_context_contains(&item.id) {
-            return String::new();
+            return Ok(String::new());
         }
 
         let selection_active = self.selection().is_some();
@@ -682,8 +696,8 @@ impl RenderState<'_, '_> {
         // Collect inline traits
         let mut inline_traits = Vec::new();
         for impl_id in &enum_.impls {
-            let impl_item = must_get(self.crate_data, impl_id);
-            let impl_ = extract_item!(impl_item, ItemEnum::Impl);
+            let impl_item = must_get(self.crate_data, impl_id)?;
+            let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
             if impl_.is_synthetic {
                 continue;
             }
@@ -717,11 +731,11 @@ impl RenderState<'_, '_> {
                 || include_all_variants
                 || self.selection_context_contains(variant_id)
             {
-                let variant_item = must_get(self.crate_data, variant_id);
+                let variant_item = must_get(self.crate_data, variant_id)?;
                 let include_variant_fields = include_all_variants
                     || !selection_active
                     || self.selection_matches(&variant_item.id);
-                let rendered = self.render_enum_variant(variant_item, include_variant_fields);
+                let rendered = self.render_enum_variant(variant_item, include_variant_fields)?;
                 if !rendered.is_empty() {
                     output.push_str(&rendered);
                 }
@@ -732,50 +746,46 @@ impl RenderState<'_, '_> {
 
         // Render impl blocks
         for impl_id in &enum_.impls {
-            let impl_item = must_get(self.crate_data, impl_id);
-            let impl_ = extract_item!(impl_item, ItemEnum::Impl);
+            let impl_item = must_get(self.crate_data, impl_id)?;
+            let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
             if self.should_render_impl(impl_) && self.selection_allows_child(&item.id, impl_id) {
-                output.push_str(&self.render_impl(path_prefix, impl_item));
+                output.push_str(&self.render_impl(path_prefix, impl_item)?);
             }
         }
 
-        output
+        Ok(output)
     }
 
     /// Render a single enum variant.
-    fn render_enum_variant(&self, item: &Item, include_all_fields: bool) -> String {
+    fn render_enum_variant(&self, item: &Item, include_all_fields: bool) -> Result<String> {
         let selection_active = self.selection().is_some();
 
         if selection_active && !include_all_fields && !self.selection_context_contains(&item.id) {
-            return String::new();
+            return Ok(String::new());
         }
 
         let mut output = docs(item);
 
-        let variant = extract_item!(item, ItemEnum::Variant);
+        let variant = try_extract_item!(item, ItemEnum::Variant)?;
 
         output.push_str(&format!("    {}", render_name(item)));
 
         match &variant.kind {
             VariantKind::Plain => {}
             VariantKind::Tuple(fields) => {
-                let fields_str = fields
-                    .iter()
-                    .filter_map(|field| {
-                        field.as_ref().and_then(|id| {
-                            if selection_active
-                                && !include_all_fields
-                                && !self.selection_context_contains(id)
-                            {
-                                return None;
-                            }
-                            let field_item = must_get(self.crate_data, id);
-                            let ty = extract_item!(field_item, ItemEnum::StructField);
-                            Some(render_type(ty))
-                        })
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let mut rendered_fields = Vec::new();
+                for id in fields.iter().flatten() {
+                    if selection_active
+                        && !include_all_fields
+                        && !self.selection_context_contains(id)
+                    {
+                        continue;
+                    }
+                    let field_item = must_get(self.crate_data, id)?;
+                    let ty = try_extract_item!(field_item, ItemEnum::StructField)?;
+                    rendered_fields.push(render_type(ty));
+                }
+                let fields_str = rendered_fields.join(", ");
                 output.push_str(&format!("({fields_str})"));
             }
             VariantKind::Struct { fields, .. } => {
@@ -786,7 +796,7 @@ impl RenderState<'_, '_> {
                         || self.selection_context_contains(field)
                     {
                         let rendered = self
-                            .render_struct_field(field, include_all_fields || !selection_active);
+                            .render_struct_field(field, include_all_fields || !selection_active)?;
                         if !rendered.is_empty() {
                             output.push_str(&rendered);
                         }
@@ -802,17 +812,17 @@ impl RenderState<'_, '_> {
 
         output.push_str(",\n");
 
-        output
+        Ok(output)
     }
 
     /// Render a trait definition.
-    fn render_trait(&self, item: &Item) -> String {
+    fn render_trait(&self, item: &Item) -> Result<String> {
         let mut output = docs(item);
 
-        let trait_ = extract_item!(item, ItemEnum::Trait);
+        let trait_ = try_extract_item!(item, ItemEnum::Trait)?;
 
         if !self.selection_context_contains(&item.id) {
-            return String::new();
+            return Ok(String::new());
         }
 
         let selection_active = self.selection().is_some();
@@ -841,23 +851,23 @@ impl RenderState<'_, '_> {
 
         for item_id in &trait_.items {
             if !selection_active || expand_children || self.selection_context_contains(item_id) {
-                let item = must_get(self.crate_data, item_id);
-                output.push_str(&self.render_trait_item(item, expand_children));
+                let item = must_get(self.crate_data, item_id)?;
+                output.push_str(&self.render_trait_item(item, expand_children)?);
             }
         }
 
         output.push_str("}\n\n");
 
-        output
+        Ok(output)
     }
 
     /// Render an item contained within a trait (method, associated type, etc.).
-    fn render_trait_item(&self, item: &Item, include_all: bool) -> String {
+    fn render_trait_item(&self, item: &Item, include_all: bool) -> Result<String> {
         if !include_all && !self.selection_context_contains(&item.id) {
-            return String::new();
+            return Ok(String::new());
         }
-        match &item.inner {
-            ItemEnum::Function(_) => self.render_function(item, true),
+        let rendered = match &item.inner {
+            ItemEnum::Function(_) => self.render_function(item, true)?,
             ItemEnum::AssocConst { type_, value } => {
                 let default_str = value
                     .as_ref()
@@ -894,32 +904,30 @@ impl RenderState<'_, '_> {
                 )
             }
             _ => String::new(),
-        }
+        };
+
+        Ok(rendered)
     }
 
     /// Render a struct declaration and its fields.
-    fn render_struct(&mut self, path_prefix: &str, item: &Item) -> String {
+    fn render_struct(&mut self, path_prefix: &str, item: &Item) -> Result<String> {
         let mut output = docs(item);
 
-        let struct_ = extract_item!(item, ItemEnum::Struct);
+        let struct_ = try_extract_item!(item, ItemEnum::Struct)?;
 
         if !self.selection_context_contains(&item.id) {
-            return String::new();
+            return Ok(String::new());
         }
 
         let selection_active = self.selection().is_some();
-        let expand_children = if selection_active {
-            self.selection_expands(&item.id)
-        } else {
-            false
-        };
+        let expand_children = selection_active && self.selection_expands(&item.id);
         let force_fields = selection_active && expand_children;
 
         // Collect inline traits
         let mut inline_traits = Vec::new();
         for impl_id in &struct_.impls {
-            let impl_item = must_get(self.crate_data, impl_id);
-            let impl_ = extract_item!(impl_item, ItemEnum::Impl);
+            let impl_item = must_get(self.crate_data, impl_id)?;
+            let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
             if impl_.is_synthetic {
                 continue;
             }
@@ -951,26 +959,26 @@ impl RenderState<'_, '_> {
                 ));
             }
             StructKind::Tuple(fields) => {
-                let fields_str = fields
-                    .iter()
-                    .filter_map(|field| {
-                        field.as_ref().and_then(|id| {
-                            if !expand_children && !self.selection_context_contains(id) {
-                                return None;
-                            }
-                            let field_item = must_get(self.crate_data, id);
-                            let ty = extract_item!(field_item, ItemEnum::StructField);
-                            if !self.is_visible(field_item) {
-                                Some("_".to_string())
-                            } else {
-                                Some(format!("{}{}", render_vis(field_item), render_type(ty)))
-                            }
-                        })
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", ");
+                let mut rendered_fields = Vec::new();
+                for id in fields.iter().flatten() {
+                    if !expand_children && !self.selection_context_contains(id) {
+                        continue;
+                    }
+                    let field_item = must_get(self.crate_data, id)?;
+                    let ty = try_extract_item!(field_item, ItemEnum::StructField)?;
+                    if !self.is_visible(field_item) {
+                        rendered_fields.push("_".to_string());
+                    } else {
+                        rendered_fields.push(format!(
+                            "{}{}",
+                            render_vis(field_item),
+                            render_type(ty)
+                        ));
+                    }
+                }
 
-                if expand_children || !fields_str.is_empty() {
+                if expand_children || !rendered_fields.is_empty() {
+                    let fields_str = rendered_fields.join(", ");
                     output.push_str(&format!(
                         "{}struct {}{}({}){};\n\n",
                         render_vis(item),
@@ -990,7 +998,7 @@ impl RenderState<'_, '_> {
                     where_clause
                 ));
                 for field in fields {
-                    let rendered = self.render_struct_field(field, force_fields);
+                    let rendered = self.render_struct_field(field, force_fields)?;
                     if !rendered.is_empty() {
                         output.push_str(&rendered);
                     }
@@ -1001,29 +1009,29 @@ impl RenderState<'_, '_> {
 
         // Render impl blocks
         for impl_id in &struct_.impls {
-            let impl_item = must_get(self.crate_data, impl_id);
-            let impl_ = extract_item!(impl_item, ItemEnum::Impl);
+            let impl_item = must_get(self.crate_data, impl_id)?;
+            let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
             if self.should_render_impl(impl_) && self.selection_allows_child(&item.id, impl_id) {
-                output.push_str(&self.render_impl(path_prefix, impl_item));
+                output.push_str(&self.render_impl(path_prefix, impl_item)?);
             }
         }
 
-        output
+        Ok(output)
     }
 
     /// Render a struct field, optionally forcing visibility.
-    fn render_struct_field(&self, field_id: &Id, force: bool) -> String {
-        let field_item = must_get(self.crate_data, field_id);
+    fn render_struct_field(&self, field_id: &Id, force: bool) -> Result<String> {
+        let field_item = must_get(self.crate_data, field_id)?;
 
         if self.selection().is_some() && !force && !self.selection_context_contains(field_id) {
-            return String::new();
+            return Ok(String::new());
         }
 
         if !(force || self.is_visible(field_item)) {
-            return String::new();
+            return Ok(String::new());
         }
 
-        let ty = extract_item!(field_item, ItemEnum::StructField);
+        let ty = try_extract_item!(field_item, ItemEnum::StructField)?;
         let mut out = String::new();
         out.push_str(&docs(field_item));
         out.push_str(&format!(
@@ -1032,14 +1040,14 @@ impl RenderState<'_, '_> {
             render_name(field_item),
             render_type(ty)
         ));
-        out
+        Ok(out)
     }
 
     /// Render a constant definition.
-    fn render_constant(&self, item: &Item) -> String {
+    fn render_constant(&self, item: &Item) -> Result<String> {
         let mut output = docs(item);
 
-        let (type_, const_) = extract_item!(item, ItemEnum::Constant { type_, const_ });
+        let (type_, const_) = try_extract_item!(item, ItemEnum::Constant { type_, const_ })?;
         output.push_str(&format!(
             "{}const {}: {} = {};\n\n",
             render_vis(item),
@@ -1048,11 +1056,11 @@ impl RenderState<'_, '_> {
             const_.expr
         ));
 
-        output
+        Ok(output)
     }
 
     /// Render a module and its children.
-    fn render_module(&mut self, path_prefix: &str, item: &Item) -> String {
+    fn render_module(&mut self, path_prefix: &str, item: &Item) -> Result<String> {
         let path_prefix = ppush(path_prefix, &render_name(item));
         let mut output = format!("{}mod {} {{\n", render_vis(item), render_name(item));
         // Add module doc comment if present
@@ -1065,21 +1073,21 @@ impl RenderState<'_, '_> {
             output.push('\n');
         }
 
-        let module = extract_item!(item, ItemEnum::Module);
+        let module = try_extract_item!(item, ItemEnum::Module)?;
 
         for item_id in &module.items {
-            let item = must_get(self.crate_data, item_id);
-            output.push_str(&self.render_item(&path_prefix, item, false));
+            let item = must_get(self.crate_data, item_id)?;
+            output.push_str(&self.render_item(&path_prefix, item, false)?);
         }
 
         output.push_str("}\n\n");
-        output
+        Ok(output)
     }
 
     /// Render a function or method signature.
-    fn render_function(&self, item: &Item, is_trait_method: bool) -> String {
+    fn render_function(&self, item: &Item, is_trait_method: bool) -> Result<String> {
         let mut output = docs(item);
-        let function = extract_item!(item, ItemEnum::Function);
+        let function = try_extract_item!(item, ItemEnum::Function)?;
 
         // Handle const, async, and unsafe keywords in the correct order
         let mut prefixes = Vec::new();
@@ -1111,7 +1119,7 @@ impl RenderState<'_, '_> {
             output.push_str(" {}\n\n");
         }
 
-        output
+        Ok(output)
     }
 }
 
@@ -1550,9 +1558,9 @@ mod tests {
     }
 
     #[allow(clippy::needless_pass_by_value)]
-    fn render_allowing_format_errors(renderer: Renderer, crate_data: &Crate) -> String {
+    fn render_allowing_format_errors(renderer: Renderer, crate_data: &Crate) -> Result<String> {
         match renderer.render(crate_data) {
-            Ok(output) => output,
+            Ok(output) => Ok(output),
             Err(RuskelError::Format(_)) => {
                 let mut state = super::RenderState {
                     config: &renderer,
@@ -1569,30 +1577,28 @@ mod tests {
                 {
                     composed.push_str(&prefix);
                 }
-                composed.push_str(&state.render_item(
-                    "",
-                    super::must_get(crate_data, &crate_data.root),
-                    false,
-                ));
-                composed
+                let root = super::must_get(crate_data, &crate_data.root)?;
+                composed.push_str(&state.render_item("", root, false)?);
+                Ok(composed)
             }
-            Err(err) => panic!("unexpected render failure: {err}"),
+            Err(err) => Err(err),
         }
     }
 
-    fn render_with_selection(crate_data: &Crate, selection: RenderSelection) -> String {
+    fn render_with_selection(crate_data: &Crate, selection: RenderSelection) -> Result<String> {
         let renderer = Renderer::new().with_selection(selection);
         match renderer.render(crate_data) {
-            Ok(output) => output,
+            Ok(output) => Ok(output),
             Err(RuskelError::Format(_)) => {
                 let mut state = super::RenderState {
                     config: &renderer,
                     crate_data,
                     filter_matched: false,
                 };
-                state.render_item("", super::must_get(crate_data, &crate_data.root), false)
+                let root = super::must_get(crate_data, &crate_data.root)?;
+                state.render_item("", root, false)
             }
-            Err(err) => panic!("unexpected render failure: {err}"),
+            Err(err) => Err(err),
         }
     }
 
@@ -1608,7 +1614,8 @@ mod tests {
             .find(|r| r.path_string.ends_with("Widget::id"))
             .expect("field result");
         let selection = build_render_selection(&index, slice::from_ref(&field), true);
-        let rendered = render_with_selection(&crate_data, selection);
+        let rendered =
+            render_with_selection(&crate_data, selection).expect("render with selection");
 
         assert!(rendered.contains("struct Widget"));
         assert!(rendered.contains("id: u32"));
@@ -1628,7 +1635,8 @@ mod tests {
             .find(|r| r.path_string.ends_with("Widget::render"))
             .expect("method result");
         let selection = build_render_selection(&index, slice::from_ref(&method), true);
-        let rendered = render_with_selection(&crate_data, selection);
+        let rendered =
+            render_with_selection(&crate_data, selection).expect("render with selection");
 
         assert!(rendered.contains("impl"));
         assert!(rendered.contains("fn render"));
@@ -1647,7 +1655,8 @@ mod tests {
             .find(|r| r.path_string.ends_with("Palette::Named"))
             .expect("variant result");
         let selection = build_render_selection(&index, slice::from_ref(&variant), true);
-        let rendered = render_with_selection(&crate_data, selection);
+        let rendered =
+            render_with_selection(&crate_data, selection).expect("render with selection");
 
         assert!(rendered.contains("enum Palette"));
         assert!(rendered.contains("Named"));
@@ -1667,7 +1676,8 @@ mod tests {
             .find(|r| r.path_string.ends_with("Widget"))
             .expect("struct result");
         let selection = build_render_selection(&index, slice::from_ref(&widget), true);
-        let rendered = render_with_selection(&crate_data, selection);
+        let rendered =
+            render_with_selection(&crate_data, selection).expect("render with selection");
 
         assert!(rendered.contains("struct Widget"));
         assert!(rendered.contains("id: u32"));
@@ -1687,7 +1697,8 @@ mod tests {
             .find(|r| r.path_string.ends_with("Widget"))
             .expect("struct result");
         let selection = build_render_selection(&index, slice::from_ref(&widget), false);
-        let rendered = render_with_selection(&crate_data, selection);
+        let rendered =
+            render_with_selection(&crate_data, selection).expect("render with selection");
 
         assert!(rendered.contains("struct Widget"));
         assert!(!rendered.contains("id: u32"));
@@ -1707,7 +1718,8 @@ mod tests {
             .find(|r| r.path_string.ends_with("tools"))
             .expect("module result");
         let selection = build_render_selection(&index, slice::from_ref(&module), true);
-        let rendered = render_with_selection(&crate_data, selection);
+        let rendered =
+            render_with_selection(&crate_data, selection).expect("render with selection");
 
         assert!(rendered.contains("mod tools"));
         assert!(rendered.contains("fn instrument"));
@@ -1725,7 +1737,8 @@ mod tests {
             .find(|r| r.path_string.ends_with("tools"))
             .expect("module result");
         let selection = build_render_selection(&index, slice::from_ref(&module), false);
-        let rendered = render_with_selection(&crate_data, selection);
+        let rendered =
+            render_with_selection(&crate_data, selection).expect("render with selection");
 
         assert!(rendered.contains("mod tools"));
         assert!(!rendered.contains("fn instrument"));
@@ -1734,7 +1747,8 @@ mod tests {
     #[test]
     fn renderer_omits_empty_impl_blocks_when_private_items_hidden() {
         let crate_data = fixture_crate();
-        let output = render_allowing_format_errors(Renderer::new(), &crate_data);
+        let output =
+            render_allowing_format_errors(Renderer::new(), &crate_data).expect("render crate");
 
         assert!(
             !output.contains("impl Widget {}"),
@@ -1746,7 +1760,8 @@ mod tests {
     fn renderer_keeps_impl_when_private_items_rendered() {
         let crate_data = fixture_crate();
         let output =
-            render_allowing_format_errors(Renderer::new().with_private_items(true), &crate_data);
+            render_allowing_format_errors(Renderer::new().with_private_items(true), &crate_data)
+                .expect("render crate");
 
         assert!(output.contains("impl Widget {"));
         assert!(output.contains("fn render"));
@@ -1761,7 +1776,8 @@ mod tests {
         let output = render_allowing_format_errors(
             Renderer::new().with_frontmatter(frontmatter),
             &crate_data,
-        );
+        )
+        .expect("render crate");
 
         assert!(output.starts_with(
             "// Ruskel skeleton - syntactically valid Rust with implementation omitted."
@@ -1778,7 +1794,8 @@ mod tests {
     #[test]
     fn frontmatter_can_be_disabled() {
         let crate_data = fixture_crate();
-        let output = render_allowing_format_errors(Renderer::new(), &crate_data);
+        let output =
+            render_allowing_format_errors(Renderer::new(), &crate_data).expect("render crate");
 
         assert!(!output.starts_with(
             "// Ruskel skeleton - syntactically valid Rust with implementation omitted."
@@ -1803,7 +1820,7 @@ mod tests {
             .with_filter(Some("fixture".into()))
             .with_search(search_meta);
         let output = Renderer::new().with_frontmatter(frontmatter);
-        let output = render_allowing_format_errors(output, &crate_data);
+        let output = render_allowing_format_errors(output, &crate_data).expect("render crate");
 
         assert!(output.contains(
             "// search: query=\"Widget\"; case_sensitive=false; domains=name, doc; expand_containers=true"

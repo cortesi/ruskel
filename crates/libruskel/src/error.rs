@@ -20,6 +20,10 @@ pub enum RuskelError {
     #[error("{0}")]
     Generate(String),
 
+    /// Indicates an item referenced by rustdoc output could not be found.
+    #[error("Item not found in rustdoc index: {0}")]
+    ItemNotFound(String),
+
     /// Indicates an error occurred while executing a Cargo command.
     #[error("Cargo error: {0}")]
     Cargo(String),

@@ -22,7 +22,31 @@ macro_rules! extract_item {
     };
 }
 
-pub(crate) use extract_item;
+/// Fallible variant of `extract_item!` that returns a `RuskelError` instead of panicking.
+macro_rules! try_extract_item {
+    ($item:expr, $variant:path) => {
+        match &$item.inner {
+            $variant(inner) => Ok(inner),
+            _ => Err(RuskelError::Generate(format!(
+                "Expected {}, found {:?}",
+                stringify!($variant),
+                $item.inner
+            ))),
+        }
+    };
+    ($item:expr, $variant:path { $($field:ident),+ }) => {
+        match &$item.inner {
+            $variant { $($field,)+ .. } => Ok(($($field,)+)),
+            _ => Err(RuskelError::Generate(format!(
+                "Expected {}, found {:?}",
+                stringify!($variant),
+                $item.inner
+            ))),
+        }
+    };
+}
+
+pub(crate) use try_extract_item;
 
 /// Format documentation comments as triple-slash lines.
 pub fn docs(item: &Item) -> String {
