@@ -674,7 +674,7 @@ impl ResolvedTarget {
                         RuskelError::DependencyNotFound => Err(RuskelError::Generate(format!(
                             "crate '{name}' is not cached locally for offline use. Run 'cargo fetch {name}' without --offline first or retry without --offline."
                         ))),
-                        RuskelError::CargoError(message)
+                        RuskelError::Cargo(message)
                             if message.contains("--offline")
                                 || message.contains("offline mode") =>
                         {

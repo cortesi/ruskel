@@ -59,10 +59,6 @@ pub enum RuskelError {
     /// Indicates a dependency was not found in the registry.
     #[error("No matching package")]
     DependencyNotFound,
-
-    /// A catch-all for other Cargo-related errors.
-    #[error("Cargo error: {0}")]
-    CargoError(String),
 }
 
 impl From<syntect::Error> for RuskelError {
@@ -89,6 +85,6 @@ pub fn convert_cargo_error(error: &anyhow::Error) -> RuskelError {
     if err_msg.contains("no matching package") {
         RuskelError::DependencyNotFound
     } else {
-        RuskelError::CargoError(err_msg)
+        RuskelError::Cargo(err_msg)
     }
 }

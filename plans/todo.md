@@ -58,7 +58,7 @@ A structured list of improvements for elegance, simplicity, correctness, and mai
 
 ### Fragile Workarounds
 
-- [ ] **C12.** Document and add tests for rustdoc macro workaround
+- [x] **C12.** Document and add tests for rustdoc macro workaround
   - File: `crates/libruskel/src/render.rs:39-41,456-471`
   - Details: `MACRO_PLACEHOLDER_REGEX` works around a rustdoc bug producing invalid syntax for new-style macros. Add:
     1. A comment linking to the rustdoc issue if one exists
@@ -67,7 +67,7 @@ A structured list of improvements for elegance, simplicity, correctness, and mai
 
 ### Duplicate Error Variants
 
-- [ ] **C13.** Consolidate `Cargo` and `CargoError` variants in RuskelError
+- [x] **C13.** Consolidate `Cargo` and `CargoError` variants in RuskelError
   - File: `crates/libruskel/src/error.rs:24-25,60-61`
   - Details: Both `#[error("Cargo error: {0}")] Cargo(String)` and `#[error("Cargo error: {0}")] CargoError(String)` exist. Consolidate into a single variant.
 

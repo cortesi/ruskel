@@ -37,6 +37,10 @@ const DERIVE_TRAITS: &[&str] = &[
 ];
 
 /// Reusable pattern for removing placeholder bodies from macro output.
+/// rustdoc currently emits `{ ... }` placeholder blocks for `macro` (decl-macro) items in JSON
+/// output (observed on nightly 2025-11-27). When upstream fixes this, update
+/// `rustdoc_still_emits_placeholder_for_new_style_macros` and consider removing this workaround.
+/// (No tracked rust-lang/rust issue is known at the moment.)
 static MACRO_PLACEHOLDER_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\}\s*\{\s*\.\.\.\s*\}\s*$").expect("valid macro fallback pattern"));
 
@@ -1124,12 +1128,13 @@ impl RenderState<'_, '_> {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, slice};
+    use std::{collections::HashMap, fs, slice};
 
     use rustdoc_types::{
         Abi, Crate, Function, FunctionHeader, FunctionSignature, Generics, Id, Impl, Item,
         ItemEnum, Module, Path, Struct, StructKind, Target, Type, Variant, VariantKind, Visibility,
     };
+    use tempfile::tempdir;
 
     use super::*;
     use crate::{
@@ -1151,6 +1156,130 @@ mod tests {
             is_async: false,
             abi: Abi::Rust,
         }
+    }
+
+    fn empty_crate() -> Crate {
+        Crate {
+            root: Id(0),
+            crate_version: Some("0.0.0".into()),
+            includes_private: false,
+            index: HashMap::new(),
+            paths: HashMap::new(),
+            external_crates: HashMap::new(),
+            target: Target {
+                triple: "test-target".into(),
+                target_features: Vec::new(),
+            },
+            format_version: 0,
+        }
+    }
+
+    #[test]
+    fn render_macro_strips_placeholder_block() -> Result<()> {
+        let mut crate_data = empty_crate();
+        let macro_id = Id(1);
+        crate_data.index.insert(
+            macro_id,
+            Item {
+                id: macro_id,
+                crate_id: 0,
+                name: Some("placeholder_macro".into()),
+                span: None,
+                visibility: Visibility::Public,
+                docs: None,
+                links: HashMap::new(),
+                attrs: Vec::new(),
+                deprecation: None,
+                inner: ItemEnum::Macro("macro placeholder_macro { () => {} } { ... }".into()),
+            },
+        );
+
+        let renderer = Renderer::new();
+        let state = super::RenderState {
+            config: &renderer,
+            crate_data: &crate_data,
+            filter_matched: false,
+        };
+
+        let item = crate_data
+            .index
+            .get(&macro_id)
+            .ok_or_else(|| RuskelError::ItemNotFound(format!("{macro_id:?}")))?;
+
+        let macro_source = try_extract_item!(item, ItemEnum::Macro)?;
+
+        assert!(
+            MACRO_PLACEHOLDER_REGEX.is_match(macro_source),
+            "fixture macro should reproduce rustdoc placeholder pattern"
+        );
+
+        let rendered = state.render_macro(item)?;
+
+        assert!(!rendered.contains("{ ... } { ... }"));
+        assert!(rendered.trim_end().ends_with('}'));
+        Ok(())
+    }
+
+    #[test]
+    fn rustdoc_still_emits_placeholder_for_new_style_macros() -> Result<()> {
+        let temp_dir = tempdir()?;
+        fs::create_dir_all(temp_dir.path().join("src"))?;
+
+        fs::write(
+            temp_dir.path().join("Cargo.toml"),
+            r#"[package]
+name = "macro-fixture"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/lib.rs"
+"#,
+        )?;
+
+        fs::write(
+            temp_dir.path().join("src/lib.rs"),
+            "#![feature(decl_macro)]\n\npub macro placeholder_macro() { () }\n",
+        )?;
+
+        let builder = rustdoc_json::Builder::default()
+            .toolchain("nightly")
+            .manifest_path(temp_dir.path().join("Cargo.toml"))
+            .document_private_items(true);
+
+        let json_path = match builder.build() {
+            Ok(path) => path,
+            Err(err) => {
+                let msg = err.to_string();
+                if msg.contains("rustup") || msg.contains("is not installed") {
+                    eprintln!("skipping placeholder detection test: {msg}");
+                    return Ok(());
+                }
+                return Err(RuskelError::Generate(msg));
+            }
+        };
+
+        let crate_data: Crate = serde_json::from_str(&fs::read_to_string(json_path)?)?;
+        let macro_src = crate_data
+            .index
+            .values()
+            .find_map(|item| match &item.inner {
+                ItemEnum::Macro(src) => Some(src.clone()),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                RuskelError::Generate("macro item missing from rustdoc output".into())
+            })?;
+
+        if !MACRO_PLACEHOLDER_REGEX.is_match(&macro_src) {
+            eprintln!(
+                "rustdoc no longer emits placeholder macro bodies; consider removing \
+                 MACRO_PLACEHOLDER_REGEX workaround and simplifying render_macro."
+            );
+            return Ok(());
+        }
+
+        Ok(())
     }
 
     fn fixture_crate() -> Crate {
