@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -100,12 +100,19 @@ enum FilterMatch {
 /// Selection of item identifiers used when rendering subsets of a crate.
 #[derive(Debug, Clone, Default)]
 pub struct RenderSelection {
-    /// Item identifiers that directly satisfied the search query.
-    matches: HashSet<Id>,
-    /// Ancestor identifiers retained to preserve module hierarchy in output.
-    context: HashSet<Id>,
-    /// Matched containers whose children should be fully expanded.
-    expanded: HashSet<Id>,
+    /// Selection metadata keyed by item identifier.
+    entries: HashMap<Id, SelectionFlags>,
+}
+
+/// Flags describing how a specific item participates in a render selection.
+#[derive(Debug, Clone, Copy, Default)]
+struct SelectionFlags {
+    /// The item is an explicit match from the search results.
+    matched: bool,
+    /// The item is retained to preserve module hierarchy context.
+    in_context: bool,
+    /// The item should expand to include all of its children.
+    expanded: bool,
 }
 
 impl RenderSelection {
@@ -114,26 +121,44 @@ impl RenderSelection {
         for id in &matches {
             context.insert(*id);
         }
-        Self {
-            matches,
-            context,
-            expanded,
+
+        let mut entries: HashMap<Id, SelectionFlags> = HashMap::new();
+
+        for id in context {
+            entries.entry(id).or_default().in_context = true;
         }
+        for id in matches {
+            entries.entry(id).or_default().matched = true;
+        }
+        for id in expanded {
+            entries.entry(id).or_default().expanded = true;
+        }
+
+        Self { entries }
     }
 
-    /// Identifiers for items that should be fully rendered.
-    pub fn matches(&self) -> &HashSet<Id> {
-        &self.matches
+    /// Is the item an explicit match?
+    pub fn is_match(&self, id: &Id) -> bool {
+        self.entries
+            .get(id)
+            .map(|flags| flags.matched)
+            .unwrap_or(false)
     }
 
-    /// Identifiers for items that should be kept to preserve hierarchy context.
-    pub fn context(&self) -> &HashSet<Id> {
-        &self.context
+    /// Is the item retained to preserve hierarchy context?
+    pub fn in_context(&self, id: &Id) -> bool {
+        self.entries
+            .get(id)
+            .map(|flags| flags.in_context)
+            .unwrap_or(false)
     }
 
-    /// Containers that should expand to include all of their children.
-    pub fn expanded(&self) -> &HashSet<Id> {
-        &self.expanded
+    /// Should the item's children be fully expanded?
+    pub fn is_expanded(&self, id: &Id) -> bool {
+        self.entries
+            .get(id)
+            .map(|flags| flags.expanded)
+            .unwrap_or(false)
     }
 }
 
@@ -274,7 +299,7 @@ impl RenderState<'_, '_> {
     /// Determine whether the selection context includes a particular item.
     fn selection_context_contains(&self, id: &Id) -> bool {
         match self.selection() {
-            Some(selection) => selection.context().contains(id),
+            Some(selection) => selection.in_context(id),
             None => true,
         }
     }
@@ -282,7 +307,7 @@ impl RenderState<'_, '_> {
     /// Check if an item was an explicit match in the selection.
     fn selection_matches(&self, id: &Id) -> bool {
         match self.selection() {
-            Some(selection) => selection.matches().contains(id),
+            Some(selection) => selection.is_match(id),
             None => false,
         }
     }
@@ -290,7 +315,7 @@ impl RenderState<'_, '_> {
     /// Determine whether a matched container should expand its children in the rendered output.
     fn selection_expands(&self, id: &Id) -> bool {
         match self.selection() {
-            Some(selection) => selection.expanded().contains(id),
+            Some(selection) => selection.is_expanded(id),
             None => true,
         }
     }

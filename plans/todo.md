@@ -110,13 +110,15 @@ A structured list of improvements for elegance, simplicity, correctness, and mai
 
 ### Consider Simplifying Abstractions
 
-- [ ] **S6.** Evaluate if RenderSelection could be simplified
+- [x] **S6.** Evaluate if RenderSelection could be simplified
   - File: `crates/libruskel/src/render.rs:87-96`
   - Details: Three HashSets (matches, context, expanded) may be over-engineered. Profile usage and consider if a simpler approach works.
+  - **DONE**: Collapsed selection data into a single HashMap of flags with helper accessors, reducing duplicated sets.
 
-- [ ] **S7.** Evaluate if CargoPath enum could be simplified
+- [x] **S7.** Evaluate if CargoPath enum could be simplified
   - File: `crates/libruskel/src/cargoutils.rs:178-200` (approximate)
   - Details: `CargoPath` has Path, TempDir, StdLibrary variants. Consider if Path + metadata flags would be cleaner.
+  - **DONE**: Replaced enum with a single struct holding an optional temp guard and std metadata; added helpers for std info and filesystem paths.
 
 ---
 

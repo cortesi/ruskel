@@ -175,25 +175,102 @@ fn load_std_library_json(crate_name: &str, display_name: Option<&str>) -> Result
     Ok(crate_data)
 }
 
-/// A path to a crate. This can be a directory on the filesystem or a temporary directory.
+/// A path to a crate. This can be a directory on the filesystem or the virtual std library.
 #[derive(Debug)]
-enum CargoPath {
+struct CargoPath {
+    /// Filesystem root for the crate (None for std library targets).
+    root: Option<PathBuf>,
+    /// Keeps a temporary directory alive for registry fetches.
+    _temp_guard: Option<TempDir>,
+    /// Cargo source variant backing this path.
+    kind: CargoPathKind,
+}
+
+/// Backing source for a cargo path.
+#[derive(Debug)]
+enum CargoPathKind {
     /// Filesystem-backed crate directory containing a manifest.
-    Path(PathBuf),
-    /// Ephemeral crate stored inside a temporary directory when fetching dependencies.
-    TempDir(TempDir),
-    /// Standard library crate (actual_crate, display_crate)
+    Filesystem,
+    /// Standard library crate (actual_crate, display_crate),
     /// e.g., ("alloc", "std") when user requests std::vec
-    StdLibrary(String, String),
+    StdLibrary {
+        /// Name of the crate rustdoc should read (e.g., "alloc").
+        actual: String,
+        /// Crate name originally requested by the user (e.g., "std").
+        display: String,
+    },
 }
 
 impl CargoPath {
+    /// Build a cargo path from an existing filesystem directory.
+    fn from_path(path: PathBuf) -> Self {
+        Self {
+            root: Some(path),
+            _temp_guard: None,
+            kind: CargoPathKind::Filesystem,
+        }
+    }
+
+    /// Build a cargo path from a temporary directory, keeping the guard alive.
+    fn from_temp_dir(temp_dir: TempDir) -> Self {
+        let root = temp_dir.path().to_path_buf();
+        Self {
+            root: Some(root),
+            _temp_guard: Some(temp_dir),
+            kind: CargoPathKind::Filesystem,
+        }
+    }
+
+    /// Build a cargo path representing a std library crate mapping.
+    fn std(actual: impl Into<String>, display: impl Into<String>) -> Self {
+        Self {
+            root: None,
+            _temp_guard: None,
+            kind: CargoPathKind::StdLibrary {
+                actual: actual.into(),
+                display: display.into(),
+            },
+        }
+    }
+
+    /// Whether this path corresponds to a std library crate.
+    fn is_std_library(&self) -> bool {
+        matches!(self.kind, CargoPathKind::StdLibrary { .. })
+    }
+
+    /// Return the (actual, display) crate names when this path is std.
+    fn std_names(&self) -> Option<(&str, &str)> {
+        match &self.kind {
+            CargoPathKind::StdLibrary { actual, display } => {
+                Some((actual.as_str(), display.as_str()))
+            }
+            _ => None,
+        }
+    }
+
+    /// Canonical filesystem path for this cargo source (not available for std crates).
+    fn canonical_path(&self) -> Result<PathBuf> {
+        if self.is_std_library() {
+            return Err(RuskelError::Generate(
+                "Standard library crates don't have a filesystem path".to_string(),
+            ));
+        }
+        let path = self.as_path()?;
+        fs::canonicalize(path).map_err(|err| {
+            RuskelError::Generate(format!(
+                "Failed to canonicalize path '{}': {err}",
+                path.display()
+            ))
+        })
+    }
+
     /// Return the root directory tied to this Cargo source.
     pub fn as_path(&self) -> Result<&Path> {
-        match self {
-            Self::Path(path) => Ok(path.as_path()),
-            Self::TempDir(temp_dir) => Ok(temp_dir.path()),
-            Self::StdLibrary(actual, display) => Err(RuskelError::Generate(format!(
+        match &self.kind {
+            CargoPathKind::Filesystem => self.root.as_deref().ok_or_else(|| {
+                RuskelError::Generate("filesystem cargo path missing root directory".to_string())
+            }),
+            CargoPathKind::StdLibrary { actual, display } => Err(RuskelError::Generate(format!(
                 "Standard library crate '{display}' (resolved as '{actual}') does not have a filesystem path"
             ))),
         }
@@ -223,9 +300,9 @@ impl CargoPath {
         silent: bool,
     ) -> Result<Crate> {
         // Handle standard library crates specially
-        if let Self::StdLibrary(actual_crate, display_crate) = self {
+        if let Some((actual_crate, display_crate)) = self.std_names() {
             let display_name = if actual_crate != display_crate {
-                Some(display_crate.as_str())
+                Some(display_crate)
             } else {
                 None
             };
@@ -283,57 +360,55 @@ impl CargoPath {
 
     /// Compute the absolute `Cargo.toml` path for this source.
     pub fn manifest_path(&self) -> Result<PathBuf> {
-        match self {
-            Self::StdLibrary(_, _) => Err(RuskelError::Generate(
+        if self.is_std_library() {
+            return Err(RuskelError::Generate(
                 "Standard library crates don't have a manifest path".to_string(),
-            )),
-            _ => {
-                let manifest_path = self.as_path()?.join("Cargo.toml");
-                absolute(&manifest_path).map_err(|err| {
-                    RuskelError::Generate(format!(
-                        "Failed to resolve manifest path for '{}': {err}",
-                        manifest_path.display()
-                    ))
-                })
-            }
+            ));
         }
+
+        let manifest_path = self.as_path()?.join("Cargo.toml");
+        absolute(&manifest_path).map_err(|err| {
+            RuskelError::Generate(format!(
+                "Failed to resolve manifest path for '{}': {err}",
+                manifest_path.display()
+            ))
+        })
     }
 
     /// Return whether this cargo path includes a `Cargo.toml`.
     pub fn has_manifest(&self) -> Result<bool> {
-        match self {
-            Self::StdLibrary(_, _) => Ok(false),
-            _ => Ok(self.as_path()?.join("Cargo.toml").exists()),
+        if self.is_std_library() {
+            return Ok(false);
         }
+        Ok(self.as_path()?.join("Cargo.toml").exists())
     }
 
     /// Identify if the path is a standalone package manifest.
     pub fn is_package(&self) -> Result<bool> {
-        match self {
-            Self::StdLibrary(_, _) => Ok(false),
-            _ => Ok(self.has_manifest()? && !self.is_workspace()?),
+        if self.is_std_library() {
+            return Ok(false);
         }
+        Ok(self.has_manifest()? && !self.is_workspace()?)
     }
 
     /// Identify if the path is a workspace manifest without a package section.
     pub fn is_workspace(&self) -> Result<bool> {
-        match self {
-            Self::StdLibrary(_, _) => Ok(false),
-            _ => {
-                if !self.has_manifest()? {
-                    return Ok(false);
-                }
-                let manifest_path = self.manifest_path()?;
-                let manifest = cargo_toml::Manifest::from_path(&manifest_path)
-                    .map_err(|err| RuskelError::ManifestParse(err.to_string()))?;
-                Ok(manifest.workspace.is_some() && manifest.package.is_none())
-            }
+        if self.is_std_library() {
+            return Ok(false);
         }
+
+        if !self.has_manifest()? {
+            return Ok(false);
+        }
+        let manifest_path = self.manifest_path()?;
+        let manifest = cargo_toml::Manifest::from_path(&manifest_path)
+            .map_err(|err| RuskelError::ManifestParse(err.to_string()))?;
+        Ok(manifest.workspace.is_some() && manifest.package.is_none())
     }
 
     /// Find a dependency within the current workspace or registry cache.
     pub fn find_dependency(&self, dependency: &str, offline: bool) -> Result<Option<Self>> {
-        if let Self::StdLibrary(_, _) = self {
+        if self.is_std_library() {
             return Ok(None);
         }
 
@@ -364,7 +439,7 @@ impl CargoPath {
             if package_name == dependency || package_name == alt_dependency {
                 let manifest_dir =
                     Self::manifest_dir_from_path(package.manifest_path(), package_name)?;
-                return Ok(Some(Self::Path(manifest_dir)));
+                return Ok(Some(Self::from_path(manifest_dir)));
             }
         }
         Ok(None)
@@ -377,7 +452,7 @@ impl CargoPath {
         loop {
             let manifest_path = current_dir.join("Cargo.toml");
             if manifest_path.exists() {
-                return Some(Self::Path(current_dir));
+                return Some(Self::from_path(current_dir));
             }
             if !current_dir.pop() {
                 break;
@@ -407,7 +482,10 @@ impl CargoPath {
             if package_name == module_name || package_name == alt_name {
                 let package_path =
                     Self::manifest_dir_from_path(package.manifest_path(), package_name)?;
-                return Ok(Some(ResolvedTarget::new(Self::Path(package_path), &[])));
+                return Ok(Some(ResolvedTarget::new(
+                    Self::from_path(package_path),
+                    &[],
+                )));
             }
         }
         Ok(None)
@@ -482,7 +560,7 @@ fn create_dummy_crate(
     let manifest = generate_dummy_manifest(dependency, version, features);
     fs::write(manifest_path, manifest)?;
 
-    Ok(CargoPath::TempDir(temp_dir))
+    Ok(CargoPath::from_temp_dir(temp_dir))
 }
 
 /// A resolved Rust package or module target.
@@ -539,7 +617,8 @@ impl ResolvedTarget {
                 if path.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
                     Self::from_rust_file(path, &target.path)
                 } else {
-                    let cargo_path = CargoPath::Path(path.clone());
+                    let cargo_path = CargoPath::from_path(path.clone());
+                    let cargo_path = CargoPath::from_path(cargo_path.canonical_path()?);
                     if cargo_path.is_package()? {
                         Ok(Self::new(cargo_path, &target.path))
                     } else if cargo_path.is_workspace()? {
@@ -570,10 +649,7 @@ impl ResolvedTarget {
             Entrypoint::Name { name, version } => {
                 // Check if this is a standard library crate
                 if is_std_library_crate(&name) {
-                    return Ok(Self::new(
-                        CargoPath::StdLibrary(name.to_string(), name),
-                        &target.path,
-                    ));
+                    return Ok(Self::new(CargoPath::std(name.clone(), name), &target.path));
                 }
 
                 // Check if this is a common std library module name
@@ -618,7 +694,7 @@ impl ResolvedTarget {
             }
         }
 
-        let cargo_path = CargoPath::Path(current_dir.clone());
+        let cargo_path = CargoPath::from_path(current_dir.clone());
         let relative_path = file_path.strip_prefix(&current_dir).map_err(|_| {
             RuskelError::InvalidTarget("Failed to determine relative path".to_string())
         })?;
@@ -715,7 +791,7 @@ pub fn resolve_target(target_str: &str, offline: bool) -> Result<ResolvedTarget>
             if is_std_library_crate(name) {
                 let display_name = original_crate.as_ref().unwrap_or(name).to_string();
                 return Ok(ResolvedTarget::new(
-                    CargoPath::StdLibrary(name.to_string(), display_name),
+                    CargoPath::std(name.to_string(), display_name),
                     &target.path,
                 ));
             }
@@ -1099,7 +1175,7 @@ error: Compilation failed, aborting rustdoc
     #[test]
     fn test_is_workspace() -> Result<()> {
         let temp_dir = tempdir()?;
-        let cargo_path = CargoPath::Path(temp_dir.path().to_path_buf());
+        let cargo_path = CargoPath::from_path(temp_dir.path().to_path_buf());
 
         // Create a workspace Cargo.toml
         let manifest = r#"
@@ -1163,7 +1239,7 @@ version = "0.1.0"
         fs::write(member2_dir.join("Cargo.toml"), member2_manifest)?;
         fs::write(member2_dir.join("src").join("lib.rs"), "// member2 lib.rs")?;
 
-        let cargo_path = CargoPath::Path(temp_dir.path().to_path_buf());
+        let cargo_path = CargoPath::from_path(temp_dir.path().to_path_buf());
 
         // Test finding a package in the workspace
         if let Some(resolved) = cargo_path.find_workspace_package("member1")? {
@@ -1222,10 +1298,7 @@ version = "0.1.0"
             package_path,
             filter,
         } = resolved;
-        let path = match package_path {
-            CargoPath::Path(path) => fs::canonicalize(path)?,
-            other => panic!("Expected workspace path, got {other:?}"),
-        };
+        let path = package_path.canonical_path()?;
         let expected = fs::canonicalize(&localcrate_dir)?;
 
         assert_eq!(path, expected);
@@ -1402,12 +1475,12 @@ version = "0.1.0"
         expected_filter: &str,
     ) {
         let result = resolve_target(target, true).unwrap();
-        match &result.package_path {
-            CargoPath::StdLibrary(actual, display) => {
+        match result.package_path.std_names() {
+            Some((actual, display)) => {
                 assert_eq!(actual, expected_actual);
                 assert_eq!(display, expected_display);
             }
-            _ => panic!("Expected StdLibrary variant for {target}"),
+            None => panic!("Expected StdLibrary variant for {target}"),
         }
         assert_eq!(result.filter, expected_filter);
     }
@@ -1490,27 +1563,16 @@ version = "0.1.0"
 
             match (result, expected_result) {
                 (Ok(resolved), ExpectedResult::Path(expected)) => {
-                    match &resolved.package_path {
-                        CargoPath::Path(path) => {
-                            let resolved_path = fs::canonicalize(path).unwrap();
-                            let expected_path = fs::canonicalize(expected).unwrap();
-                            assert_eq!(
-                                resolved_path, expected_path,
-                                "Test case {} failed: package_path mismatch",
-                                i
-                            );
-                        }
-                        CargoPath::TempDir(_) => {
-                            panic!(
-                                "Test case {i} failed: expected CargoPath::Path, got CargoPath::TempDir"
-                            );
-                        }
-                        CargoPath::StdLibrary(_, _) => {
-                            panic!(
-                                "Test case {i} failed: expected CargoPath::Path, got CargoPath::StdLibrary"
-                            );
-                        }
-                    }
+                    let resolved_path = resolved
+                        .package_path
+                        .canonical_path()
+                        .unwrap_or_else(|err| panic!("Test case {i} failed: {err}"));
+                    let expected_path = fs::canonicalize(expected).unwrap();
+                    assert_eq!(
+                        resolved_path, expected_path,
+                        "Test case {} failed: package_path mismatch",
+                        i
+                    );
                     assert_eq!(
                         resolved.filter,
                         expected_filter.join("::"),
