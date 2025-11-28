@@ -77,23 +77,27 @@ A structured list of improvements for elegance, simplicity, correctness, and mai
 
 ### Remove Dead Code
 
-- [ ] **S1.** Remove commented-out FILTERED_AUTO_TRAITS code
+- [x] **S1.** Remove commented-out FILTERED_AUTO_TRAITS code
   - File: `crates/libruskel/src/render.rs:305-316`
   - Details: 12 lines of commented code for filtering auto traits. Either implement the feature or remove entirely.
+  - **DONE**: Removed the commented-out FILTERED_AUTO_TRAITS block.
 
 ### Reduce Complexity
 
-- [ ] **S2.** Pre-split filter path components instead of per-item allocation
+- [x] **S2.** Pre-split filter path components instead of per-item allocation
   - File: `crates/libruskel/src/render.rs:350-351`
   - Details: `filter.split("::").collect()` creates a Vec on every `filter_match()` call. Split once in `RenderState::new()` and store as a field.
+  - **DONE**: RenderState now stores pre-split filter components computed once during construction.
 
-- [ ] **S3.** Document FilterMatch semantics
+- [x] **S3.** Document FilterMatch semantics
   - File: `crates/libruskel/src/render.rs:74-85,341-362`
   - Details: The Hit/Prefix/Suffix distinction in filter matching is non-obvious. Add examples in the enum docs explaining when each applies.
+  - **DONE**: Added textual examples to `FilterMatch` docs and clarified `filter_match` description.
 
-- [ ] **S4.** Simplify macro rendering logic
+- [x] **S4.** Simplify macro rendering logic
   - File: `crates/libruskel/src/render.rs:446-499`
   - Details: 53 lines of branching logic for macro rendering. Consider extracting into helper functions: `render_new_style_macro()` and `render_macro_rules()`.
+  - **DONE**: Refactored macro rendering into `render_new_style_macro` and `render_macro_rules` helpers; main function now delegates and handles shared glue.
 
 ### Reduce Clone Operations
 

@@ -79,6 +79,12 @@ fn escape_path(path: &str) -> String {
 }
 
 /// Classification describing how a filter string matches a path.
+///
+/// Examples (filter → item path):
+/// - `Hit`: "foo::bar" matches "crate::foo::bar" exactly.
+/// - `Prefix`: "foo::bar::baz" while visiting "crate::foo" — still need to descend.
+/// - `Suffix`: "foo" while visiting "crate::foo::bar" — item is under the match.
+/// - `Miss`: unrelated paths like "other" vs "crate::foo::bar".
 #[derive(Debug, PartialEq)]
 enum FilterMatch {
     /// The filter exactly matches the path.
@@ -157,6 +163,8 @@ struct RenderState<'a, 'b> {
     crate_data: &'b Crate,
     /// Tracks whether any item matched the configured filter.
     filter_matched: bool,
+    /// Pre-split filter path components to avoid reallocating per item check.
+    filter_components: Vec<&'a str>,
 }
 
 impl Default for Renderer {
@@ -222,6 +230,11 @@ impl Renderer {
             config: self,
             filter_matched: false,
             crate_data,
+            filter_components: if self.filter.is_empty() {
+                Vec::new()
+            } else {
+                self.filter.split("::").collect()
+            },
         };
         state.render()
     }
@@ -310,19 +323,6 @@ impl RenderState<'_, '_> {
             return false;
         }
 
-        // if !self.config.render_auto_impls {
-        //     if let Some(trait_path) = &impl_.trait_ {
-        //         let trait_name = trait_path
-        //             .name
-        //             .split("::")
-        //             .last()
-        //             .unwrap_or(&trait_path.name);
-        //         if FILTERED_AUTO_TRAITS.contains(&trait_name) && is_blanket {
-        //             return false;
-        //         }
-        //     }
-        // }
-
         true
     }
 
@@ -346,8 +346,8 @@ impl RenderState<'_, '_> {
         }
     }
 
-    /// Does this item match the filter?
-    /// Evaluate how the current filter matches a candidate path.
+    /// Does this item match the active filter?
+    /// Evaluates how the filter path relates to a candidate item path within the crate.
     fn filter_match(&self, path_prefix: &str, item: &Item) -> FilterMatch {
         let item_path = if let Some(name) = &item.name {
             ppush(path_prefix, name)
@@ -355,14 +355,14 @@ impl RenderState<'_, '_> {
             return FilterMatch::Prefix;
         };
 
-        let filter_components: Vec<&str> = self.config.filter.split("::").collect();
         let item_components: Vec<&str> = item_path.split("::").skip(1).collect();
+        let filter_components = self.filter_components.as_slice();
 
         if filter_components == item_components {
             FilterMatch::Hit
         } else if filter_components.starts_with(&item_components) {
             FilterMatch::Prefix
-        } else if item_components.starts_with(&filter_components) {
+        } else if item_components.starts_with(filter_components) {
             FilterMatch::Suffix
         } else {
             FilterMatch::Miss
@@ -455,61 +455,53 @@ impl RenderState<'_, '_> {
         Ok(output)
     }
 
-    /// Render a macro_rules! definition.
+    /// Render a macro_rules! or new-style `macro` definition.
     fn render_macro(&self, item: &Item) -> Result<String> {
         let mut output = docs(item);
 
         let macro_def = try_extract_item!(item, ItemEnum::Macro)?;
-        // Add #[macro_export] for public macros
         output.push_str("#[macro_export]\n");
 
-        // Handle reserved keywords in macro names
-        let macro_str = macro_def.to_string();
+        let macro_src = macro_def.to_string();
+        let rendered = if macro_src.starts_with("macro ") && !macro_src.starts_with("macro_rules!")
+        {
+            self.render_new_style_macro(&macro_src)
+        } else {
+            self.render_macro_rules(&macro_src)
+        };
 
-        // Fix rustdoc's incorrect rendering of new-style macro syntax
-        // rustdoc produces "} {\n    ...\n}" which is invalid syntax
-        // For new-style macros, we need to remove the extra block
-        let fixed_macro_str =
-            if macro_str.starts_with("macro ") && !macro_str.starts_with("macro_rules!") {
-                // This is a new-style declarative macro
-                // Look for the problematic pattern where we have "} { ... }" at the end
-                if MACRO_PLACEHOLDER_REGEX.is_match(&macro_str) {
-                    // Remove the invalid "{ ... }" part, just end after the pattern
-                    MACRO_PLACEHOLDER_REGEX.replace(&macro_str, "}").to_string()
-                } else {
-                    macro_str
-                }
-            } else {
-                macro_str
-            };
+        output.push_str(&rendered);
+        output.push('\n');
+        Ok(output)
+    }
 
-        if let Some(name_start) = fixed_macro_str.find("macro_rules!") {
-            let prefix = &fixed_macro_str[..name_start + 12]; // "macro_rules!"
-            let rest = &fixed_macro_str[name_start + 12..];
+    /// Render a new-style declarative macro while stripping rustdoc placeholders.
+    fn render_new_style_macro(&self, macro_src: &str) -> String {
+        if MACRO_PLACEHOLDER_REGEX.is_match(macro_src) {
+            MACRO_PLACEHOLDER_REGEX.replace(macro_src, "}").to_string()
+        } else {
+            macro_src.to_string()
+        }
+    }
 
-            // Find the macro name (skip whitespace)
+    /// Render a `macro_rules!` macro, escaping reserved names when needed.
+    fn render_macro_rules(&self, macro_src: &str) -> String {
+        if let Some(name_start) = macro_src.find("macro_rules!") {
+            let prefix = &macro_src[..name_start + 12]; // "macro_rules!"
+            let rest = &macro_src[name_start + 12..];
+
             let trimmed = rest.trim_start();
             if let Some(name_end) = trimmed.find(|c: char| c.is_whitespace() || c == '{') {
                 let name = &trimmed[..name_end];
                 let suffix = &trimmed[name_end..];
 
-                // Check if the name is a reserved word
                 if is_reserved_word(name) {
-                    output.push_str(&format!("{prefix} r#{name}{suffix}\n"));
-                } else {
-                    output.push_str(&fixed_macro_str);
-                    output.push('\n');
+                    return format!("{prefix} r#{name}{suffix}");
                 }
-            } else {
-                output.push_str(&fixed_macro_str);
-                output.push('\n');
             }
-        } else {
-            output.push_str(&fixed_macro_str);
-            output.push('\n');
         }
 
-        Ok(output)
+        macro_src.to_string()
     }
 
     /// Render a type alias with generics, bounds, and visibility.
@@ -1199,6 +1191,7 @@ mod tests {
             config: &renderer,
             crate_data: &crate_data,
             filter_matched: false,
+            filter_components: Vec::new(),
         };
 
         let item = crate_data
@@ -1694,6 +1687,11 @@ path = "src/lib.rs"
                     config: &renderer,
                     crate_data,
                     filter_matched: false,
+                    filter_components: if renderer.filter.is_empty() {
+                        Vec::new()
+                    } else {
+                        renderer.filter.split("::").collect()
+                    },
                 };
                 let mut composed = String::new();
                 if let Some(frontmatter) = &renderer.frontmatter
@@ -1722,6 +1720,11 @@ path = "src/lib.rs"
                     config: &renderer,
                     crate_data,
                     filter_matched: false,
+                    filter_components: if renderer.filter.is_empty() {
+                        Vec::new()
+                    } else {
+                        renderer.filter.split("::").collect()
+                    },
                 };
                 let root = super::must_get(crate_data, &crate_data.root)?;
                 state.render_item("", root, false)
