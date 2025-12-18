@@ -14,8 +14,8 @@ workspace = true
 [dependencies]
 libruskel = { workspace=true }
 ruskel-mcp = { workspace=true }
-clap = { version = "4.5.53", features = ["derive", "env"] }
-tokio = { version = "1", features = ["rt-multi-thread"] }
-which = "8.0"
-shell-words = "1.1.0"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { workspace = true, features = ["derive", "env"] }
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+which = { workspace = true }
+shell-words = { workspace = true }
+tracing-subscriber = { workspace = true }
