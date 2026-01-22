@@ -153,6 +153,7 @@ Or if running from source:
 The `ruskel_skeleton` tool accepts the following parameters:
 
 - `target` (required): The crate/module to generate a skeleton for
+- `bin`: Select a specific binary target when rendering a package (default: null)
 - `auto_impls`: Include auto-implemented traits (default: false)
 - `private`: Include private items (default: false)
 - `frontmatter`: Include comment frontmatter describing the invocation (default: true)

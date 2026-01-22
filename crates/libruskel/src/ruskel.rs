@@ -3,7 +3,7 @@ use rustdoc_types::Crate;
 use super::{
     cargoutils::*,
     error::*,
-    frontmatter::{FrontmatterConfig, FrontmatterHit, FrontmatterSearch},
+    frontmatter::{FrontmatterBinaryTarget, FrontmatterConfig, FrontmatterHit, FrontmatterSearch},
     render::*,
     search::{
         ListItem, SearchIndex, SearchItemKind, SearchOptions, SearchResponse,
@@ -31,6 +31,9 @@ pub struct Ruskel {
 
     /// Whether to emit frontmatter comments with rendered output.
     frontmatter: bool,
+
+    /// Optional binary target override for bin-only crates or bin rendering.
+    bin_target: Option<String>,
 }
 
 /// Drop `use` matches when more specific items are present.
@@ -86,6 +89,7 @@ impl Ruskel {
             auto_impls: false,
             silent: false,
             frontmatter: true,
+            bin_target: None,
         }
     }
 
@@ -114,6 +118,12 @@ impl Ruskel {
         self
     }
 
+    /// Overrides the binary target used when rendering a crate.
+    pub fn with_bin_target(mut self, bin_target: Option<String>) -> Self {
+        self.bin_target = bin_target;
+        self
+    }
+
     /// Returns the parsed representation of the crate's API.
     ///
     /// # Arguments
@@ -131,13 +141,17 @@ impl Ruskel {
         private_items: bool,
     ) -> Result<Crate> {
         let rt = resolve_target(target, self.offline)?;
-        rt.read_crate(
+        let options = CrateReadOptions {
             no_default_features,
             all_features,
             features,
             private_items,
-            self.silent,
-        )
+            silent: self.silent,
+            offline: self.offline,
+            bin_override: self.bin_target.clone(),
+        };
+        let crate_read = rt.read_crate(&options)?;
+        Ok(crate_read.crate_data)
     }
 
     /// Execute a search against the crate and return the matched items along with a rendered skeleton.
@@ -153,15 +167,23 @@ impl Ruskel {
         options: &SearchOptions,
     ) -> Result<SearchResponse> {
         let rt = resolve_target(target, self.offline)?;
-        let crate_data = rt.read_crate(
+        let read_options = CrateReadOptions {
             no_default_features,
             all_features,
             features,
-            options.include_private,
-            self.silent,
-        )?;
+            private_items: options.include_private,
+            silent: self.silent,
+            offline: self.offline,
+            bin_override: self.bin_target.clone(),
+        };
+        let CrateRead {
+            crate_data,
+            bin_target,
+        } = rt.read_crate(&read_options)?;
 
-        let index = SearchIndex::build(&crate_data, options.include_private);
+        let include_private =
+            options.include_private || bin_target.as_ref().is_some_and(|target| target.is_bin_only);
+        let index = SearchIndex::build(&crate_data, include_private);
         let results = index.search(options);
 
         if results.is_empty() {
@@ -175,7 +197,7 @@ impl Ruskel {
         let mut renderer = Renderer::default()
             .with_filter(&rt.filter)
             .with_auto_impls(self.auto_impls)
-            .with_private_items(options.include_private)
+            .with_private_items(include_private)
             .with_selection(selection);
         if self.frontmatter {
             let hits = results
@@ -197,9 +219,15 @@ impl Ruskel {
             } else {
                 Some(rt.filter)
             };
-            let frontmatter = FrontmatterConfig::for_target(target.to_string())
+            let mut frontmatter = FrontmatterConfig::for_target(target.to_string())
                 .with_filter(filter)
                 .with_search(search_meta);
+            if let Some(bin_target) = bin_target {
+                frontmatter = frontmatter.with_binary_target(FrontmatterBinaryTarget::new(
+                    bin_target.name,
+                    bin_target.is_bin_only,
+                ));
+            }
             renderer = renderer.with_frontmatter(frontmatter);
         }
         let rendered = renderer.render(&crate_data)?;
@@ -223,13 +251,21 @@ impl Ruskel {
                 .unwrap_or(false);
 
         let rt = resolve_target(target, self.offline)?;
-        let crate_data = rt.read_crate(
+        let read_options = CrateReadOptions {
             no_default_features,
             all_features,
             features,
-            include_private,
-            self.silent,
-        )?;
+            private_items: include_private,
+            silent: self.silent,
+            offline: self.offline,
+            bin_override: self.bin_target.clone(),
+        };
+        let CrateRead {
+            crate_data,
+            bin_target,
+        } = rt.read_crate(&read_options)?;
+        let include_private =
+            include_private || bin_target.is_some_and(|target| target.is_bin_only);
 
         let index = SearchIndex::build(&crate_data, include_private);
 
@@ -269,25 +305,40 @@ impl Ruskel {
         private_items: bool,
     ) -> Result<String> {
         let rt = resolve_target(target, self.offline)?;
-        let crate_data = rt.read_crate(
+        let read_options = CrateReadOptions {
             no_default_features,
             all_features,
             features,
-            true,
-            self.silent,
-        )?;
+            private_items: true,
+            silent: self.silent,
+            offline: self.offline,
+            bin_override: self.bin_target.clone(),
+        };
+        let CrateRead {
+            crate_data,
+            bin_target,
+        } = rt.read_crate(&read_options)?;
 
+        let render_private =
+            private_items || bin_target.as_ref().is_some_and(|target| target.is_bin_only);
         let mut renderer = Renderer::default()
             .with_filter(&rt.filter)
             .with_auto_impls(self.auto_impls)
-            .with_private_items(private_items);
+            .with_private_items(render_private);
         if self.frontmatter {
             let filter = if rt.filter.is_empty() {
                 None
             } else {
                 Some(rt.filter)
             };
-            let frontmatter = FrontmatterConfig::for_target(target.to_string()).with_filter(filter);
+            let mut frontmatter =
+                FrontmatterConfig::for_target(target.to_string()).with_filter(filter);
+            if let Some(bin_target) = bin_target {
+                frontmatter = frontmatter.with_binary_target(FrontmatterBinaryTarget::new(
+                    bin_target.name,
+                    bin_target.is_bin_only,
+                ));
+            }
             renderer = renderer.with_frontmatter(frontmatter);
         }
 

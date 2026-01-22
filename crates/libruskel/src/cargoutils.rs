@@ -7,6 +7,7 @@ use std::{
 
 use cargo::{core::Workspace, ops, util::context::GlobalContext};
 use once_cell::sync::Lazy;
+use rustdoc_json::PackageTarget;
 use rustdoc_types::Crate;
 use semver::Version;
 use tempfile::TempDir;
@@ -291,14 +292,7 @@ impl CargoPath {
 
     /// Load rustdoc JSON for the crate represented by this cargo path.
     /// Read the crate data for this resolved target using rustdoc JSON generation.
-    pub fn read_crate(
-        &self,
-        no_default_features: bool,
-        all_features: bool,
-        features: Vec<String>,
-        private_items: bool,
-        silent: bool,
-    ) -> Result<Crate> {
+    pub fn read_crate(&self, options: &CrateReadOptions) -> Result<CrateRead> {
         // Handle standard library crates specially
         if let Some((actual_crate, display_crate)) = self.std_names() {
             let display_name = if actual_crate != display_crate {
@@ -306,23 +300,23 @@ impl CargoPath {
             } else {
                 None
             };
-            return load_std_library_json(actual_crate, display_name);
+            return Ok(CrateRead {
+                crate_data: load_std_library_json(actual_crate, display_name)?,
+                bin_target: None,
+            });
         }
 
-        // First check if this crate has a library target by reading Cargo.toml
         let manifest_path = self.manifest_path()?;
-        let manifest_content = fs::read_to_string(&manifest_path)?;
-        let manifest: cargo_toml::Manifest = cargo_toml::Manifest::from_str(&manifest_content)
-            .map_err(|e| RuskelError::ManifestParse(e.to_string()))?;
-
-        // Check if there's a [lib] section or if src/lib.rs exists
-        let has_lib = manifest.lib.is_some() || self.as_path()?.join("src/lib.rs").exists();
-
-        if !has_lib {
-            return Err(RuskelError::Generate(
-                "error: no library targets found in package".to_string(),
-            ));
-        }
+        let PackageTargetSelection {
+            package_target,
+            bin_target,
+        } = select_package_target(
+            &manifest_path,
+            options.offline,
+            options.bin_override.as_deref(),
+        )?;
+        let include_private =
+            options.private_items || bin_target.as_ref().is_some_and(|target| target.is_bin_only);
 
         let mut captured_stdout = Vec::new();
         let mut captured_stderr = Vec::new();
@@ -330,15 +324,16 @@ impl CargoPath {
         let build_result = rustdoc_json::Builder::default()
             .toolchain("nightly")
             .manifest_path(manifest_path)
-            .document_private_items(private_items)
-            .no_default_features(no_default_features)
-            .all_features(all_features)
-            .features(features)
-            .quiet(silent)
+            .package_target(package_target)
+            .document_private_items(include_private)
+            .no_default_features(options.no_default_features)
+            .all_features(options.all_features)
+            .features(&options.features)
+            .quiet(options.silent)
             .silent(false)
             .build_with_captured_output(&mut captured_stdout, &mut captured_stderr);
 
-        if !silent {
+        if !options.silent {
             if !captured_stdout.is_empty() && io::stdout().write_all(&captured_stdout).is_err() {
                 // Best-effort output mirroring; ignore write failures.
             }
@@ -347,15 +342,18 @@ impl CargoPath {
             }
         }
 
-        let json_path =
-            build_result.map_err(|err| map_rustdoc_build_error(&err, &captured_stderr, silent))?;
+        let json_path = build_result
+            .map_err(|err| map_rustdoc_build_error(&err, &captured_stderr, options.silent))?;
         let json_content = fs::read_to_string(&json_path)?;
         let crate_data: Crate = serde_json::from_str(&json_content).map_err(|e| {
             RuskelError::Generate(format!(
                 "Failed to parse rustdoc JSON, which may indicate an outdated nightly toolchain - try running 'rustup update nightly':\nError: {e}"
             ))
         })?;
-        Ok(crate_data)
+        Ok(CrateRead {
+            crate_data,
+            bin_target,
+        })
     }
 
     /// Compute the absolute `Cargo.toml` path for this source.
@@ -511,6 +509,91 @@ fn create_quiet_cargo_config(offline: bool) -> Result<GlobalContext> {
     Ok(config)
 }
 
+/// Determine which Cargo target should be used for rustdoc JSON generation.
+fn select_package_target(
+    manifest_path: &Path,
+    offline: bool,
+    bin_override: Option<&str>,
+) -> Result<PackageTargetSelection> {
+    let config = create_quiet_cargo_config(offline)?;
+    let workspace =
+        Workspace::new(manifest_path, &config).map_err(|err| convert_cargo_error(&err))?;
+    let package = workspace
+        .current()
+        .map_err(|err| convert_cargo_error(&err))?;
+
+    let has_lib = package.targets().iter().any(|target| target.is_lib());
+    let bin_targets: Vec<_> = package
+        .targets()
+        .iter()
+        .filter(|target| target.is_bin())
+        .collect();
+    let bin_names: Vec<&str> = bin_targets.iter().map(|target| target.name()).collect();
+
+    if let Some(bin_name) = bin_override {
+        if bin_names.contains(&bin_name) {
+            return Ok(PackageTargetSelection {
+                package_target: PackageTarget::Bin(bin_name.to_string()),
+                bin_target: Some(BinaryTarget {
+                    name: bin_name.to_string(),
+                    is_bin_only: !has_lib,
+                }),
+            });
+        }
+
+        let available = if bin_names.is_empty() {
+            "no binary targets found".to_string()
+        } else {
+            format!("available: {}", bin_names.join(", "))
+        };
+
+        return Err(RuskelError::Generate(format!(
+            "error: binary target '{bin_name}' not found in package ({available})"
+        )));
+    }
+
+    if has_lib {
+        return Ok(PackageTargetSelection {
+            package_target: PackageTarget::Lib,
+            bin_target: None,
+        });
+    }
+
+    if bin_names.is_empty() {
+        return Err(RuskelError::Generate(
+            "error: no library targets found in package".to_string(),
+        ));
+    }
+
+    if let Some(default_run) = package.manifest().default_run()
+        && bin_names.contains(&default_run)
+    {
+        return Ok(PackageTargetSelection {
+            package_target: PackageTarget::Bin(default_run.to_string()),
+            bin_target: Some(BinaryTarget {
+                name: default_run.to_string(),
+                is_bin_only: true,
+            }),
+        });
+    }
+
+    if bin_names.len() == 1 {
+        let name = bin_names[0];
+        return Ok(PackageTargetSelection {
+            package_target: PackageTarget::Bin(name.to_string()),
+            bin_target: Some(BinaryTarget {
+                name: name.to_string(),
+                is_bin_only: true,
+            }),
+        });
+    }
+
+    Err(RuskelError::Generate(format!(
+        "error: multiple binary targets found in package ({})",
+        bin_names.join(", ")
+    )))
+}
+
 /// Construct a minimal manifest string for a temporary crate that depends on `dependency`.
 fn generate_dummy_manifest(
     dependency: &str,
@@ -563,6 +646,52 @@ fn create_dummy_crate(
     Ok(CargoPath::from_temp_dir(temp_dir))
 }
 
+/// Metadata describing a selected binary target.
+#[derive(Debug, Clone)]
+pub struct BinaryTarget {
+    /// Name of the selected binary target.
+    pub(crate) name: String,
+    /// Whether the package has no library target.
+    pub(crate) is_bin_only: bool,
+}
+
+/// Container for rustdoc JSON and target metadata.
+#[derive(Debug)]
+pub struct CrateRead {
+    /// Parsed rustdoc JSON for the selected target.
+    pub(crate) crate_data: Crate,
+    /// Binary target metadata when a bin target was selected.
+    pub(crate) bin_target: Option<BinaryTarget>,
+}
+
+/// Options controlling how rustdoc JSON is generated.
+#[derive(Debug, Clone)]
+pub struct CrateReadOptions {
+    /// Whether to disable default features.
+    pub(crate) no_default_features: bool,
+    /// Whether to enable all features.
+    pub(crate) all_features: bool,
+    /// Specific feature list to enable.
+    pub(crate) features: Vec<String>,
+    /// Whether to include private items in rustdoc output.
+    pub(crate) private_items: bool,
+    /// Whether to suppress cargo output during rustdoc generation.
+    pub(crate) silent: bool,
+    /// Whether to force offline mode for cargo operations.
+    pub(crate) offline: bool,
+    /// Optional override of the binary target name.
+    pub(crate) bin_override: Option<String>,
+}
+
+/// Internal package target selection details for rustdoc JSON.
+#[derive(Debug)]
+struct PackageTargetSelection {
+    /// Cargo package target used for rustdoc JSON.
+    package_target: PackageTarget,
+    /// Binary target metadata for frontmatter output.
+    bin_target: Option<BinaryTarget>,
+}
+
 /// A resolved Rust package or module target.
 #[derive(Debug)]
 pub struct ResolvedTarget {
@@ -593,21 +722,8 @@ impl ResolvedTarget {
     }
 
     /// Read the crate data for this resolved target using rustdoc JSON generation.
-    pub fn read_crate(
-        &self,
-        no_default_features: bool,
-        all_features: bool,
-        features: Vec<String>,
-        private_items: bool,
-        silent: bool,
-    ) -> Result<Crate> {
-        self.package_path.read_crate(
-            no_default_features,
-            all_features,
-            features,
-            private_items,
-            silent,
-        )
+    pub fn read_crate(&self, options: &CrateReadOptions) -> Result<CrateRead> {
+        self.package_path.read_crate(options)
     }
 
     /// Resolve a `Target` into a fully-qualified location and filter path.

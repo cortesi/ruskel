@@ -20,6 +20,10 @@ pub struct RuskelSkeletonTool {
     #[serde(default)]
     pub search: Option<String>,
 
+    /// Select a specific binary target when rendering a package.
+    #[serde(default)]
+    pub bin: Option<String>,
+
     /// Limit search to specific domains (name, doc, signature, path). Defaults to name, doc, signature.
     #[serde(default)]
     pub search_spec: Option<Vec<String>>,
@@ -118,7 +122,11 @@ impl RuskelServer {
             return Ok(run_test_mode(params));
         }
 
-        let ruskel = self.ruskel.clone().with_frontmatter(params.frontmatter);
+        let ruskel = self
+            .ruskel
+            .clone()
+            .with_frontmatter(params.frontmatter)
+            .with_bin_target(params.bin.clone());
 
         if let Some(query) = params
             .search

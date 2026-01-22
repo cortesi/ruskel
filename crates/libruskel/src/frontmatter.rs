@@ -13,6 +13,8 @@ pub struct FrontmatterConfig {
     pub search: Option<FrontmatterSearch>,
     /// Canonical module path selected during target resolution.
     pub filter: Option<String>,
+    /// Optional binary target information for the rendered output.
+    pub binary_target: Option<FrontmatterBinaryTarget>,
 }
 
 impl FrontmatterConfig {
@@ -23,6 +25,7 @@ impl FrontmatterConfig {
             target: Some(target.into()),
             search: None,
             filter: None,
+            binary_target: None,
         }
     }
 
@@ -37,6 +40,12 @@ impl FrontmatterConfig {
     /// Attach the resolved filter path used for rendering.
     pub fn with_filter(mut self, filter: Option<String>) -> Self {
         self.filter = filter;
+        self
+    }
+
+    /// Attach binary target metadata to the frontmatter.
+    pub fn with_binary_target(mut self, binary_target: FrontmatterBinaryTarget) -> Self {
+        self.binary_target = Some(binary_target);
         self
     }
 
@@ -61,6 +70,23 @@ impl FrontmatterConfig {
         output.push_str(
             "// Ruskel skeleton - syntactically valid Rust with implementation omitted.\n",
         );
+        if let Some(binary_target) = &self.binary_target {
+            if binary_target.is_bin_only {
+                writeln!(
+                    output,
+                    "// Note: binary crate; rendering bin target \"{}\"; showing private API.",
+                    binary_target.name
+                )
+                .expect("write frontmatter binary note");
+            } else {
+                writeln!(
+                    output,
+                    "// Note: rendering bin target \"{}\".",
+                    binary_target.name
+                )
+                .expect("write frontmatter binary note");
+            }
+        }
 
         let mut settings = Vec::new();
         if let Some(target) = &self.target {
@@ -88,6 +114,49 @@ impl FrontmatterConfig {
         output.push('\n');
 
         Some(output)
+    }
+}
+
+/// Binary target metadata for frontmatter rendering.
+#[derive(Debug, Clone)]
+pub struct FrontmatterBinaryTarget {
+    /// Name of the binary target being rendered.
+    pub name: String,
+    /// Whether the package is a binary-only crate.
+    pub is_bin_only: bool,
+}
+
+impl FrontmatterBinaryTarget {
+    /// Build a binary target descriptor for frontmatter output.
+    pub fn new(name: impl Into<String>, is_bin_only: bool) -> Self {
+        Self {
+            name: name.into(),
+            is_bin_only,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{FrontmatterBinaryTarget, FrontmatterConfig};
+
+    #[test]
+    fn frontmatter_inserts_binary_admonition_after_header() {
+        let frontmatter = FrontmatterConfig::for_target("bincrate")
+            .with_binary_target(FrontmatterBinaryTarget::new("bincrate", true));
+        let rendered = frontmatter
+            .render(false, false, false)
+            .expect("frontmatter output");
+        let mut lines = rendered.lines();
+
+        assert_eq!(
+            lines.next().unwrap(),
+            "// Ruskel skeleton - syntactically valid Rust with implementation omitted."
+        );
+        assert_eq!(
+            lines.next().unwrap(),
+            "// Note: binary crate; rendering bin target \"bincrate\"; showing private API."
+        );
     }
 }
 

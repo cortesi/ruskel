@@ -25,6 +25,10 @@ struct Cli {
     #[arg(default_value = "./")]
     target: String,
 
+    /// Select a specific binary target when rendering a package
+    #[arg(long, value_name = "NAME")]
+    bin: Option<String>,
+
     /// Output raw JSON instead of rendered Rust code
     #[arg(long, default_value_t = false)]
     raw: bool,
@@ -128,6 +132,7 @@ fn check_nightly_toolchain() -> Result<(), String> {
 fn run_mcp(cli: &Cli) -> Result<(), Box<dyn Error>> {
     // Validate that only configuration arguments are provided with --mcp
     if cli.target != "./"
+        || cli.bin.is_some()
         || cli.raw
         || cli.no_default_features
         || cli.all_features
@@ -170,7 +175,8 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
         .with_offline(cli.offline)
         .with_auto_impls(cli.auto_impls)
         .with_frontmatter(!cli.no_frontmatter)
-        .with_silent(!cli.verbose);
+        .with_silent(!cli.verbose)
+        .with_bin_target(cli.bin.clone());
 
     if cli.list {
         return run_list(cli, &rs);
