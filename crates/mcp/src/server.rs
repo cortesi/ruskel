@@ -10,18 +10,18 @@ use tracing_subscriber::filter::LevelFilter;
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 /// Parameters accepted by the ruskel MCP tool.
 pub struct RuskelSkeletonTool {
-    /// Crate, module path, or filesystem path (optionally with @<semver>) whose API skeleton should be produced.
+    /// Target to skeletonize: crate, module, path, or crate@version.
     pub target: String,
 
-    /// Include non‑public (private / crate‑private) items.
+    /// Include private items.
     #[serde(default)]
     pub private: bool,
 
-    /// Restrict output to matches for this search query instead of rendering the entire target.
+    /// Restrict output to matches for this query.
     #[serde(default)]
     pub search: Option<String>,
 
-    /// Select a specific binary target when rendering a package.
+    /// Render a binary target as a library, with private items included.
     #[serde(default)]
     pub bin: Option<String>,
 
@@ -29,7 +29,7 @@ pub struct RuskelSkeletonTool {
     #[serde(default)]
     pub search_spec: Option<Vec<String>>,
 
-    /// Include frontmatter comments describing the invocation context.
+    /// Include comment frontmatter.
     #[serde(default = "default_frontmatter_enabled")]
     pub frontmatter: bool,
 
@@ -37,7 +37,7 @@ pub struct RuskelSkeletonTool {
     #[serde(default)]
     pub search_case_sensitive: bool,
 
-    /// Render only the direct matches without expanding container contents.
+    /// Only render direct matches, not expanded containers.
     #[serde(default)]
     pub direct_match_only: bool,
 
@@ -69,10 +69,8 @@ impl RuskelServer {
     }
 
     #[tool]
-    /// **ruskel** returns a Rust skeleton that shows the API of any item with implementation
-    /// bodies stripped. Useful for models that need to look up names, signatures, derives, APIs,
-    /// and doc‑comments while writing or reviewing Rust code. An item can be a crate, module,
-    /// struct, trait, function, or any other Rust entity that can be referred to with a Rust path.
+    /// **ruskel** returns a Rust API skeleton with implementation stripped. Useful for looking up
+    /// signatures, derives, APIs, and doc-comments.
     ///
     /// # When a model should call this tool
     /// 1. It needs to look up a function/trait/struct signature.
@@ -80,28 +78,24 @@ impl RuskelServer {
     /// 3. The user asks for examples or docs from a crate.
     ///
     /// # Target syntax examples
-    /// - `mycrate::Struct` →  a struct in the current crate
-    /// - `mycrate::Struct::method` →  a method on a struct in the current crate
-    /// - `std::vec::Vec` →  Vec from the std lib
+    /// - `mycrate::Struct` →  struct in current crate
+    /// - `mycrate::Struct::method` →  method on struct in current crate
+    /// - `std::vec::Vec` →  Vec from std lib
     /// - `serde` →  latest serde on crates.io
     /// - `serde@1.0.160` →  specific published version
-    /// - `serde::de::Deserialize` →  narrow output to one module/type for small contexts
+    /// - `serde::de::Deserialize` →  narrow to one module/type
     /// - `/path/to/crate` or `/path/to/crate::submod` →  local workspace paths
     ///
     /// # Output format
-    /// Plain UTF‑8 text containing valid Rust code, with implementation omitted.
+    /// Valid Rust code with implementation omitted.
     ///
     /// # Tips for LLMs
-    /// - Request deep module paths (e.g. `tokio::sync::mpsc`) to keep the reply below
-    ///   your token budget.
+    /// - Request deep module paths (e.g. `tokio::sync::mpsc`) to reduce output size.
     /// - Pass `all_features=true` or `features=[…]` when a symbol is behind a feature gate.
-    /// - Pass private=true to include non‑public items. Useful if you're looking up details of
-    ///   items in the current codebase for development.
-    /// - Pass `search="pattern"` (optionally with `search_spec=[…]`) to restrict output to matched
-    ///   items instead of rendering the entire target.
-    /// - Pass `direct_match_only=true` to keep container matches focused on the exact hits.
-    /// - Pass `frontmatter=false` when you need the raw Rust skeleton without the leading comment
-    ///   block summarising context.
+    /// - Pass `private=true` for private items in local codebases.
+    /// - Pass `search="pattern"` to restrict output to matched items.
+    /// - Pass `direct_match_only=true` to show only exact matches.
+    /// - Pass `frontmatter=false` to omit the leading comment block.
     async fn ruskel(&self, _ctx: &ServerCtx, params: RuskelSkeletonTool) -> Result<CallToolResult> {
         if env::var_os("RUSKEL_MCP_TEST_MODE").is_some() {
             return Ok(run_test_mode(params));
