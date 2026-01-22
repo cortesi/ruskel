@@ -1,12 +1,12 @@
 //! Integration tests for the MCP server
 //!
-//! These tests verify the MCP server protocol implementation using the tenx-mcp client.
+//! These tests verify the MCP server protocol implementation using the tmcp client.
 
 use std::{env, io, sync::OnceLock, time::Duration};
 
 use libruskel::Ruskel;
 use ruskel_mcp::RuskelServer;
-use tenx_mcp::{Arguments, Client, Result, Server, ServerAPI, schema::InitializeResult};
+use tmcp::{Arguments, Client, Result, Server, schema::InitializeResult};
 use tokio::{
     io::{duplex, split},
     task::JoinHandle,
@@ -23,7 +23,7 @@ async fn create_test_client() -> Result<(Client, ServerTask)> {
     });
 
     let ruskel = Ruskel::new().with_silent(true);
-    let server = Server::default().with_connection(move || RuskelServer::new(ruskel.clone()));
+    let server = Server::new(move || RuskelServer::new(ruskel.clone()));
 
     let (server_side, client_side) = duplex(64 * 1024);
     let (server_reader, server_writer) = split(server_side);
@@ -36,7 +36,9 @@ async fn create_test_client() -> Result<(Client, ServerTask)> {
     });
 
     let mut client = Client::new("test-client", "1.0.0");
-    client.connect_stream(client_reader, client_writer).await?;
+    client
+        .connect_stream_raw(client_reader, client_writer)
+        .await?;
 
     Ok((client, server_task))
 }
@@ -59,7 +61,7 @@ async fn terminate_child(child: &mut ServerTask) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use tenx_mcp::schema::Content;
+    use tmcp::schema::{ContentBlock, LATEST_PROTOCOL_VERSION};
 
     use super::*;
 
@@ -75,7 +77,7 @@ mod tests {
             .expect("Failed to initialize");
 
         // Verify response structure
-        assert_eq!(result.protocol_version, "2025-06-18");
+        assert_eq!(result.protocol_version, LATEST_PROTOCOL_VERSION);
         assert_eq!(result.server_info.name, "ruskel_server");
 
         // Clean up
@@ -128,13 +130,10 @@ mod tests {
         });
 
         let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
-        let result = timeout(
-            Duration::from_secs(30),
-            client.call_tool("ruskel", Some(args)),
-        )
-        .await
-        .expect("Timeout during tool call")
-        .expect("Failed to call tool");
+        let result = timeout(Duration::from_secs(30), client.call_tool("ruskel", args))
+            .await
+            .expect("Timeout during tool call")
+            .expect("Failed to call tool");
 
         // Verify response
         assert!(!result.content.is_empty());
@@ -156,9 +155,7 @@ mod tests {
             .expect("Failed to initialize");
 
         // Call non-existent tool
-        let result = client
-            .call_tool("non_existent_tool", Some(Arguments::new()))
-            .await;
+        let result = client.call_tool("non_existent_tool", ()).await;
 
         // Should get an error
         assert!(result.is_err());
@@ -186,7 +183,7 @@ mod tests {
         });
 
         let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
-        let result = client.call_tool("ruskel", Some(args)).await;
+        let result = client.call_tool("ruskel", args).await;
 
         // Should get an error response in the content
         match result {
@@ -195,7 +192,7 @@ mod tests {
                 assert!(
                     call_result.is_error.unwrap_or(false)
                         || call_result.content.iter().any(|c| {
-                            if let Content::Text(text) = c {
+                            if let ContentBlock::Text(text) = c {
                                 text.text.contains("Invalid parameters")
                                     || text.text.contains("Failed to generate")
                             } else {
@@ -242,12 +239,9 @@ mod tests {
             });
 
             let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
-            let result = timeout(
-                Duration::from_secs(30),
-                client.call_tool("ruskel", Some(args)),
-            )
-            .await
-            .unwrap_or_else(|_| panic!("Timeout for target {target}"));
+            let result = timeout(Duration::from_secs(30), client.call_tool("ruskel", args))
+                .await
+                .unwrap_or_else(|_| panic!("Timeout for target {target}"));
 
             if let Ok(call_result) = result {
                 assert!(!call_result.content.is_empty());
@@ -278,9 +272,7 @@ mod tests {
         assert!(!result.tools.is_empty());
 
         // 2. Invalid tool name (should error)
-        let result = client
-            .call_tool("non_existent_tool", Some(Arguments::new()))
-            .await;
+        let result = client.call_tool("non_existent_tool", ()).await;
         assert!(result.is_err());
 
         // 3. Valid request after error (server should recover)
@@ -297,14 +289,14 @@ mod tests {
         });
 
         let args = Arguments::from_struct(invalid_args).expect("invalid arguments struct");
-        let result = client.call_tool("ruskel", Some(args)).await;
+        let result = client.call_tool("ruskel", args).await;
         match result {
             Ok(call_result) => {
                 // Check if it's an error response
                 assert!(
                     call_result.is_error.unwrap_or(false)
                         || call_result.content.iter().any(|c| {
-                            if let Content::Text(text) = c {
+                            if let ContentBlock::Text(text) = c {
                                 text.text.contains("Invalid parameters")
                                     || text.text.contains("Failed to generate")
                             } else {
@@ -325,12 +317,9 @@ mod tests {
         });
 
         let args = Arguments::from_struct(final_args).expect("invalid arguments struct");
-        let result = timeout(
-            Duration::from_secs(30),
-            client.call_tool("ruskel", Some(args)),
-        )
-        .await
-        .expect("Timeout during final request");
+        let result = timeout(Duration::from_secs(30), client.call_tool("ruskel", args))
+            .await
+            .expect("Timeout during final request");
 
         if let Ok(call_result) = result {
             assert!(!call_result.content.is_empty());

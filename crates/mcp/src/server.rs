@@ -2,7 +2,8 @@ use std::{env, io::stdout};
 
 use libruskel::{Ruskel, SearchDomain, SearchOptions, describe_domains, parse_domain_tokens};
 use serde::{Deserialize, Serialize};
-use tenx_mcp::{Result, Server, ServerCtx, mcp_server, schema::CallToolResult, schemars, tool};
+use tmcp::{Result, Server, ServerCtx, mcp_server, schema::CallToolResult, tool};
+use tokio::signal::ctrl_c;
 use tracing::error;
 use tracing_subscriber::filter::LevelFilter;
 
@@ -220,7 +221,7 @@ impl RuskelServer {
                         "Failed to search '{}' with query '{}': {}",
                         params.target, query, e
                     ))
-                    .is_error(true)
+                    .mark_as_error()
             }
         }
     }
@@ -242,7 +243,7 @@ impl RuskelServer {
                         "Failed to generate skeleton for '{}': {}",
                         params.target, e
                     ))
-                    .is_error(true)
+                    .mark_as_error()
             }
         }
     }
@@ -288,7 +289,7 @@ pub async fn run_mcp_server(
     // Initialize tracing for TCP mode only
     if addr.is_some() {
         let level = log_level.unwrap_or(LevelFilter::INFO);
-        let filter = format!("ruskel_mcp={level},tenx_mcp={level}");
+        let filter = format!("ruskel_mcp={level},tmcp={level}");
 
         tracing_subscriber::fmt()
             .with_env_filter(tracing_subscriber::EnvFilter::new(filter))
@@ -297,12 +298,14 @@ pub async fn run_mcp_server(
             .init();
     }
 
-    let server = Server::default().with_connection(move || RuskelServer::new(ruskel.clone()));
+    let server = Server::new(move || RuskelServer::new(ruskel.clone()));
 
     match addr {
         Some(addr) => {
             tracing::info!("Starting MCP server on {}", addr);
-            server.serve_tcp(addr).await
+            let handle = server.serve_tcp(addr).await?;
+            ctrl_c().await?;
+            handle.stop().await
         }
         None => server.serve_stdio().await,
     }
