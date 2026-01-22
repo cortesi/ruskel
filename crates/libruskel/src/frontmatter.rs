@@ -70,14 +70,33 @@ impl FrontmatterConfig {
         output.push_str(
             "// Ruskel skeleton - syntactically valid Rust with implementation omitted.\n",
         );
+        let mut private_note_written = false;
         if let Some(binary_target) = &self.binary_target {
             if binary_target.is_bin_only {
+                if include_private {
+                    writeln!(
+                        output,
+                        "// Note: binary crate; rendering bin target \"{}\"; showing private API.",
+                        binary_target.name
+                    )
+                    .expect("write frontmatter binary note");
+                    private_note_written = true;
+                } else {
+                    writeln!(
+                        output,
+                        "// Note: binary crate; rendering bin target \"{}\".",
+                        binary_target.name
+                    )
+                    .expect("write frontmatter binary note");
+                }
+            } else if include_private {
                 writeln!(
                     output,
-                    "// Note: binary crate; rendering bin target \"{}\"; showing private API.",
+                    "// Note: rendering bin target \"{}\"; showing private API.",
                     binary_target.name
                 )
                 .expect("write frontmatter binary note");
+                private_note_written = true;
             } else {
                 writeln!(
                     output,
@@ -86,6 +105,10 @@ impl FrontmatterConfig {
                 )
                 .expect("write frontmatter binary note");
             }
+        }
+        if include_private && !private_note_written {
+            writeln!(output, "// Note: showing private API.")
+                .expect("write frontmatter private note");
         }
 
         let mut settings = Vec::new();
@@ -145,7 +168,7 @@ mod tests {
         let frontmatter = FrontmatterConfig::for_target("bincrate")
             .with_binary_target(FrontmatterBinaryTarget::new("bincrate", true));
         let rendered = frontmatter
-            .render(false, false, false)
+            .render(true, false, false)
             .expect("frontmatter output");
         let mut lines = rendered.lines();
 
@@ -157,6 +180,21 @@ mod tests {
             lines.next().unwrap(),
             "// Note: binary crate; rendering bin target \"bincrate\"; showing private API."
         );
+    }
+
+    #[test]
+    fn frontmatter_inserts_private_note_when_enabled() {
+        let frontmatter = FrontmatterConfig::for_target("libcrate");
+        let rendered = frontmatter
+            .render(true, false, false)
+            .expect("frontmatter output");
+        let mut lines = rendered.lines();
+
+        assert_eq!(
+            lines.next().unwrap(),
+            "// Ruskel skeleton - syntactically valid Rust with implementation omitted."
+        );
+        assert_eq!(lines.next().unwrap(), "// Note: showing private API.");
     }
 }
 
