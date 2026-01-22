@@ -33,6 +33,7 @@ pub struct Ruskel {
     frontmatter: bool,
 }
 
+/// Drop `use` matches when more specific items are present.
 fn prune_redundant_use_items(results: &mut Vec<ListItem>) {
     let has_non_use = results
         .iter()

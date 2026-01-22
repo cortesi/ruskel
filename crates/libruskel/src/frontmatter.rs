@@ -115,6 +115,7 @@ pub struct FrontmatterHit {
     pub domains: SearchDomain,
 }
 
+/// Render the search metadata section into the frontmatter buffer.
 fn write_search_section(buffer: &mut String, search: &FrontmatterSearch) {
     let domains = describe_domains(search.domains);
     let mut details = String::new();

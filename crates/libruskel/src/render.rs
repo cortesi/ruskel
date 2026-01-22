@@ -4,7 +4,9 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use rust_format::{Config, Formatter, RustFmt};
 use rustdoc_types::{
-    Crate, Id, Impl, Item, ItemEnum, MacroKind, StructKind, Type, VariantKind, Visibility,
+    AssocItemConstraint, AssocItemConstraintKind, Crate, FunctionPointer, FunctionSignature,
+    GenericArg, GenericArgs, GenericBound, Id, Impl, Item, ItemEnum, MacroKind, Path, PolyTrait,
+    StructKind, Term, TraitBoundModifier, Type, VariantKind, Visibility,
 };
 
 use crate::{
@@ -113,6 +115,403 @@ struct SelectionFlags {
     in_context: bool,
     /// The item should expand to include all of its children.
     expanded: bool,
+}
+
+/// Key for grouping impl blocks that share a compatible header.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ImplGroupKey {
+    /// Whether the impl is marked unsafe.
+    is_unsafe: bool,
+    /// Whether the impl is negative.
+    is_negative: bool,
+    /// Rendered generic parameter list.
+    generics: String,
+    /// Normalized trait path used for grouping.
+    trait_key: Option<String>,
+    /// Normalized target type used for grouping.
+    for_key: String,
+    /// Rendered where clause for the impl.
+    where_clause: String,
+}
+
+impl ImplGroupKey {
+    /// Build a group key from a rustdoc impl item.
+    fn from_impl(impl_: &Impl) -> Self {
+        let trait_key = impl_.trait_.as_ref().map(impl_path_key);
+        let for_key = impl_type_key(&impl_.for_);
+        Self {
+            is_unsafe: impl_.is_unsafe,
+            is_negative: impl_.is_negative,
+            generics: render_generics(&impl_.generics),
+            trait_key,
+            for_key,
+            where_clause: render_where_clause(&impl_.generics),
+        }
+    }
+}
+
+/// Canonicalized impl header used for grouping compatible impl blocks.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ImplSignature {
+    /// Whether the impl is marked unsafe.
+    is_unsafe: bool,
+    /// Whether the impl is negative.
+    is_negative: bool,
+    /// Rendered generic parameter list.
+    generics: String,
+    /// Rendered trait path for trait impls.
+    trait_path: Option<String>,
+    /// Rendered target type for the impl.
+    for_type: String,
+    /// Rendered where clause for the impl.
+    where_clause: String,
+}
+
+impl ImplSignature {
+    /// Build a signature from a rustdoc impl item.
+    fn from_impl(impl_: &Impl) -> Self {
+        let trait_path = impl_
+            .trait_
+            .as_ref()
+            .map(render_path)
+            .filter(|path| !path.is_empty());
+        Self {
+            is_unsafe: impl_.is_unsafe,
+            is_negative: impl_.is_negative,
+            generics: render_generics(&impl_.generics),
+            trait_path,
+            for_type: render_type(&impl_.for_),
+            where_clause: render_where_clause(&impl_.generics),
+        }
+    }
+
+    /// Render the impl header for this signature.
+    fn render_header(&self) -> String {
+        let mut output = String::new();
+        if self.is_unsafe {
+            output.push_str("unsafe ");
+        }
+        output.push_str("impl");
+        output.push_str(&self.generics);
+        output.push(' ');
+        if let Some(trait_path) = &self.trait_path {
+            output.push_str(trait_path);
+            output.push_str(" for ");
+        }
+        output.push_str(&self.for_type);
+        if !self.where_clause.is_empty() {
+            output.push('\n');
+            output.push_str(&self.where_clause);
+        }
+        output.push_str(" {\n");
+        output
+    }
+}
+
+/// Group of impl items that share the same header signature.
+struct ImplGroup {
+    /// Shared impl header signature.
+    signature: ImplSignature,
+    /// Impl item identifiers in original order.
+    impl_ids: Vec<Id>,
+}
+
+/// Rendered docs and body contents for a single impl item.
+struct RenderedImplBody {
+    /// Doc comments attached to the impl item.
+    docs: String,
+    /// Rendered impl item contents.
+    body: String,
+}
+
+/// Render a normalized path key using the resolved item id.
+fn impl_path_key(path: &Path) -> String {
+    let args = path
+        .args
+        .as_ref()
+        .map(|args| impl_generic_args_key(args))
+        .unwrap_or_default();
+    format!("id:{}{}", path.id.0, args)
+}
+
+/// Render a normalized type key suitable for impl grouping.
+fn impl_type_key(ty: &Type) -> String {
+    match ty {
+        Type::ResolvedPath(path) => impl_path_key(path),
+        Type::DynTrait(dyn_trait) => {
+            let traits = dyn_trait
+                .traits
+                .iter()
+                .map(impl_poly_trait_key)
+                .collect::<Vec<_>>()
+                .join(" + ");
+            let lifetime = dyn_trait
+                .lifetime
+                .as_ref()
+                .map(|lt| format!(" + {lt}"))
+                .unwrap_or_default();
+            format!("dyn {traits}{lifetime}")
+        }
+        Type::Generic(s) => s.clone(),
+        Type::Primitive(s) => s.clone(),
+        Type::FunctionPointer(f) => impl_function_pointer_key(f),
+        Type::Tuple(types) => {
+            let inner = types
+                .iter()
+                .map(impl_type_key)
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("({inner})")
+        }
+        Type::Slice(ty) => format!("[{}]", impl_type_key(ty)),
+        Type::Array { type_, len } => {
+            format!("[{}; {len}]", impl_type_key(type_))
+        }
+        Type::ImplTrait(bounds) => {
+            let bounds_str = impl_generic_bounds_key(bounds);
+            format!("impl {bounds_str}")
+        }
+        Type::Infer => "_".to_string(),
+        Type::RawPointer { is_mutable, type_ } => {
+            let mutability = if *is_mutable { "mut" } else { "const" };
+            format!("*{mutability} {}", impl_type_key(type_))
+        }
+        Type::BorrowedRef {
+            lifetime,
+            is_mutable,
+            type_,
+        } => {
+            let lifetime = lifetime
+                .as_ref()
+                .map(|lt| format!("{lt} "))
+                .unwrap_or_default();
+            let mutability = if *is_mutable { "mut " } else { "" };
+            format!("&{lifetime}{mutability}{}", impl_type_key(type_))
+        }
+        Type::QualifiedPath {
+            name,
+            args,
+            self_type,
+            trait_,
+        } => {
+            let self_type_str = impl_type_key(self_type);
+            let args_str = args
+                .as_ref()
+                .map(|args| impl_generic_args_key(args))
+                .unwrap_or_default();
+
+            if let Some(trait_) = trait_ {
+                let trait_path = impl_path_key(trait_);
+                if !trait_path.is_empty() {
+                    format!("<{self_type_str} as {trait_path}>::{name}{args_str}")
+                } else {
+                    format!("{self_type_str}::{name}{args_str}")
+                }
+            } else {
+                format!("{self_type_str}::{name}{args_str}")
+            }
+        }
+        Type::Pat { .. } => "/* pattern */".to_string(),
+    }
+}
+
+/// Render a normalized generic args key.
+fn impl_generic_args_key(args: &GenericArgs) -> String {
+    match args {
+        GenericArgs::AngleBracketed { args, constraints } => {
+            if args.is_empty() && constraints.is_empty() {
+                String::new()
+            } else {
+                let args = args
+                    .iter()
+                    .map(impl_generic_arg_key)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let bindings = constraints
+                    .iter()
+                    .map(impl_type_constraint_key)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let all = if args.is_empty() {
+                    bindings
+                } else if bindings.is_empty() {
+                    args
+                } else {
+                    format!("{args}, {bindings}")
+                };
+                format!("<{all}>")
+            }
+        }
+        GenericArgs::Parenthesized { inputs, output } => {
+            let inputs = inputs
+                .iter()
+                .map(impl_type_key)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let output = output
+                .as_ref()
+                .map(|ty| format!(" -> {}", impl_type_key(ty)))
+                .unwrap_or_default();
+            format!("({inputs}){output}")
+        }
+        GenericArgs::ReturnTypeNotation => String::new(),
+    }
+}
+
+/// Render a normalized generic argument key.
+fn impl_generic_arg_key(arg: &GenericArg) -> String {
+    match arg {
+        GenericArg::Lifetime(lt) => lt.clone(),
+        GenericArg::Type(ty) => impl_type_key(ty),
+        GenericArg::Const(c) => {
+            if c.expr.contains('$') {
+                "/* macro expression */".to_string()
+            } else {
+                c.expr.clone()
+            }
+        }
+        GenericArg::Infer => "_".to_string(),
+    }
+}
+
+/// Render a normalized associated type constraint key.
+fn impl_type_constraint_key(constraint: &AssocItemConstraint) -> String {
+    let binding_kind = match &constraint.binding {
+        AssocItemConstraintKind::Equality(term) => format!(" = {}", impl_term_key(term)),
+        AssocItemConstraintKind::Constraint(bounds) => {
+            let b = impl_generic_bounds_key(bounds);
+            if b.is_empty() {
+                String::new()
+            } else {
+                format!(": {b}")
+            }
+        }
+    };
+    format!("{}{binding_kind}", constraint.name)
+}
+
+/// Render a normalized term key used in associated type constraints.
+fn impl_term_key(term: &Term) -> String {
+    match term {
+        Term::Type(ty) => impl_type_key(ty),
+        Term::Constant(c) => c.expr.clone(),
+    }
+}
+
+/// Render a normalized generic bounds key.
+fn impl_generic_bounds_key(bounds: &[GenericBound]) -> String {
+    let parts: Vec<String> = bounds
+        .iter()
+        .map(impl_generic_bound_key)
+        .filter(|s| !s.trim().is_empty())
+        .collect();
+    parts.join(" + ")
+}
+
+/// Render a normalized generic bound key.
+fn impl_generic_bound_key(bound: &GenericBound) -> String {
+    match bound {
+        GenericBound::Use(_) => String::new(),
+        GenericBound::TraitBound {
+            trait_,
+            generic_params,
+            modifier,
+        } => {
+            let modifier = match modifier {
+                TraitBoundModifier::None => "",
+                TraitBoundModifier::Maybe => "?",
+                TraitBoundModifier::MaybeConst => "~const",
+            };
+            let poly_trait = PolyTrait {
+                trait_: trait_.clone(),
+                generic_params: generic_params.clone(),
+            };
+            match modifier {
+                "" => impl_poly_trait_key(&poly_trait),
+                "~const" => format!("{modifier} {}", impl_poly_trait_key(&poly_trait)),
+                _ => format!("{modifier}{}", impl_poly_trait_key(&poly_trait)),
+            }
+        }
+        GenericBound::Outlives(lifetime) => lifetime.clone(),
+    }
+}
+
+/// Render a normalized poly trait key.
+fn impl_poly_trait_key(poly_trait: &PolyTrait) -> String {
+    let generic_params = if poly_trait.generic_params.is_empty() {
+        String::new()
+    } else {
+        let params = poly_trait
+            .generic_params
+            .iter()
+            .filter_map(render_generic_param_def)
+            .collect::<Vec<_>>();
+
+        if params.is_empty() {
+            String::new()
+        } else {
+            format!("for<{}> ", params.join(", "))
+        }
+    };
+
+    format!("{generic_params}{}", impl_path_key(&poly_trait.trait_))
+}
+
+/// Render a normalized function pointer key.
+fn impl_function_pointer_key(f: &FunctionPointer) -> String {
+    let args = impl_function_args_key(&f.sig);
+    let return_type = impl_return_type_key(&f.sig);
+    if return_type.is_empty() {
+        format!("fn({args})")
+    } else {
+        format!("fn({args}) {return_type}")
+    }
+}
+
+/// Render a normalized function argument list for a function pointer signature.
+fn impl_function_args_key(decl: &FunctionSignature) -> String {
+    decl.inputs
+        .iter()
+        .map(|(name, ty)| {
+            if name == "self" {
+                match ty {
+                    Type::BorrowedRef { is_mutable, .. } => {
+                        if *is_mutable {
+                            "&mut self".to_string()
+                        } else {
+                            "&self".to_string()
+                        }
+                    }
+                    Type::ResolvedPath(path) => {
+                        if path.path == "Self" && path.args.is_none() {
+                            "self".to_string()
+                        } else {
+                            format!("self: {}", impl_type_key(ty))
+                        }
+                    }
+                    Type::Generic(name) => {
+                        if name == "Self" {
+                            "self".to_string()
+                        } else {
+                            format!("self: {}", impl_type_key(ty))
+                        }
+                    }
+                    _ => format!("self: {}", impl_type_key(ty)),
+                }
+            } else {
+                format!("{name}: {}", impl_type_key(ty))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Render a normalized return type for a function pointer signature.
+fn impl_return_type_key(decl: &FunctionSignature) -> String {
+    match &decl.output {
+        Some(ty) => format!("-> {}", impl_type_key(ty)),
+        None => String::new(),
+    }
 }
 
 impl RenderSelection {
@@ -595,13 +994,73 @@ impl RenderState<'_, '_> {
         Ok(output)
     }
 
-    /// Render an implementation block, respecting filtering rules.
-    fn render_impl(&mut self, path_prefix: &str, item: &Item) -> Result<String> {
-        let mut output = docs(item);
-        let impl_ = try_extract_item!(item, ItemEnum::Impl)?;
+    /// Group impl blocks by compatible signatures, preserving their first-seen order.
+    fn collect_impl_groups(&self, parent_id: &Id, impl_ids: &[Id]) -> Result<Vec<ImplGroup>> {
+        let mut groups: Vec<ImplGroup> = Vec::new();
+        let mut group_indices: HashMap<ImplGroupKey, usize> = HashMap::new();
 
-        if !self.selection_context_contains(&item.id) {
+        for impl_id in impl_ids {
+            let impl_item = must_get(self.crate_data, impl_id)?;
+            let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
+            if !self.should_render_impl(impl_) || !self.selection_allows_child(parent_id, impl_id) {
+                continue;
+            }
+
+            let signature = ImplSignature::from_impl(impl_);
+            let group_key = ImplGroupKey::from_impl(impl_);
+            if let Some(index) = group_indices.get(&group_key).copied() {
+                groups[index].impl_ids.push(*impl_id);
+            } else {
+                let index = groups.len();
+                groups.push(ImplGroup {
+                    signature: signature.clone(),
+                    impl_ids: vec![*impl_id],
+                });
+                group_indices.insert(group_key, index);
+            }
+        }
+
+        Ok(groups)
+    }
+
+    /// Render a combined impl block for a group of compatible impl items.
+    fn render_impl_group(&mut self, path_prefix: &str, group: &ImplGroup) -> Result<String> {
+        let mut docs_output = String::new();
+        let mut bodies = Vec::new();
+
+        for impl_id in &group.impl_ids {
+            let impl_item = must_get(self.crate_data, impl_id)?;
+            let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
+            if let Some(rendered) = self.render_impl_body(path_prefix, impl_item, impl_)? {
+                docs_output.push_str(&rendered.docs);
+                bodies.push(rendered.body);
+            }
+        }
+
+        if bodies.is_empty() {
             return Ok(String::new());
+        }
+
+        let mut output = String::new();
+        output.push_str(&docs_output);
+        output.push_str(&group.signature.render_header());
+        for body in bodies {
+            output.push_str(&body);
+        }
+        output.push_str("}\n\n");
+
+        Ok(output)
+    }
+
+    /// Render the contents for a single impl block, without its header.
+    fn render_impl_body(
+        &mut self,
+        path_prefix: &str,
+        item: &Item,
+        impl_: &Impl,
+    ) -> Result<Option<RenderedImplBody>> {
+        if !self.selection_context_contains(&item.id) {
+            return Ok(None);
         }
 
         let selection_active = self.selection().is_some();
@@ -616,37 +1075,11 @@ impl RenderState<'_, '_> {
             && let Ok(trait_item) = must_get(self.crate_data, &trait_.id)
             && !self.is_visible(trait_item)
         {
-            return Ok(String::new());
+            return Ok(None);
         }
-
-        let where_clause = render_where_clause(&impl_.generics);
-
-        let trait_part = if let Some(trait_) = &impl_.trait_ {
-            let trait_path = render_path(trait_);
-            if !trait_path.is_empty() {
-                format!("{trait_path} for ")
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        };
-
-        output.push_str(&format!(
-            "{}impl{} {}{}",
-            if impl_.is_unsafe { "unsafe " } else { "" },
-            render_generics(&impl_.generics),
-            trait_part,
-            render_type(&impl_.for_)
-        ));
-
-        if !where_clause.is_empty() {
-            output.push_str(&format!("\n{where_clause}"));
-        }
-
-        output.push_str(" {\n");
 
         let path_prefix = ppush(path_prefix, &render_type(&impl_.for_));
+        let mut body = String::new();
         let mut has_content = false;
         for item_id in &impl_.items {
             if let Ok(item) = must_get(self.crate_data, item_id) {
@@ -658,7 +1091,7 @@ impl RenderState<'_, '_> {
                 {
                     let rendered = self.render_impl_item(&path_prefix, item, expand_children)?;
                     if !rendered.is_empty() {
-                        output.push_str(&rendered);
+                        body.push_str(&rendered);
                         has_content = true;
                     }
                 }
@@ -666,12 +1099,13 @@ impl RenderState<'_, '_> {
         }
 
         if !has_content {
-            return Ok(String::new());
+            return Ok(None);
         }
 
-        output.push_str("}\n\n");
-
-        Ok(output)
+        Ok(Some(RenderedImplBody {
+            docs: docs(item),
+            body,
+        }))
     }
 
     /// Render the item inside an impl block.
@@ -765,12 +1199,8 @@ impl RenderState<'_, '_> {
         output.push_str("}\n\n");
 
         // Render impl blocks
-        for impl_id in &enum_.impls {
-            let impl_item = must_get(self.crate_data, impl_id)?;
-            let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
-            if self.should_render_impl(impl_) && self.selection_allows_child(&item.id, impl_id) {
-                output.push_str(&self.render_impl(path_prefix, impl_item)?);
-            }
+        for group in self.collect_impl_groups(&item.id, &enum_.impls)? {
+            output.push_str(&self.render_impl_group(path_prefix, &group)?);
         }
 
         Ok(output)
@@ -1028,12 +1458,8 @@ impl RenderState<'_, '_> {
         }
 
         // Render impl blocks
-        for impl_id in &struct_.impls {
-            let impl_item = must_get(self.crate_data, impl_id)?;
-            let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
-            if self.should_render_impl(impl_) && self.selection_allows_child(&item.id, impl_id) {
-                output.push_str(&self.render_impl(path_prefix, impl_item)?);
-            }
+        for group in self.collect_impl_groups(&item.id, &struct_.impls)? {
+            output.push_str(&self.render_impl_group(path_prefix, &group)?);
         }
 
         Ok(output)

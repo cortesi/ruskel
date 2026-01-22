@@ -116,6 +116,65 @@ gen_tests! {
             "#
         }
         rt {
+            amalgamate_inherent_impls: {
+                input: r#"
+                    pub struct Combo;
+
+                    impl Combo {
+                        pub fn first(&self) {}
+                    }
+
+                    impl Combo {
+                        pub fn second(&self) {}
+                    }
+                "#,
+                output: r#"
+                    pub struct Combo;
+
+                    impl Combo {
+                        pub fn first(&self) {}
+                        pub fn second(&self) {}
+                    }
+                "#
+            }
+        }
+        rt {
+            amalgamate_reexported_impls: {
+                input: r#"
+                    pub mod db {
+                        pub struct DB;
+                    }
+
+                    pub use db::DB;
+
+                    impl DB {
+                        pub fn open(&self) {}
+                    }
+
+                    impl crate::db::DB {
+                        pub fn close(&self) {}
+                    }
+                "#,
+                output: r#"
+                    pub mod db {
+                        pub struct DB;
+
+                        impl DB {
+                            pub fn open(&self) {}
+                            pub fn close(&self) {}
+                        }
+                    }
+
+                    pub struct DB;
+
+                    impl DB {
+                        pub fn open(&self) {}
+                        pub fn close(&self) {}
+                    }
+                "#
+            }
+        }
+        rt {
             deserialize: {
                 input:
                     r#"
