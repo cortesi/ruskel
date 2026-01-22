@@ -33,22 +33,6 @@ pub struct RuskelSkeletonTool {
     #[serde(default = "default_frontmatter_enabled")]
     pub frontmatter: bool,
 
-    /// Include item names when evaluating search matches.
-    #[serde(default)]
-    pub search_names: bool,
-
-    /// Include documentation text when evaluating search matches.
-    #[serde(default)]
-    pub search_docs: bool,
-
-    /// Include canonical module and item paths when evaluating search matches.
-    #[serde(default)]
-    pub search_paths: bool,
-
-    /// Include rendered signatures when evaluating search matches.
-    #[serde(default)]
-    pub search_signatures: bool,
-
     /// Require case-sensitive matches.
     #[serde(default)]
     pub search_case_sensitive: bool,
@@ -154,26 +138,7 @@ impl RuskelServer {
 
         let domains = match params.search_spec.as_ref() {
             Some(spec) if !spec.is_empty() => parse_domain_tokens(spec.iter().map(|s| s.as_str())),
-            _ => {
-                let mut legacy = SearchDomain::empty();
-                if params.search_names {
-                    legacy |= SearchDomain::NAMES;
-                }
-                if params.search_docs {
-                    legacy |= SearchDomain::DOCS;
-                }
-                if params.search_paths {
-                    legacy |= SearchDomain::PATHS;
-                }
-                if params.search_signatures {
-                    legacy |= SearchDomain::SIGNATURES;
-                }
-                if legacy.is_empty() {
-                    SearchDomain::default()
-                } else {
-                    legacy
-                }
-            }
+            _ => SearchDomain::default(),
         };
         options.domains = domains;
         options.expand_containers = !params.direct_match_only;
