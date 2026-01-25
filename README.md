@@ -223,7 +223,8 @@ The `ruskel` tool accepts the following JSON parameters:
 #### Optional
 
 - `bin` (string | null, default: null): Select a specific binary target when rendering a package.
-- `private` (boolean, default: false): Include private items.
+- `private` (boolean, default: false): Include private items. **Caution:** Avoid using this on
+  entire crates as output can be extremely large. Prefer targeting specific modules or items.
 - `frontmatter` (boolean, default: true): Include comment frontmatter.
 - `search` (string | null, default: null): Restrict output to matches for this query.
 - `search_spec` (array of strings | null, default: null): Search domains (name, doc, signature,

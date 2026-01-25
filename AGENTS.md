@@ -236,7 +236,9 @@ the command with an extended timeout (e.g., 120 seconds) if needed.
 - Request deep module paths (e.g., `ruskel tokio::sync::mpsc`) to stay within your
   token budget.
 - Use the `ruskel --private` flag to view non-public items, which can be useful for
-  nspecting your current codebase.
+  inspecting your current codebase.
+- **Caution:** Avoid using `--private` on entire crates since output can be extremely
+  large. Prefer targeting specific modules or items when inspecting private APIs.
 
 ### Search
 

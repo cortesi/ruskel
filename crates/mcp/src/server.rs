@@ -92,7 +92,9 @@ impl RuskelServer {
     /// # Tips for LLMs
     /// - Request deep module paths (e.g. `tokio::sync::mpsc`) to reduce output size.
     /// - Pass `all_features=true` or `features=[…]` when a symbol is behind a feature gate.
-    /// - Pass `private=true` for private items in local codebases.
+    /// - Pass `private=true` for private items in local codebases. **Caution:** Avoid using
+    ///   `private=true` on entire crates since output can be extremely large. Prefer targeting
+    ///   specific modules or items.
     /// - Pass `search="pattern"` to restrict output to matched items.
     /// - Pass `direct_match_only=true` to show only exact matches.
     /// - Pass `frontmatter=false` to omit the leading comment block.
