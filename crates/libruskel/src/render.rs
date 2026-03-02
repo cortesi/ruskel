@@ -1257,7 +1257,7 @@ impl RenderState<'_, '_> {
         }
 
         if let Some(discriminant) = &variant.discriminant {
-            output.push_str(&format!(" = {}", discriminant.expr));
+            output.push_str(&format!(" = {}", render_expression(&discriminant.expr)));
         }
 
         output.push_str(",\n");
@@ -1321,7 +1321,7 @@ impl RenderState<'_, '_> {
             ItemEnum::AssocConst { type_, value } => {
                 let default_str = value
                     .as_ref()
-                    .map(|d| format!(" = {d}"))
+                    .map(|d| format!(" = {}", render_expression(d)))
                     .unwrap_or_default();
                 format!(
                     "const {}: {}{};\n",
@@ -1499,7 +1499,7 @@ impl RenderState<'_, '_> {
             render_vis(item),
             render_name(item),
             render_type(type_),
-            const_.expr
+            render_expression(&const_.expr)
         ));
 
         Ok(output)

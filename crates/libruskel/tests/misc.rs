@@ -28,6 +28,27 @@ mod tests {
     }
 
     #[test]
+    fn test_render_constant_expression_normalizes_turbofish() {
+        rt(
+            r#"
+                pub struct Date<T>(pub T);
+                pub struct Utc;
+
+                impl Date<Utc> {
+                    pub const MAX_UTC: Date<Utc> = Date(Utc);
+                }
+
+                pub const MAX_DATE: Date<Utc> = Date::<Utc>::MAX_UTC;
+            "#,
+            r#"
+                pub struct Date<T>(pub T);
+                pub struct Utc;
+                pub const MAX_DATE: Date<Utc> = Date::<Utc>::MAX_UTC;
+            "#,
+        );
+    }
+
+    #[test]
     fn test_render_imports() {
         rt(
             r#"

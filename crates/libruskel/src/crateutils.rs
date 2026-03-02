@@ -81,6 +81,119 @@ pub fn render_name(item: &Item) -> String {
     )
 }
 
+/// Render a rustdoc-provided expression into valid Rust source.
+///
+/// rustdoc sometimes emits associated-item paths with generic arguments as
+/// `Type<T>::ASSOC`, which is not valid in expression position. This helper
+/// normalizes those paths to `Type::<T>::ASSOC`.
+pub fn render_expression(expr: &str) -> String {
+    fix_missing_turbofish(expr)
+}
+
+/// Return whether `c` can appear in a Rust identifier continuation position.
+fn is_ident_continue(c: char) -> bool {
+    c == '_' || c.is_alphanumeric()
+}
+
+/// Return the index of the closest non-whitespace character before `before`.
+fn previous_non_whitespace(chars: &[char], before: usize) -> Option<usize> {
+    if before == 0 {
+        return None;
+    }
+    let mut i = before - 1;
+    loop {
+        if !chars[i].is_whitespace() {
+            return Some(i);
+        }
+        if i == 0 {
+            return None;
+        }
+        i -= 1;
+    }
+}
+
+/// Return the index of the first non-whitespace character at or after `start`.
+fn next_non_whitespace(chars: &[char], start: usize) -> Option<usize> {
+    let mut i = start;
+    while i < chars.len() {
+        if !chars[i].is_whitespace() {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Find the matching `>` for the `<` located at `start`.
+fn find_matching_angle(chars: &[char], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut i = start;
+    while i < chars.len() {
+        match chars[i] {
+            '<' => depth += 1,
+            '>' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Determine whether a `<...>::` segment should be rewritten to turbofish form.
+fn should_insert_turbofish(chars: &[char], angle_start: usize, angle_end: usize) -> bool {
+    let Some(prev) = previous_non_whitespace(chars, angle_start) else {
+        return false;
+    };
+
+    // We only normalize compact path segments like `Type<T>::ASSOC`,
+    // not spaced comparisons like `a < b`.
+    if prev + 1 != angle_start {
+        return false;
+    }
+
+    let prev_char = chars[prev];
+    // Already in turbofish form (`Type::<T>::ASSOC`) or malformed.
+    if prev_char == ':' {
+        return false;
+    }
+    if !(is_ident_continue(prev_char) || prev_char == '>') {
+        return false;
+    }
+
+    let Some(next) = next_non_whitespace(chars, angle_end + 1) else {
+        return false;
+    };
+
+    next + 1 < chars.len() && chars[next] == ':' && chars[next + 1] == ':'
+}
+
+/// Normalize invalid rustdoc expression paths such as `Type<T>::ASSOC`.
+fn fix_missing_turbofish(expr: &str) -> String {
+    if !expr.contains('<') || !expr.contains(">::") {
+        return expr.to_string();
+    }
+
+    let chars: Vec<char> = expr.chars().collect();
+    let mut out = String::with_capacity(expr.len());
+    let mut i = 0usize;
+    while i < chars.len() {
+        if chars[i] == '<'
+            && let Some(end) = find_matching_angle(&chars, i)
+            && should_insert_turbofish(&chars, i, end)
+        {
+            out.push_str("::");
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
 /// Render the generic parameter list for an item.
 pub fn render_generics(generics: &Generics) -> String {
     let params: Vec<String> = generics
@@ -135,7 +248,7 @@ pub fn render_generic_param_def(param: &GenericParamDef) -> Option<String> {
         GenericParamDefKind::Const { type_, default } => {
             let default = default
                 .as_ref()
-                .map(|expr| format!(" = {expr}"))
+                .map(|expr| format!(" = {}", render_expression(expr)))
                 .unwrap_or_default();
             Some(format!(
                 "const {}: {}{default}",
@@ -423,7 +536,7 @@ fn render_generic_arg(arg: &GenericArg) -> String {
             if c.expr.contains('$') {
                 "/* macro expression */".to_string()
             } else {
-                c.expr.clone()
+                render_expression(&c.expr)
             }
         }
         GenericArg::Infer => "_".to_string(),
@@ -460,7 +573,7 @@ fn render_type_constraint(constraint: &AssocItemConstraint) -> String {
 fn render_term(term: &Term) -> String {
     match term {
         Term::Type(ty) => render_type(ty),
-        Term::Constant(c) => c.expr.clone(),
+        Term::Constant(c) => render_expression(&c.expr),
     }
 }
 
@@ -662,5 +775,25 @@ mod tests {
         // If only `use<...>` is present, nothing should render
         let rendered = render_generic_bounds(&[use_only]);
         assert_eq!(rendered, "");
+    }
+
+    #[test]
+    fn test_render_expression_inserts_turbofish_for_assoc_paths() {
+        assert_eq!(
+            render_expression("Date<Utc>::MAX_UTC"),
+            "Date::<Utc>::MAX_UTC"
+        );
+        assert_eq!(
+            render_expression("chrono::Date<crate::offset::Utc>::MAX_UTC"),
+            "chrono::Date::<crate::offset::Utc>::MAX_UTC"
+        );
+    }
+
+    #[test]
+    fn test_render_expression_preserves_existing_turbofish() {
+        assert_eq!(
+            render_expression("Date::<Utc>::MAX_UTC"),
+            "Date::<Utc>::MAX_UTC"
+        );
     }
 }
