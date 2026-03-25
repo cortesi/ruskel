@@ -96,14 +96,13 @@ fn find_std_reexports() -> Result<HashMap<String, String>, Box<dyn Error>> {
                                 }
                             }
                         }
-                        ItemEnum::Module(_) => {
+                        ItemEnum::Module(_)
                             // For modules that are not re-exports, they're std-specific
                             // But we need to check if this is actually a re-export at the module level
                             // For now, we'll mark them as std and manually verify later
-                            if !mapping.contains_key(name) {
+                            if !mapping.contains_key(name) => {
                                 mapping.insert(name.clone(), "std".to_string());
                             }
-                        }
                         _ => {}
                     }
                 }

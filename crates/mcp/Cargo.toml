@@ -19,8 +19,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
-tmcp = "0.3.0"
-schemars = "1.2.0"
+tmcp = "0.4.0"
+schemars = "1.2.1"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
