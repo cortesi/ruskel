@@ -7,15 +7,33 @@ use tokio::signal::ctrl_c;
 use tracing::error;
 use tracing_subscriber::filter::LevelFilter;
 
+/// Default request values applied by the MCP server when a tool call omits them.
+#[derive(Debug, Clone, Copy)]
+pub struct RuskelServerDefaults {
+    /// Whether omitted requests should include private items.
+    pub private: bool,
+    /// Whether omitted requests should include frontmatter comments.
+    pub frontmatter: bool,
+}
+
+impl Default for RuskelServerDefaults {
+    fn default() -> Self {
+        Self {
+            private: false,
+            frontmatter: true,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 /// Parameters accepted by the ruskel MCP tool.
 pub struct RuskelSkeletonTool {
     /// Target to skeletonize: crate, module, path, or crate@version.
     pub target: String,
 
-    /// Include private items.
+    /// Include private items. Defaults to the server's configured setting when omitted.
     #[serde(default)]
-    pub private: bool,
+    pub private: Option<bool>,
 
     /// Restrict output to matches for this query.
     #[serde(default)]
@@ -29,9 +47,9 @@ pub struct RuskelSkeletonTool {
     #[serde(default)]
     pub search_spec: Option<Vec<String>>,
 
-    /// Include comment frontmatter.
-    #[serde(default = "default_frontmatter_enabled")]
-    pub frontmatter: bool,
+    /// Include comment frontmatter. Defaults to the server's configured setting when omitted.
+    #[serde(default)]
+    pub frontmatter: Option<bool>,
 
     /// Require case-sensitive matches.
     #[serde(default)]
@@ -54,18 +72,71 @@ pub struct RuskelSkeletonTool {
     pub features: Vec<String>,
 }
 
+/// Fully resolved MCP tool parameters after applying server defaults.
+#[derive(Debug, Clone)]
+struct ResolvedRuskelSkeletonTool {
+    /// Target to skeletonize.
+    target: String,
+    /// Whether private items should be included.
+    private: bool,
+    /// Optional query used for search mode.
+    search: Option<String>,
+    /// Optional binary target override.
+    bin: Option<String>,
+    /// Optional list of search domains.
+    search_spec: Option<Vec<String>>,
+    /// Whether rendered output should include frontmatter comments.
+    frontmatter: bool,
+    /// Whether search matching should be case sensitive.
+    search_case_sensitive: bool,
+    /// Whether search results should avoid expanding matched containers.
+    direct_match_only: bool,
+    /// Whether Cargo default features should be disabled.
+    no_default_features: bool,
+    /// Whether all Cargo features should be enabled.
+    all_features: bool,
+    /// Explicit Cargo feature list.
+    features: Vec<String>,
+}
+
+impl RuskelSkeletonTool {
+    /// Resolve optional request fields against the server defaults.
+    fn resolve(self, defaults: RuskelServerDefaults) -> ResolvedRuskelSkeletonTool {
+        ResolvedRuskelSkeletonTool {
+            target: self.target,
+            private: self.private.unwrap_or(defaults.private),
+            search: self.search,
+            bin: self.bin,
+            search_spec: self.search_spec,
+            frontmatter: self.frontmatter.unwrap_or(defaults.frontmatter),
+            search_case_sensitive: self.search_case_sensitive,
+            direct_match_only: self.direct_match_only,
+            no_default_features: self.no_default_features,
+            all_features: self.all_features,
+            features: self.features,
+        }
+    }
+}
+
 #[derive(Clone)]
 /// MCP server implementation that forwards requests to an underlying `Ruskel` instance.
 pub struct RuskelServer {
     /// Code skeleton renderer shared across tool invocations.
     ruskel: Ruskel,
+    /// Default request values applied when tool calls omit optional flags.
+    defaults: RuskelServerDefaults,
 }
 
 #[mcp_server]
 impl RuskelServer {
     /// Create a new server wrapper around the provided `Ruskel` renderer.
     pub fn new(ruskel: Ruskel) -> Self {
-        Self { ruskel }
+        Self::with_defaults(ruskel, RuskelServerDefaults::default())
+    }
+
+    /// Create a new server wrapper with explicit request defaults.
+    pub fn with_defaults(ruskel: Ruskel, defaults: RuskelServerDefaults) -> Self {
+        Self { ruskel, defaults }
     }
 
     #[tool]
@@ -99,8 +170,10 @@ impl RuskelServer {
     /// - Pass `direct_match_only=true` to show only exact matches.
     /// - Pass `frontmatter=false` to omit the leading comment block.
     async fn ruskel(&self, _ctx: &ServerCtx, params: RuskelSkeletonTool) -> Result<CallToolResult> {
+        let params = params.resolve(self.defaults);
+
         if env::var_os("RUSKEL_MCP_TEST_MODE").is_some() {
-            return Ok(run_test_mode(params));
+            return Ok(run_test_mode(&params));
         }
 
         let ruskel = self
@@ -118,26 +191,27 @@ impl RuskelServer {
             return Ok(self.run_search_mode(&ruskel, &params, query));
         }
 
-        Ok(self.run_render_mode(&ruskel, params))
+        Ok(self.run_render_mode(&ruskel, &params))
     }
 
     /// Build the MCP response for search invocations, including match summaries.
     fn run_search_mode(
         &self,
         ruskel: &Ruskel,
-        params: &RuskelSkeletonTool,
+        params: &ResolvedRuskelSkeletonTool,
         query: &str,
     ) -> CallToolResult {
-        let mut options = SearchOptions::new(query);
-        options.include_private = params.private;
-        options.case_sensitive = params.search_case_sensitive;
-
         let domains = match params.search_spec.as_ref() {
             Some(spec) if !spec.is_empty() => parse_domain_tokens(spec.iter().map(|s| s.as_str())),
             _ => SearchDomain::default(),
         };
-        options.domains = domains;
-        options.expand_containers = !params.direct_match_only;
+        let options = SearchOptions::configured(
+            query,
+            domains,
+            params.search_case_sensitive,
+            params.private,
+            !params.direct_match_only,
+        );
 
         match ruskel.search(
             &params.target,
@@ -188,12 +262,16 @@ impl RuskelServer {
     }
 
     /// Build the MCP response for render-only requests.
-    fn run_render_mode(&self, ruskel: &Ruskel, params: RuskelSkeletonTool) -> CallToolResult {
+    fn run_render_mode(
+        &self,
+        ruskel: &Ruskel,
+        params: &ResolvedRuskelSkeletonTool,
+    ) -> CallToolResult {
         match ruskel.render(
             &params.target,
             params.no_default_features,
             params.all_features,
-            params.features,
+            params.features.clone(),
             params.private,
         ) {
             Ok(output) => CallToolResult::new().with_text_content(output),
@@ -214,28 +292,24 @@ impl RuskelServer {
 ///
 /// This bypasses expensive rustdoc generation, allowing integration tests to run quickly
 /// while still exercising the MCP protocol surface.
-fn run_test_mode(params: RuskelSkeletonTool) -> CallToolResult {
+fn run_test_mode(params: &ResolvedRuskelSkeletonTool) -> CallToolResult {
     let mut summary = String::new();
     summary.push_str("ruskel test-mode output\n");
     summary.push_str(&format!("target: {}\n", params.target));
     summary.push_str(&format!("private: {}\n", params.private));
+    summary.push_str(&format!("frontmatter: {}\n", params.frontmatter));
 
-    if let Some(search) = params.search {
+    if let Some(search) = &params.search {
         summary.push_str(&format!("search: {}\n", search));
     }
 
-    if let Some(spec) = params.search_spec
+    if let Some(spec) = &params.search_spec
         && !spec.is_empty()
     {
         summary.push_str(&format!("search_spec: {}\n", spec.join(",")));
     }
 
     CallToolResult::new().with_text_content(summary)
-}
-
-/// Frontmatter is enabled by default when no user preference is provided.
-const fn default_frontmatter_enabled() -> bool {
-    true
 }
 
 /// Serve the ruskel MCP API over TCP or stdio depending on configuration.
@@ -246,6 +320,7 @@ pub async fn run_mcp_server(
     ruskel: Ruskel,
     addr: Option<String>,
     log_level: Option<LevelFilter>,
+    defaults: RuskelServerDefaults,
 ) -> Result<()> {
     // Initialize tracing for TCP mode only
     if addr.is_some() {
@@ -259,7 +334,7 @@ pub async fn run_mcp_server(
             .init();
     }
 
-    let server = Server::new(move || RuskelServer::new(ruskel.clone()));
+    let server = Server::new(move || RuskelServer::with_defaults(ruskel.clone(), defaults));
 
     match addr {
         Some(addr) => {

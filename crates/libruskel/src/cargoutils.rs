@@ -726,73 +726,131 @@ impl ResolvedTarget {
         self.package_path.read_crate(options)
     }
 
+    /// Resolve a standard library crate name, optionally overriding the display name.
+    fn resolve_std_crate(name: &str, display_name: Option<&str>, path: &[String]) -> Option<Self> {
+        is_std_library_crate(name).then(|| {
+            let display = display_name.unwrap_or(name);
+            Self::new(CargoPath::std(name.to_string(), display.to_string()), path)
+        })
+    }
+
+    /// Reject bare standard library module names that require an explicit `std::` prefix.
+    fn reject_std_module_name(name: &str) -> Result<()> {
+        if is_std_library_module(name) {
+            return Err(RuskelError::InvalidTarget(format!(
+                "'{name}' appears to be a standard library module. Use the full path like 'std::{name}'"
+            )));
+        }
+
+        Ok(())
+    }
+
     /// Resolve a `Target` into a fully-qualified location and filter path.
     pub fn from_target(target: Target, offline: bool) -> Result<Self> {
         match target.entrypoint {
-            Entrypoint::Path(path) => {
-                if path.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
-                    Self::from_rust_file(path, &target.path)
-                } else {
-                    let cargo_path = CargoPath::from_path(path.clone());
-                    let cargo_path = CargoPath::from_path(cargo_path.canonical_path()?);
-                    if cargo_path.is_package()? {
-                        Ok(Self::new(cargo_path, &target.path))
-                    } else if cargo_path.is_workspace()? {
-                        if target.path.is_empty() {
-                            Err(RuskelError::InvalidTarget(
-                                "No package specified in workspace".to_string(),
-                            ))
-                        } else {
-                            let package_name = &target.path[0];
-                            if let Some(package) =
-                                cargo_path.find_workspace_package(package_name)?
-                            {
-                                Ok(Self::new(package.package_path, &target.path[1..]))
-                            } else {
-                                Err(RuskelError::ModuleNotFound(format!(
-                                    "Package '{package_name}' not found in workspace"
-                                )))
-                            }
-                        }
-                    } else {
-                        Err(RuskelError::InvalidTarget(format!(
-                            "Path '{}' is neither a package nor a workspace",
-                            path.display()
-                        )))
-                    }
-                }
-            }
+            Entrypoint::Path(path) => Self::from_path_entry(path, &target.path),
             Entrypoint::Name { name, version } => {
-                // Check if this is a standard library crate
-                if is_std_library_crate(&name) {
-                    return Ok(Self::new(CargoPath::std(name.clone(), name), &target.path));
-                }
-
-                // Check if this is a common std library module name
-                if is_std_library_module(&name) {
-                    return Err(RuskelError::InvalidTarget(format!(
-                        "'{name}' appears to be a standard library module. Use the full path like 'std::{name}'"
-                    )));
-                }
-
-                let current_dir = env::current_dir()?;
-                match CargoPath::nearest_manifest(&current_dir) {
-                    Some(root) => {
-                        if let Some(workspace_member) = root.find_workspace_package(&name)? {
-                            let Self { package_path, .. } = workspace_member;
-                            return Ok(Self::new(package_path, &target.path));
-                        }
-
-                        if let Some(dependency) = root.find_dependency(&name, offline)? {
-                            Ok(Self::new(dependency, &target.path))
-                        } else {
-                            Self::from_dummy_crate(&name, version, &target.path, offline)
-                        }
-                    }
-                    None => Self::from_dummy_crate(&name, version, &target.path, offline),
-                }
+                Self::from_named_entry(&name, version, &target.path, offline)
             }
         }
+    }
+
+    /// Resolve a filesystem entrypoint to a package or workspace member target.
+    fn from_path_entry(path: PathBuf, target_path: &[String]) -> Result<Self> {
+        if path.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
+            return Self::from_rust_file(path, target_path);
+        }
+
+        let cargo_path = CargoPath::from_path(path);
+        let cargo_path = CargoPath::from_path(cargo_path.canonical_path()?);
+        if cargo_path.is_package()? {
+            return Ok(Self::new(cargo_path, target_path));
+        }
+        if cargo_path.is_workspace()? {
+            return Self::from_workspace_path(&cargo_path, target_path);
+        }
+
+        Err(RuskelError::InvalidTarget(format!(
+            "Path '{}' is neither a package nor a workspace",
+            cargo_path.as_path()?.display()
+        )))
+    }
+
+    /// Resolve a workspace root plus package path to a concrete package target.
+    fn from_workspace_path(cargo_path: &CargoPath, target_path: &[String]) -> Result<Self> {
+        let Some(package_name) = target_path.first() else {
+            return Err(RuskelError::InvalidTarget(
+                "No package specified in workspace".to_string(),
+            ));
+        };
+
+        if let Some(package) = cargo_path.find_workspace_package(package_name)? {
+            return Ok(Self::new(package.package_path, &target_path[1..]));
+        }
+
+        Err(RuskelError::ModuleNotFound(format!(
+            "Package '{package_name}' not found in workspace"
+        )))
+    }
+
+    /// Resolve a named entrypoint against std, workspace, dependencies, or crates.io.
+    fn from_named_entry(
+        name: &str,
+        version: Option<Version>,
+        target_path: &[String],
+        offline: bool,
+    ) -> Result<Self> {
+        if let Some(std_target) = Self::resolve_std_crate(name, None, target_path) {
+            return Ok(std_target);
+        }
+        Self::reject_std_module_name(name)?;
+
+        let current_dir = env::current_dir()?;
+        match CargoPath::nearest_manifest(&current_dir) {
+            Some(root) => Self::from_manifest_root(&root, name, version, target_path, offline),
+            None => Self::from_dummy_crate(name, version, target_path, offline),
+        }
+    }
+
+    /// Resolve a named target using the nearest manifest as the root context.
+    fn from_manifest_root(
+        root: &CargoPath,
+        name: &str,
+        version: Option<Version>,
+        target_path: &[String],
+        offline: bool,
+    ) -> Result<Self> {
+        if let Some(workspace_member) = root.find_workspace_package(name)? {
+            let Self { package_path, .. } = workspace_member;
+            return Ok(Self::new(package_path, target_path));
+        }
+
+        if let Some(dependency) = root.find_dependency(name, offline)? {
+            return Ok(Self::new(dependency, target_path));
+        }
+
+        Self::from_dummy_crate(name, version, target_path, offline)
+    }
+
+    /// Retarget a resolved crate path when the first filter component names a dependency.
+    fn retarget_dependency(self, original_path: &[String], offline: bool) -> Result<Self> {
+        let Some(first_component) = self
+            .filter
+            .split("::")
+            .next()
+            .filter(|component| !component.is_empty())
+        else {
+            return Ok(self);
+        };
+
+        if let Some(package_path) = self
+            .package_path
+            .find_dependency(first_component, offline)?
+        {
+            return Ok(Self::new(package_path, original_path));
+        }
+
+        Ok(self)
     }
 
     /// Resolve a module path starting from a specific Rust source file.
@@ -888,10 +946,8 @@ impl ResolvedTarget {
 /// directory. If necessary, construct temporary dummy crate to download packages from cargo.io.
 /// Parse a textual target specification into a `ResolvedTarget`.
 pub fn resolve_target(target_str: &str, offline: bool) -> Result<ResolvedTarget> {
-    // Check if this is a std re-export that needs to be mapped to the actual crate
     let (resolved_target_str, original_crate) =
         if let Some(mapped) = resolve_std_reexport(target_str) {
-            // Extract the original crate name (e.g., "std" from "std::vec")
             let original = target_str.split("::").next().unwrap_or("std");
             (mapped, Some(original.to_string()))
         } else {
@@ -903,41 +959,24 @@ pub fn resolve_target(target_str: &str, offline: bool) -> Result<ResolvedTarget>
     match &target.entrypoint {
         Entrypoint::Path(_) => ResolvedTarget::from_target(target, offline),
         Entrypoint::Name { name, version } => {
-            // Check if this is a standard library crate first
-            if is_std_library_crate(name) {
-                let display_name = original_crate.as_ref().unwrap_or(name).to_string();
-                return Ok(ResolvedTarget::new(
-                    CargoPath::std(name.to_string(), display_name),
-                    &target.path,
-                ));
-            }
-
-            // Check if this is a common std library module name
-            if is_std_library_module(name) {
-                return Err(RuskelError::InvalidTarget(format!(
-                    "'{name}' appears to be a standard library module. Use the full path like 'std::{name}'"
-                )));
-            }
-
             if version.is_some() {
-                // If a version is specified, always create a dummy package
-                ResolvedTarget::from_dummy_crate(name, version.clone(), &target.path, offline)
-            } else {
-                let resolved = ResolvedTarget::from_target(target.clone(), offline)?;
-                if let Some(first_component) = resolved
-                    .filter
-                    .split("::")
-                    .next()
-                    .filter(|component| !component.is_empty())
-                    && let Some(cp) = resolved
-                        .package_path
-                        .find_dependency(first_component, offline)?
-                {
-                    return Ok(ResolvedTarget::new(cp, &target.path));
-                }
-
-                Ok(resolved)
+                return ResolvedTarget::from_dummy_crate(
+                    name,
+                    version.clone(),
+                    &target.path,
+                    offline,
+                );
             }
+
+            if let Some(std_target) =
+                ResolvedTarget::resolve_std_crate(name, original_crate.as_deref(), &target.path)
+            {
+                return Ok(std_target);
+            }
+            ResolvedTarget::reject_std_module_name(name)?;
+
+            ResolvedTarget::from_target(target.clone(), offline)?
+                .retarget_dependency(&target.path, offline)
         }
     }
 }

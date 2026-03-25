@@ -6,4 +6,6 @@ mod server;
 // Kept public for integration tests but hidden from generated docs.
 #[doc(hidden)]
 pub use server::RuskelServer;
+#[doc(hidden)]
+pub use server::RuskelServerDefaults;
 pub use server::run_mcp_server;

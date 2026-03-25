@@ -14,6 +14,8 @@ use crate::{
     error::{Result, RuskelError},
     frontmatter::FrontmatterConfig,
     keywords::is_reserved_word,
+    search::SearchItemKind,
+    signature,
 };
 
 /// Traits that we render via `#[derive(...)]` annotations instead of explicit impl blocks.
@@ -930,18 +932,15 @@ impl RenderState<'_, '_> {
 
     /// Render a type alias with generics, bounds, and visibility.
     fn render_type_alias(&self, item: &Item) -> Result<String> {
-        let type_alias = try_extract_item!(item, ItemEnum::TypeAlias)?;
         let mut output = docs(item);
-
-        output.push_str(&format!(
-            "{}type {}{}{}",
-            render_vis(item),
-            render_name(item),
-            render_generics(&type_alias.generics),
-            render_where_clause(&type_alias.generics),
-        ));
-
-        output.push_str(&format!("= {};\n\n", render_type(&type_alias.type_)));
+        let signature = signature::item_signature(self.crate_data, item, SearchItemKind::TypeAlias)
+            .ok_or_else(|| {
+                RuskelError::Generate(format!(
+                    "failed to build type alias signature for '{}'",
+                    render_name(item)
+                ))
+            })?;
+        output.push_str(&format!("{signature};\n\n"));
 
         Ok(output)
     }
@@ -1021,6 +1020,35 @@ impl RenderState<'_, '_> {
         }
 
         Ok(groups)
+    }
+
+    /// Collect traits that should render as a `#[derive(...)]` attribute.
+    fn collect_inline_derive_traits(&self, impl_ids: &[Id]) -> Result<Vec<String>> {
+        let mut inline_traits = Vec::new();
+
+        for impl_id in impl_ids {
+            let impl_item = must_get(self.crate_data, impl_id)?;
+            let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
+            if impl_.is_synthetic {
+                continue;
+            }
+
+            if let Some(trait_) = &impl_.trait_
+                && let Some(name) = trait_.path.split("::").last()
+                && DERIVE_TRAITS.contains(&name)
+            {
+                inline_traits.push(name.to_string());
+            }
+        }
+
+        Ok(inline_traits)
+    }
+
+    /// Append a derive attribute when one or more inline derive traits are present.
+    fn push_inline_derive_attribute(output: &mut String, inline_traits: &[String]) {
+        if !inline_traits.is_empty() {
+            output.push_str(&format!("#[derive({})]\n", inline_traits.join(", ")));
+        }
     }
 
     /// Render a combined impl block for a group of compatible impl items.
@@ -1147,38 +1175,17 @@ impl RenderState<'_, '_> {
         let selection_active = self.selection().is_some();
         let include_all_variants = self.selection_expands(&item.id);
 
-        // Collect inline traits
-        let mut inline_traits = Vec::new();
-        for impl_id in &enum_.impls {
-            let impl_item = must_get(self.crate_data, impl_id)?;
-            let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
-            if impl_.is_synthetic {
-                continue;
-            }
+        let inline_traits = self.collect_inline_derive_traits(&enum_.impls)?;
+        Self::push_inline_derive_attribute(&mut output, &inline_traits);
 
-            if let Some(trait_) = &impl_.trait_
-                && let Some(name) = trait_.path.split("::").last()
-                && DERIVE_TRAITS.contains(&name)
-            {
-                inline_traits.push(name);
-            }
-        }
-
-        // Add derive attribute if we found any inline traits
-        if !inline_traits.is_empty() {
-            output.push_str(&format!("#[derive({})]\n", inline_traits.join(", ")));
-        }
-
-        let generics = render_generics(&enum_.generics);
-        let where_clause = render_where_clause(&enum_.generics);
-
-        output.push_str(&format!(
-            "{}enum {}{}{} {{\n",
-            render_vis(item),
-            render_name(item),
-            generics,
-            where_clause
-        ));
+        let signature = signature::item_signature(self.crate_data, item, SearchItemKind::Enum)
+            .ok_or_else(|| {
+                RuskelError::Generate(format!(
+                    "failed to build enum signature for '{}'",
+                    render_name(item)
+                ))
+            })?;
+        output.push_str(&format!("{signature} {{\n"));
 
         for variant_id in &enum_.variants {
             if !selection_active
@@ -1278,26 +1285,14 @@ impl RenderState<'_, '_> {
         let selection_active = self.selection().is_some();
         let expand_children = self.selection_expands(&item.id);
 
-        let generics = render_generics(&trait_.generics);
-        let where_clause = render_where_clause(&trait_.generics);
-
-        let bounds = if !trait_.bounds.is_empty() {
-            format!(": {}", render_generic_bounds(&trait_.bounds))
-        } else {
-            String::new()
-        };
-
-        let unsafe_prefix = if trait_.is_unsafe { "unsafe " } else { "" };
-
-        output.push_str(&format!(
-            "{}{}trait {}{}{}{} {{\n",
-            render_vis(item),
-            unsafe_prefix,
-            render_name(item),
-            generics,
-            bounds,
-            where_clause
-        ));
+        let signature = signature::item_signature(self.crate_data, item, SearchItemKind::Trait)
+            .ok_or_else(|| {
+                RuskelError::Generate(format!(
+                    "failed to build trait signature for '{}'",
+                    render_name(item)
+                ))
+            })?;
+        output.push_str(&format!("{signature} {{\n"));
 
         for item_id in &trait_.items {
             if !selection_active || expand_children || self.selection_context_contains(item_id) {
@@ -1373,42 +1368,29 @@ impl RenderState<'_, '_> {
         let expand_children = selection_active && self.selection_expands(&item.id);
         let force_fields = selection_active && expand_children;
 
-        // Collect inline traits
-        let mut inline_traits = Vec::new();
-        for impl_id in &struct_.impls {
-            let impl_item = must_get(self.crate_data, impl_id)?;
-            let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
-            if impl_.is_synthetic {
-                continue;
-            }
+        let inline_traits = self.collect_inline_derive_traits(&struct_.impls)?;
+        Self::push_inline_derive_attribute(&mut output, &inline_traits);
 
-            if let Some(trait_) = &impl_.trait_
-                && let Some(name) = trait_.path.split("::").last()
-                && DERIVE_TRAITS.contains(&name)
-            {
-                inline_traits.push(name);
-            }
-        }
-
-        // Add derive attribute if we found any inline traits
-        if !inline_traits.is_empty() {
-            output.push_str(&format!("#[derive({})]\n", inline_traits.join(", ")));
-        }
-
-        let generics = render_generics(&struct_.generics);
-        let where_clause = render_where_clause(&struct_.generics);
+        let signature = signature::item_signature(self.crate_data, item, SearchItemKind::Struct)
+            .ok_or_else(|| {
+                RuskelError::Generate(format!(
+                    "failed to build struct signature for '{}'",
+                    render_name(item)
+                ))
+            })?;
 
         match &struct_.kind {
             StructKind::Unit => {
-                output.push_str(&format!(
-                    "{}struct {}{}{};\n\n",
-                    render_vis(item),
-                    render_name(item),
-                    generics,
-                    where_clause
-                ));
+                output.push_str(&format!("{signature};\n\n"));
             }
             StructKind::Tuple(fields) => {
+                let struct_prefix = format!(
+                    "{}struct {}{}",
+                    render_vis(item),
+                    render_name(item),
+                    render_generics(&struct_.generics)
+                );
+                let where_clause = render_where_clause(&struct_.generics);
                 let mut rendered_fields = Vec::new();
                 for id in fields.iter().flatten() {
                     if !expand_children && !self.selection_context_contains(id) {
@@ -1429,24 +1411,11 @@ impl RenderState<'_, '_> {
 
                 if expand_children || !rendered_fields.is_empty() {
                     let fields_str = rendered_fields.join(", ");
-                    output.push_str(&format!(
-                        "{}struct {}{}({}){};\n\n",
-                        render_vis(item),
-                        render_name(item),
-                        generics,
-                        fields_str,
-                        where_clause
-                    ));
+                    output.push_str(&format!("{struct_prefix}({fields_str}){where_clause};\n\n"));
                 }
             }
             StructKind::Plain { fields, .. } => {
-                output.push_str(&format!(
-                    "{}struct {}{}{} {{\n",
-                    render_vis(item),
-                    render_name(item),
-                    generics,
-                    where_clause
-                ));
+                output.push_str(&format!("{signature} {{\n"));
                 for field in fields {
                     let rendered = self.render_struct_field(field, force_fields)?;
                     if !rendered.is_empty() {
@@ -1493,12 +1462,16 @@ impl RenderState<'_, '_> {
     fn render_constant(&self, item: &Item) -> Result<String> {
         let mut output = docs(item);
 
-        let (type_, const_) = try_extract_item!(item, ItemEnum::Constant { type_, const_ })?;
+        let (_type_, const_) = try_extract_item!(item, ItemEnum::Constant { type_, const_ })?;
+        let signature = signature::item_signature(self.crate_data, item, SearchItemKind::Constant)
+            .ok_or_else(|| {
+                RuskelError::Generate(format!(
+                    "failed to build constant signature for '{}'",
+                    render_name(item)
+                ))
+            })?;
         output.push_str(&format!(
-            "{}const {}: {} = {};\n\n",
-            render_vis(item),
-            render_name(item),
-            render_type(type_),
+            "{signature} = {};\n\n",
             render_expression(&const_.expr)
         ));
 
@@ -1534,29 +1507,19 @@ impl RenderState<'_, '_> {
     fn render_function(&self, item: &Item, is_trait_method: bool) -> Result<String> {
         let mut output = docs(item);
         let function = try_extract_item!(item, ItemEnum::Function)?;
-
-        // Handle const, async, and unsafe keywords in the correct order
-        let mut prefixes = Vec::new();
-        if function.header.is_const {
-            prefixes.push("const");
-        }
-        if function.header.is_async {
-            prefixes.push("async");
-        }
-        if function.header.is_unsafe {
-            prefixes.push("unsafe");
-        }
-
-        output.push_str(&format!(
-            "{} {} fn {}{}({}){}{}",
-            render_vis(item),
-            prefixes.join(" "),
-            render_name(item),
-            render_generics(&function.generics),
-            render_function_args(&function.sig),
-            render_return_type(&function.sig),
-            render_where_clause(&function.generics)
-        ));
+        let kind = if is_trait_method {
+            SearchItemKind::TraitMethod
+        } else {
+            SearchItemKind::Function
+        };
+        let signature =
+            signature::item_signature(self.crate_data, item, kind).ok_or_else(|| {
+                RuskelError::Generate(format!(
+                    "failed to build function signature for '{}'",
+                    render_name(item)
+                ))
+            })?;
+        output.push_str(&signature);
 
         // Use semicolon for trait method declarations, empty body for implementations
         if is_trait_method && !function.has_body {

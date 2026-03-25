@@ -30,6 +30,8 @@ mod render;
 mod ruskel;
 /// Search and indexing utilities used by the CLI.
 pub mod search;
+/// Shared signature formatting used by search and rendering.
+mod signature;
 /// Target parsing helpers for user-provided specifications.
 mod target;
 /// Shared nightly/rustup helpers.
@@ -41,7 +43,8 @@ pub use crate::{
     error::{Result, RuskelError},
     render::Renderer,
     search::{
-        ListItem, SearchDomain, SearchIndex, SearchItemKind, SearchOptions, SearchPathSegment,
-        SearchResponse, SearchResult, describe_domains, parse_domain_token, parse_domain_tokens,
+        ListItem, SearchDomain, SearchEntry, SearchIndex, SearchItemKind, SearchOptions,
+        SearchPathSegment, SearchResponse, SearchResult, describe_domains, parse_domain_token,
+        parse_domain_tokens,
     },
 };

@@ -7,11 +7,9 @@ use bitflags::bitflags;
 use rustdoc_types::{Crate, Id, Item, ItemEnum, Module, Struct, StructKind, Visibility};
 
 use crate::{
-    crateutils::{
-        render_function_args, render_generic_bounds, render_generics, render_name, render_path,
-        render_return_type, render_type, render_vis, render_where_clause,
-    },
+    crateutils::{render_name, render_path, render_type},
     render::RenderSelection,
+    signature,
 };
 
 bitflags! {
@@ -60,6 +58,23 @@ impl SearchOptions {
             include_private: false,
             expand_containers: true,
         }
+    }
+
+    /// Create fully-specified search options with transport-independent defaults.
+    pub fn configured(
+        query: impl Into<String>,
+        domains: SearchDomain,
+        case_sensitive: bool,
+        include_private: bool,
+        expand_containers: bool,
+    ) -> Self {
+        let mut options = Self::new(query);
+        options.domains = domains;
+        options.case_sensitive = case_sensitive;
+        options.include_private = include_private;
+        options.expand_containers = expand_containers;
+        options.ensure_domains();
+        options
     }
 
     /// Ensure the options have at least one domain selected.
@@ -165,10 +180,33 @@ pub struct SearchPathSegment {
 /// Aggregated search response containing matches and rendered output.
 #[derive(Debug, Clone)]
 pub struct SearchResponse {
-    /// Matched records returned by the index.
+    /// Matched records returned by the query.
     pub results: Vec<SearchResult>,
     /// Rendered skeleton filtered to only include matched items.
     pub rendered: String,
+}
+
+/// Immutable record stored in the search index for a crate item.
+#[derive(Debug, Clone)]
+pub struct SearchEntry {
+    /// Identifier of the indexed item.
+    pub item_id: Id,
+    /// Kind of indexed item.
+    pub kind: SearchItemKind,
+    /// Canonical path segments to reach the item.
+    pub path: Vec<SearchPathSegment>,
+    /// Canonical path rendered as a `::` separated string.
+    pub path_string: String,
+    /// Raw identifier of the item.
+    pub raw_name: String,
+    /// Display name formatted for rendering.
+    pub display_name: String,
+    /// Documentation snippet if available.
+    pub docs: Option<String>,
+    /// Rendered signature used for matching and display.
+    pub signature: Option<String>,
+    /// Ancestor chain of items that must be rendered for context.
+    pub ancestors: Vec<Id>,
 }
 
 /// Lightweight record describing an item for list mode output.
@@ -201,21 +239,31 @@ pub struct SearchResult {
     pub signature: Option<String>,
     /// Ancestor chain of items that must be rendered for context.
     pub ancestors: Vec<Id>,
-    /// Domains that produced a match (empty when stored in the index).
+    /// Domains that produced a match for this query result.
     pub matched: SearchDomain,
 }
 
 impl SearchResult {
-    /// Reset match metadata so the record can be reused for a new query.
-    fn clear_match_info(&mut self) {
-        self.matched = SearchDomain::empty();
+    fn from_entry(entry: &SearchEntry, matched: SearchDomain) -> Self {
+        Self {
+            item_id: entry.item_id,
+            kind: entry.kind,
+            path: entry.path.clone(),
+            path_string: entry.path_string.clone(),
+            raw_name: entry.raw_name.clone(),
+            display_name: entry.display_name.clone(),
+            docs: entry.docs.clone(),
+            signature: entry.signature.clone(),
+            ancestors: entry.ancestors.clone(),
+            matched,
+        }
     }
 }
 
 /// Index of crate items prepared for search queries.
 #[derive(Debug, Default, Clone)]
 pub struct SearchIndex {
-    entries: Vec<SearchResult>,
+    entries: Vec<SearchEntry>,
     id_to_entry: HashMap<Id, usize>,
 }
 
@@ -228,20 +276,13 @@ impl SearchIndex {
     }
 
     /// Retrieve the immutable list of indexed entries.
-    pub fn entries(&self) -> &[SearchResult] {
+    pub fn entries(&self) -> &[SearchEntry] {
         &self.entries
     }
 
     /// Look up an indexed entry by ID.
-    pub fn get(&self, id: &Id) -> Option<&SearchResult> {
+    pub fn get(&self, id: &Id) -> Option<&SearchEntry> {
         self.id_to_entry.get(id).map(|idx| &self.entries[*idx])
-    }
-
-    /// Prepare the index for a new search by clearing cached match metadata.
-    pub fn reset_matches(&mut self) {
-        for entry in &mut self.entries {
-            entry.clear_match_info();
-        }
     }
 
     /// Execute a query against the index and return matching results.
@@ -290,9 +331,7 @@ impl SearchIndex {
             }
 
             if !matched.is_empty() {
-                let mut clone = entry.clone();
-                clone.matched = matched;
-                results.push(clone);
+                results.push(SearchResult::from_entry(entry, matched));
             }
         }
 
@@ -310,7 +349,7 @@ struct IndexBuilder<'a> {
     crate_data: &'a Crate,
     include_private: bool,
     stack: Vec<PathStackEntry>,
-    entries: Vec<SearchResult>,
+    entries: Vec<SearchEntry>,
     visited: HashSet<Id>,
 }
 
@@ -332,7 +371,7 @@ impl<'a> IndexBuilder<'a> {
     }
 
     fn finish(self) -> SearchIndex {
-        let entries: Vec<SearchResult> = self.entries;
+        let entries: Vec<SearchEntry> = self.entries;
         let mut id_to_entry = HashMap::with_capacity(entries.len());
         for (idx, entry) in entries.iter().enumerate() {
             id_to_entry.insert(entry.item_id, idx);
@@ -405,124 +444,128 @@ impl<'a> IndexBuilder<'a> {
     }
 
     fn visit_struct(&mut self, item: &Item, struct_: &Struct) {
-        let segment = self.make_segment(item, SearchItemKind::Struct, None);
-        let include_children = self.record_item(item, SearchItemKind::Struct, &segment, false, &[]);
-        self.stack.push(PathStackEntry {
-            id: Some(item.id),
-            segment,
-        });
-        if include_children {
-            match &struct_.kind {
-                StructKind::Unit => {}
-                StructKind::Tuple(fields) => {
-                    for field_id in fields.iter().flatten() {
-                        self.visit_item(field_id);
+        self.visit_container(
+            item,
+            SearchItemKind::Struct,
+            false,
+            &[],
+            |this, include_children| {
+                if include_children {
+                    match &struct_.kind {
+                        StructKind::Unit => {}
+                        StructKind::Tuple(fields) => {
+                            for field_id in fields.iter().flatten() {
+                                this.visit_item(field_id);
+                            }
+                        }
+                        StructKind::Plain { fields, .. } => {
+                            for field in fields {
+                                this.visit_item(field);
+                            }
+                        }
                     }
                 }
-                StructKind::Plain { fields, .. } => {
-                    for field in fields {
-                        self.visit_item(field);
-                    }
+                for impl_id in &struct_.impls {
+                    this.visit_item(impl_id);
                 }
-            }
-        }
-        for impl_id in &struct_.impls {
-            self.visit_item(impl_id);
-        }
-        self.stack.pop();
+            },
+        );
     }
 
     fn visit_union(&mut self, item: &Item, union_: &rustdoc_types::Union) {
-        let segment = self.make_segment(item, SearchItemKind::Union, None);
-        let include_children = self.record_item(item, SearchItemKind::Union, &segment, false, &[]);
-        self.stack.push(PathStackEntry {
-            id: Some(item.id),
-            segment,
-        });
-        if include_children {
-            for field in &union_.fields {
-                self.visit_item(field);
-            }
-        }
-        for impl_id in &union_.impls {
-            self.visit_item(impl_id);
-        }
-        self.stack.pop();
+        self.visit_container(
+            item,
+            SearchItemKind::Union,
+            false,
+            &[],
+            |this, include_children| {
+                if include_children {
+                    for field in &union_.fields {
+                        this.visit_item(field);
+                    }
+                }
+                for impl_id in &union_.impls {
+                    this.visit_item(impl_id);
+                }
+            },
+        );
     }
 
     fn visit_enum(&mut self, item: &Item, enum_: &rustdoc_types::Enum) {
-        let segment = self.make_segment(item, SearchItemKind::Enum, None);
-        let include_children = self.record_item(item, SearchItemKind::Enum, &segment, false, &[]);
-        self.stack.push(PathStackEntry {
-            id: Some(item.id),
-            segment,
-        });
-        if include_children {
-            for variant_id in &enum_.variants {
-                self.visit_item(variant_id);
-            }
-        }
-        for impl_id in &enum_.impls {
-            self.visit_item(impl_id);
-        }
-        self.stack.pop();
+        self.visit_container(
+            item,
+            SearchItemKind::Enum,
+            false,
+            &[],
+            |this, include_children| {
+                if include_children {
+                    for variant_id in &enum_.variants {
+                        this.visit_item(variant_id);
+                    }
+                }
+                for impl_id in &enum_.impls {
+                    this.visit_item(impl_id);
+                }
+            },
+        );
     }
 
     fn visit_variant(&mut self, item: &Item, variant: &rustdoc_types::Variant) {
-        let segment = self.make_segment(item, SearchItemKind::EnumVariant, None);
-        let include_children =
-            self.record_item(item, SearchItemKind::EnumVariant, &segment, false, &[]);
-        self.stack.push(PathStackEntry {
-            id: Some(item.id),
-            segment,
-        });
-        if include_children {
-            match &variant.kind {
-                rustdoc_types::VariantKind::Plain => {}
-                rustdoc_types::VariantKind::Tuple(fields) => {
-                    for field_id in fields.iter().flatten() {
-                        self.visit_item(field_id);
+        self.visit_container(
+            item,
+            SearchItemKind::EnumVariant,
+            false,
+            &[],
+            |this, include_children| {
+                if include_children {
+                    match &variant.kind {
+                        rustdoc_types::VariantKind::Plain => {}
+                        rustdoc_types::VariantKind::Tuple(fields) => {
+                            for field_id in fields.iter().flatten() {
+                                this.visit_item(field_id);
+                            }
+                        }
+                        rustdoc_types::VariantKind::Struct { fields, .. } => {
+                            for field_id in fields {
+                                this.visit_item(field_id);
+                            }
+                        }
                     }
                 }
-                rustdoc_types::VariantKind::Struct { fields, .. } => {
-                    for field_id in fields {
-                        self.visit_item(field_id);
-                    }
-                }
-            }
-        }
-        self.stack.pop();
+            },
+        );
     }
 
     fn visit_trait(&mut self, item: &Item, trait_: &rustdoc_types::Trait) {
-        let segment = self.make_segment(item, SearchItemKind::Trait, None);
-        let include_children = self.record_item(item, SearchItemKind::Trait, &segment, false, &[]);
-        self.stack.push(PathStackEntry {
-            id: Some(item.id),
-            segment,
-        });
-        if include_children {
-            for assoc_id in &trait_.items {
-                if let Some(assoc) = self.crate_data.index.get(assoc_id) {
-                    match &assoc.inner {
-                        ItemEnum::Function(_) => {
-                            self.record_trait_member(assoc, SearchItemKind::TraitMethod)
+        self.visit_container(
+            item,
+            SearchItemKind::Trait,
+            false,
+            &[],
+            |this, include_children| {
+                if include_children {
+                    for assoc_id in &trait_.items {
+                        if let Some(assoc) = this.crate_data.index.get(assoc_id) {
+                            match &assoc.inner {
+                                ItemEnum::Function(_) => {
+                                    this.record_trait_member(assoc, SearchItemKind::TraitMethod)
+                                }
+                                ItemEnum::AssocConst { .. } => {
+                                    this.record_trait_member(assoc, SearchItemKind::AssocConst)
+                                }
+                                ItemEnum::AssocType { .. } => {
+                                    this.record_trait_member(assoc, SearchItemKind::AssocType)
+                                }
+                                _ => this.visit_item(assoc_id),
+                            }
                         }
-                        ItemEnum::AssocConst { .. } => {
-                            self.record_trait_member(assoc, SearchItemKind::AssocConst)
-                        }
-                        ItemEnum::AssocType { .. } => {
-                            self.record_trait_member(assoc, SearchItemKind::AssocType)
-                        }
-                        _ => self.visit_item(assoc_id),
                     }
                 }
-            }
-        }
-        for impl_id in &trait_.implementations {
-            self.visit_item(impl_id);
-        }
-        self.stack.pop();
+                for impl_id in &trait_.implementations {
+                    this.visit_item(impl_id);
+                }
+            },
+        );
     }
 
     fn visit_function(&mut self, item: &Item) {
@@ -532,6 +575,25 @@ impl<'a> IndexBuilder<'a> {
     fn record_trait_member(&mut self, item: &Item, kind: SearchItemKind) {
         let segment = self.make_segment(item, kind, None);
         self.record_item(item, kind, &segment, false, &[]);
+    }
+
+    fn visit_container(
+        &mut self,
+        item: &Item,
+        kind: SearchItemKind,
+        always_include: bool,
+        extra_ancestors: &[Id],
+        visit_children: impl FnOnce(&mut Self, bool),
+    ) {
+        let segment = self.make_segment(item, kind, None);
+        let include_children =
+            self.record_item(item, kind, &segment, always_include, extra_ancestors);
+        self.stack.push(PathStackEntry {
+            id: Some(item.id),
+            segment,
+        });
+        visit_children(self, include_children);
+        self.stack.pop();
     }
 
     fn visit_impl(&mut self, impl_item: &Item, impl_: &rustdoc_types::Impl) {
@@ -765,7 +827,7 @@ impl<'a> IndexBuilder<'a> {
 
         let path_string = join_path(&path);
         let signature = self.signature_for(item, kind);
-        let result = SearchResult {
+        let result = SearchEntry {
             item_id: item.id,
             kind,
             path,
@@ -775,255 +837,13 @@ impl<'a> IndexBuilder<'a> {
             docs: item.docs.clone(),
             signature,
             ancestors,
-            matched: SearchDomain::empty(),
         };
 
         self.entries.push(result);
         true
     }
     fn signature_for(&self, item: &Item, kind: SearchItemKind) -> Option<String> {
-        match (&item.inner, kind) {
-            (ItemEnum::Function(function), SearchItemKind::Function)
-            | (ItemEnum::Function(function), SearchItemKind::Method)
-            | (ItemEnum::Function(function), SearchItemKind::TraitMethod) => {
-                let mut parts: Vec<String> = Vec::new();
-                let vis = render_vis(item);
-                if !vis.trim().is_empty() {
-                    parts.push(vis.trim().to_string());
-                }
-                let mut qualifiers = Vec::new();
-                if function.header.is_const {
-                    qualifiers.push("const");
-                }
-                if function.header.is_async {
-                    qualifiers.push("async");
-                }
-                if function.header.is_unsafe {
-                    qualifiers.push("unsafe");
-                }
-                if !qualifiers.is_empty() {
-                    parts.push(qualifiers.join(" "));
-                }
-                parts.push("fn".to_string());
-
-                let mut signature = parts.join(" ");
-                if !signature.is_empty() {
-                    signature.push(' ');
-                }
-                signature.push_str(&render_name(item));
-                signature.push_str(&render_generics(&function.generics));
-                signature.push('(');
-                signature.push_str(&render_function_args(&function.sig));
-                signature.push(')');
-                signature.push_str(&render_return_type(&function.sig));
-                signature.push_str(&render_where_clause(&function.generics));
-                Some(signature)
-            }
-            (ItemEnum::StructField(ty), SearchItemKind::Field) => {
-                let mut signature = String::new();
-                let vis = render_vis(item);
-                if !vis.trim().is_empty() {
-                    signature.push_str(vis.trim());
-                    signature.push(' ');
-                }
-                if let Some(name) = item.name.as_deref() {
-                    signature.push_str(name);
-                    signature.push_str(": ");
-                }
-                signature.push_str(&render_type(ty));
-                Some(signature)
-            }
-            (ItemEnum::Struct(struct_), SearchItemKind::Struct) => Some(
-                format!(
-                    "{}struct {}{}{}",
-                    render_vis(item),
-                    render_name(item),
-                    render_generics(&struct_.generics),
-                    render_where_clause(&struct_.generics)
-                )
-                .trim()
-                .to_string(),
-            ),
-            (ItemEnum::Union(union_), SearchItemKind::Union) => Some(
-                format!(
-                    "{}union {}{}{}",
-                    render_vis(item),
-                    render_name(item),
-                    render_generics(&union_.generics),
-                    render_where_clause(&union_.generics)
-                )
-                .trim()
-                .to_string(),
-            ),
-            (ItemEnum::Enum(enum_), SearchItemKind::Enum) => Some(
-                format!(
-                    "{}enum {}{}{}",
-                    render_vis(item),
-                    render_name(item),
-                    render_generics(&enum_.generics),
-                    render_where_clause(&enum_.generics)
-                )
-                .trim()
-                .to_string(),
-            ),
-            (ItemEnum::Trait(trait_), SearchItemKind::Trait) => {
-                let mut signature = String::new();
-                signature.push_str(&render_vis(item));
-                if trait_.is_unsafe {
-                    signature.push_str("unsafe ");
-                }
-                signature.push_str("trait ");
-                signature.push_str(&render_name(item));
-                signature.push_str(&render_generics(&trait_.generics));
-                if !trait_.bounds.is_empty() {
-                    let bounds = render_generic_bounds(&trait_.bounds);
-                    if !bounds.is_empty() {
-                        signature.push_str(": ");
-                        signature.push_str(&bounds);
-                    }
-                }
-                signature.push_str(&render_where_clause(&trait_.generics));
-                Some(signature.trim().to_string())
-            }
-            (ItemEnum::TraitAlias(alias), SearchItemKind::TraitAlias) => {
-                let mut signature = String::new();
-                signature.push_str(&render_vis(item));
-                signature.push_str("trait ");
-                signature.push_str(&render_name(item));
-                signature.push_str(&render_generics(&alias.generics));
-                let bounds = render_generic_bounds(&alias.params);
-                if !bounds.is_empty() {
-                    signature.push_str(" = ");
-                    signature.push_str(&bounds);
-                }
-                signature.push_str(&render_where_clause(&alias.generics));
-                Some(signature.trim().to_string())
-            }
-            (ItemEnum::TypeAlias(type_alias), SearchItemKind::TypeAlias) => Some(
-                format!(
-                    "{}type {}{}{} = {}",
-                    render_vis(item),
-                    render_name(item),
-                    render_generics(&type_alias.generics),
-                    render_where_clause(&type_alias.generics),
-                    render_type(&type_alias.type_)
-                )
-                .trim()
-                .to_string(),
-            ),
-            (ItemEnum::Constant { type_, .. }, SearchItemKind::Constant) => Some(
-                format!(
-                    "{}const {}: {}",
-                    render_vis(item),
-                    render_name(item),
-                    render_type(type_)
-                )
-                .trim()
-                .to_string(),
-            ),
-            (ItemEnum::Static(static_), SearchItemKind::Static) => Some(
-                format!(
-                    "{}static {}: {}",
-                    render_vis(item),
-                    render_name(item),
-                    render_type(&static_.type_)
-                )
-                .trim()
-                .to_string(),
-            ),
-            (ItemEnum::AssocConst { type_, .. }, SearchItemKind::AssocConst) => Some(format!(
-                "const {}: {}",
-                render_name(item),
-                render_type(type_)
-            )),
-            (ItemEnum::AssocType { bounds, type_, .. }, SearchItemKind::AssocType) => {
-                if let Some(ty) = type_ {
-                    Some(format!("type {} = {}", render_name(item), render_type(ty)))
-                } else if !bounds.is_empty() {
-                    Some(format!(
-                        "type {}: {}",
-                        render_name(item),
-                        render_generic_bounds(bounds)
-                    ))
-                } else {
-                    Some(format!("type {}", render_name(item)))
-                }
-            }
-            (ItemEnum::Macro(_), SearchItemKind::Macro) => {
-                Some(format!("macro {}", render_name(item)))
-            }
-            (ItemEnum::ProcMacro(proc_macro), SearchItemKind::ProcMacro) => {
-                let prefix = match proc_macro.kind {
-                    rustdoc_types::MacroKind::Derive => "#[proc_macro_derive]",
-                    rustdoc_types::MacroKind::Attr => "#[proc_macro_attribute]",
-                    rustdoc_types::MacroKind::Bang => "#[proc_macro]",
-                };
-                Some(format!("{} {}", prefix, render_name(item)))
-            }
-            (ItemEnum::Use(import), SearchItemKind::Use) => {
-                let mut signature = String::new();
-                signature.push_str(&render_vis(item));
-                signature.push_str("use ");
-                signature.push_str(&import.source);
-                if import.name != import.source.split("::").last().unwrap_or(&import.source) {
-                    signature.push_str(" as ");
-                    signature.push_str(&import.name);
-                }
-                if import.is_glob {
-                    signature.push_str("::*");
-                }
-                Some(signature.trim().to_string())
-            }
-            (ItemEnum::Primitive(_), SearchItemKind::Primitive) => {
-                Some(format!("primitive {}", render_name(item)))
-            }
-            (ItemEnum::Module(_), SearchItemKind::Module) => Some(
-                format!("{}mod {}", render_vis(item), render_name(item))
-                    .trim()
-                    .to_string(),
-            ),
-            (ItemEnum::Module(_), SearchItemKind::Crate) => Some(render_name(item)),
-            (ItemEnum::Variant(variant), SearchItemKind::EnumVariant) => {
-                let mut signature = render_name(item);
-                match &variant.kind {
-                    rustdoc_types::VariantKind::Plain => {}
-                    rustdoc_types::VariantKind::Tuple(fields) => {
-                        let mut parts = Vec::new();
-                        for field in fields {
-                            if let Some(field_id) = field
-                                && let Some(field_item) = self.crate_data.index.get(field_id)
-                                && let ItemEnum::StructField(ty) = &field_item.inner
-                            {
-                                parts.push(render_type(ty));
-                            }
-                        }
-                        signature.push('(');
-                        signature.push_str(&parts.join(", "));
-                        signature.push(')');
-                    }
-                    rustdoc_types::VariantKind::Struct { fields, .. } => {
-                        let mut parts = Vec::new();
-                        for field_id in fields {
-                            if let Some(field_item) = self.crate_data.index.get(field_id)
-                                && let ItemEnum::StructField(ty) = &field_item.inner
-                            {
-                                let name = field_item
-                                    .name
-                                    .as_deref()
-                                    .map(ToOwned::to_owned)
-                                    .unwrap_or_else(|| "_".to_string());
-                                parts.push(format!("{}: {}", name, render_type(ty)));
-                            }
-                        }
-                        signature.push_str(" { ");
-                        signature.push_str(&parts.join(", "));
-                        signature.push_str(" }");
-                    }
-                }
-                Some(signature)
-            }
-            _ => None,
-        }
+        signature::item_signature(self.crate_data, item, kind)
     }
 
     fn should_include(&self, item: &Item) -> bool {

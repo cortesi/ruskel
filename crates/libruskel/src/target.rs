@@ -1,3 +1,5 @@
+//! Target parsing helpers for user-provided specifications.
+
 use std::path::PathBuf;
 
 use semver::Version;
@@ -20,51 +22,19 @@ pub enum Entrypoint {
 
 /// A parsed target specification for the ruskel tool.
 ///
-/// A target specification consists of an entrypoint and an optional path, separated by '::'.
+/// A target specification consists of an entrypoint and an optional path, separated by `::`.
 ///
 /// # Format
-///
-/// The general format is:
 ///
 /// ```text
 /// entrypoint[::path]
 /// ```
 ///
 /// Where:
-/// - `entrypoint` can be a file path, directory path, module name, or package name (optionally with a version).
-/// - `path` is an optional fully qualified path within the entrypoint, with components separated by '::'.
+/// - `entrypoint` can be a file path, directory path, module name, or package name.
+/// - `path` is an optional fully qualified path within the entrypoint.
 ///
-/// # Entrypoint Types
-///
-/// - **File Path**: A path to a Rust file
-/// - **Directory Path**: A path to a directory containing a Cargo.toml file
-/// - **Module**: A module name, typically starting with an uppercase letter
-/// - **Package**: A package name, optionally followed by '@' and a version number
-///
-/// # Examples of valid target specifications:
-///
-/// - File paths:
-///   - `src/lib.rs`
-///   - `src/main.rs::my_module::MyStruct`
-///
-/// - Directory paths:
-///   - `/path/to/my_project`
-///   - `/path/to/my_project::some_module::function`
-///
-/// - Modules:
-///   - `MyModule`
-///   - `MyModule::SubModule::function`
-///
-/// - Packages:
-///   - `serde`
-///   - `serde::Deserialize`
-///   - `serde@1.0.104`
-///   - `serde@1.0.104::Serialize`
-///
-/// - Other examples:
-///   - `tokio::sync::Mutex`
-///   - `std::collections::HashMap`
-///   - `my_crate::utils::helper_function`
+/// Package names may include an `@version` suffix.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Target {
     /// Entry point describing where to start resolving the target.
@@ -76,293 +46,229 @@ pub struct Target {
 impl Target {
     /// Parse a target specification string into a structured `Target`.
     pub fn parse(spec: &str) -> Result<Self> {
-        if spec.is_empty() {
-            return Err(RuskelError::InvalidTarget(
-                "Invalid target specification: empty string".to_string(),
-            ));
-        }
-
-        let parts: Vec<&str> = spec.split("::").collect();
-
-        if parts[0].is_empty() {
-            return Err(RuskelError::InvalidTarget(
-                "Invalid name specification: empty name".to_string(),
-            ));
-        }
-
-        let (entrypoint, path) = parts.split_first().unwrap();
-
-        // Check for empty path components
-        for (i, component) in path.iter().enumerate() {
-            if component.is_empty() {
-                return Err(RuskelError::InvalidTarget(format!(
-                    "Invalid target specification: empty path component at position {}",
-                    i + 1
-                )));
-            }
-        }
-
-        let entrypoint = if entrypoint.contains('/')
-            || entrypoint.contains('\\')
-            || *entrypoint == "."
-            || *entrypoint == ".."
-        {
-            // It's a file or directory path
-            Entrypoint::Path(PathBuf::from(entrypoint))
-        } else if entrypoint.contains('@') {
-            // It's a name with version
-            let name_parts: Vec<&str> = entrypoint.split('@').collect();
-            if name_parts.len() != 2 {
-                return Err(RuskelError::InvalidTarget(format!(
-                    "Invalid name specification: {entrypoint}"
-                )));
-            }
-            let name = name_parts[0].to_string();
-            let version = Version::parse(name_parts[1])
-                .map_err(|e| RuskelError::InvalidTarget(format!("Invalid version: {e}")))?;
-            Entrypoint::Name {
-                name,
-                version: Some(version),
-            }
-        } else {
-            // It's a name without version
-            Entrypoint::Name {
-                name: entrypoint.to_string(),
-                version: None,
-            }
-        };
-
+        let (entrypoint, path) = split_target_spec(spec)?;
         Ok(Self {
-            entrypoint,
-            path: path.iter().map(|&s| s.to_string()).collect(),
+            entrypoint: parse_entrypoint(entrypoint)?,
+            path: collect_path_components(path),
         })
     }
 }
 
+/// Split a target string into its entrypoint and remaining path components.
+fn split_target_spec(spec: &str) -> Result<(&str, Vec<&str>)> {
+    if spec.is_empty() {
+        return Err(invalid_target("Invalid target specification: empty string"));
+    }
+
+    let mut parts = spec.split("::");
+    let entrypoint = parts
+        .next()
+        .ok_or_else(|| invalid_target("Invalid target specification: empty string"))?;
+    if entrypoint.is_empty() {
+        return Err(invalid_target("Invalid name specification: empty name"));
+    }
+
+    let path: Vec<&str> = parts.collect();
+    validate_path_components(&path)?;
+    Ok((entrypoint, path))
+}
+
+/// Reject empty path segments so downstream resolution can assume valid components.
+fn validate_path_components(path: &[&str]) -> Result<()> {
+    for (index, component) in path.iter().enumerate() {
+        if component.is_empty() {
+            return Err(invalid_target(format!(
+                "Invalid target specification: empty path component at position {}",
+                index + 1
+            )));
+        }
+    }
+
+    Ok(())
+}
+
+/// Materialize borrowed path components into owned strings for the parsed target.
+fn collect_path_components(path: Vec<&str>) -> Vec<String> {
+    path.into_iter().map(str::to_owned).collect()
+}
+
+/// Parse the first component of a target as either a path or a named crate/module.
+fn parse_entrypoint(entrypoint: &str) -> Result<Entrypoint> {
+    if is_path_entrypoint(entrypoint) {
+        return Ok(Entrypoint::Path(PathBuf::from(entrypoint)));
+    }
+
+    parse_name_entrypoint(entrypoint)
+}
+
+/// Determine whether the target entrypoint should be treated as a filesystem path.
+fn is_path_entrypoint(entrypoint: &str) -> bool {
+    entrypoint.contains('/') || entrypoint.contains('\\') || matches!(entrypoint, "." | "..")
+}
+
+/// Parse a non-path entrypoint, including optional `@version` suffixes.
+fn parse_name_entrypoint(entrypoint: &str) -> Result<Entrypoint> {
+    let Some((name, version)) = entrypoint.split_once('@') else {
+        return Ok(Entrypoint::Name {
+            name: entrypoint.to_string(),
+            version: None,
+        });
+    };
+
+    if name.is_empty() || version.is_empty() || version.contains('@') {
+        return Err(invalid_target(format!(
+            "Invalid name specification: {entrypoint}"
+        )));
+    }
+
+    let version = Version::parse(version)
+        .map_err(|error| invalid_target(format!("Invalid version: {error}")))?;
+
+    Ok(Entrypoint::Name {
+        name: name.to_string(),
+        version: Some(version),
+    })
+}
+
+/// Construct a target-parsing error with the standard variant used by this module.
+fn invalid_target(message: impl Into<String>) -> RuskelError {
+    RuskelError::InvalidTarget(message.into())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{Entrypoint, Target};
+    use crate::error::{Result, RuskelError};
+
+    fn name_target(name: &str, version: Option<&str>, path: &[&str]) -> Target {
+        Target {
+            entrypoint: Entrypoint::Name {
+                name: name.to_string(),
+                version: version.map(|value| value.parse().expect("valid test version")),
+            },
+            path: path
+                .iter()
+                .map(|component| (*component).to_string())
+                .collect(),
+        }
+    }
+
+    fn path_target(path: &str, components: &[&str]) -> Target {
+        Target {
+            entrypoint: Entrypoint::Path(path.into()),
+            path: components
+                .iter()
+                .map(|component| (*component).to_string())
+                .collect(),
+        }
+    }
+
+    fn assert_invalid_target(input: &str, expected: &str) {
+        let error = Target::parse(input).expect_err("target should be rejected");
+        assert_eq!(
+            error.to_string(),
+            RuskelError::InvalidTarget(expected.to_string()).to_string()
+        );
+    }
 
     #[test]
-    fn test_parse_targets() {
-        let test_cases = vec![
-            // Empty target (invalid)
-            (
-                "",
-                Err(RuskelError::InvalidTarget(
-                    "Invalid target specification: empty string".to_string(),
-                )),
-            ),
-            // Double colon (::) should be treated as an error
-            (
-                "::",
-                Err(RuskelError::InvalidTarget(
-                    "Invalid name specification: empty name".to_string(),
-                )),
-            ),
-            // Paths
-            (
-                "src/lib.rs",
-                Ok(Target {
-                    entrypoint: Entrypoint::Path(PathBuf::from("src/lib.rs")),
-                    path: vec![],
-                }),
-            ),
-            (
-                "src/main.rs::my_module::MyStruct",
-                Ok(Target {
-                    entrypoint: Entrypoint::Path(PathBuf::from("src/main.rs")),
-                    path: vec!["my_module".to_string(), "MyStruct".to_string()],
-                }),
-            ),
-            (
-                "/path/to/my_project",
-                Ok(Target {
-                    entrypoint: Entrypoint::Path(PathBuf::from("/path/to/my_project")),
-                    path: vec![],
-                }),
-            ),
-            (
-                "/path/to/my_project::some_module::function",
-                Ok(Target {
-                    entrypoint: Entrypoint::Path(PathBuf::from("/path/to/my_project")),
-                    path: vec!["some_module".to_string(), "function".to_string()],
-                }),
-            ),
-            // Names (Modules or Packages)
-            (
-                "MyModule",
-                Ok(Target {
-                    entrypoint: Entrypoint::Name {
-                        name: "MyModule".to_string(),
-                        version: None,
-                    },
-                    path: vec![],
-                }),
-            ),
-            (
-                "MyModule::SubModule::function",
-                Ok(Target {
-                    entrypoint: Entrypoint::Name {
-                        name: "MyModule".to_string(),
-                        version: None,
-                    },
-                    path: vec!["SubModule".to_string(), "function".to_string()],
-                }),
-            ),
-            (
-                "serde",
-                Ok(Target {
-                    entrypoint: Entrypoint::Name {
-                        name: "serde".to_string(),
-                        version: None,
-                    },
-                    path: vec![],
-                }),
-            ),
-            (
-                "serde::Deserialize",
-                Ok(Target {
-                    entrypoint: Entrypoint::Name {
-                        name: "serde".to_string(),
-                        version: None,
-                    },
-                    path: vec!["Deserialize".to_string()],
-                }),
-            ),
-            (
-                "serde@1.0.104",
-                Ok(Target {
-                    entrypoint: Entrypoint::Name {
-                        name: "serde".to_string(),
-                        version: Some(Version::parse("1.0.104").unwrap()),
-                    },
-                    path: vec![],
-                }),
-            ),
-            (
-                "serde@1.0.104::Serialize",
-                Ok(Target {
-                    entrypoint: Entrypoint::Name {
-                        name: "serde".to_string(),
-                        version: Some(Version::parse("1.0.104").unwrap()),
-                    },
-                    path: vec!["Serialize".to_string()],
-                }),
-            ),
-            // Complex paths
-            (
-                "tokio::sync::Mutex",
-                Ok(Target {
-                    entrypoint: Entrypoint::Name {
-                        name: "tokio".to_string(),
-                        version: None,
-                    },
-                    path: vec!["sync".to_string(), "Mutex".to_string()],
-                }),
-            ),
-            (
-                "std::collections::HashMap",
-                Ok(Target {
-                    entrypoint: Entrypoint::Name {
-                        name: "std".to_string(),
-                        version: None,
-                    },
-                    path: vec!["collections".to_string(), "HashMap".to_string()],
-                }),
-            ),
-            (
-                "my_crate::utils::helper_function",
-                Ok(Target {
-                    entrypoint: Entrypoint::Name {
-                        name: "my_crate".to_string(),
-                        version: None,
-                    },
-                    path: vec!["utils".to_string(), "helper_function".to_string()],
-                }),
-            ),
-            (
-                "tracing-test",
-                Ok(Target {
-                    entrypoint: Entrypoint::Name {
-                        name: "tracing-test".to_string(),
-                        version: None,
-                    },
-                    path: vec![],
-                }),
-            ),
-            // Invalid targets
-            (
-                "serde@",
-                Err(RuskelError::InvalidTarget("Invalid version: ".to_string())),
-            ),
-            (
-                "serde@invalid",
-                Err(RuskelError::InvalidTarget("Invalid version: ".to_string())),
-            ),
-            // Trailing :: should be an error
-            (
-                "foo::",
-                Err(RuskelError::InvalidTarget(
-                    "Invalid target specification: empty path component at position 1".to_string(),
-                )),
-            ),
-            (
-                "foo::bar::",
-                Err(RuskelError::InvalidTarget(
-                    "Invalid target specification: empty path component at position 2".to_string(),
-                )),
-            ),
-            // Multiple consecutive :: should also be errors
-            (
-                "foo::::bar",
-                Err(RuskelError::InvalidTarget(
-                    "Invalid target specification: empty path component at position 1".to_string(),
-                )),
-            ),
-            // Current directory and parent directory
-            (
-                ".",
-                Ok(Target {
-                    entrypoint: Entrypoint::Path(PathBuf::from(".")),
-                    path: vec![],
-                }),
-            ),
-            (
-                "..",
-                Ok(Target {
-                    entrypoint: Entrypoint::Path(PathBuf::from("..")),
-                    path: vec![],
-                }),
-            ),
-        ];
+    fn rejects_empty_spec() {
+        assert_invalid_target("", "Invalid target specification: empty string");
+    }
 
-        for (input, expected_output) in test_cases {
-            let result = Target::parse(input);
-            match (&result, &expected_output) {
-                (Ok(target), Ok(expected_target)) => {
-                    assert_eq!(
-                        target, expected_target,
-                        "Mismatch for input '{input}'. \nGot: {target:?}\nExpected: {expected_target:?}"
-                    );
-                }
-                (Err(error), Err(expected_error)) => {
-                    assert!(
-                        error.to_string().starts_with(&expected_error.to_string()),
-                        "Error mismatch for input '{input}'. \nGot: {error}\nExpected error starting with: {expected_error}"
-                    );
-                }
-                (Ok(target), Err(expected_error)) => {
-                    panic!(
-                        "Expected error but got success for input '{input}'. \nGot: {target:?}\nExpected error: {expected_error}"
-                    );
-                }
-                (Err(error), Ok(expected_target)) => {
-                    panic!(
-                        "Expected success but got error for input '{input}'. \nGot error: {error}\nExpected: {expected_target:?}"
-                    );
-                }
-            }
-        }
+    #[test]
+    fn rejects_empty_name() {
+        assert_invalid_target("::", "Invalid name specification: empty name");
+    }
+
+    #[test]
+    fn parses_relative_path_entrypoint() -> Result<()> {
+        let target = Target::parse("src/main.rs::my_module::MyStruct")?;
+        assert_eq!(
+            target,
+            path_target("src/main.rs", &["my_module", "MyStruct"])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn parses_absolute_path_entrypoint() -> Result<()> {
+        let target = Target::parse("/path/to/my_project::some_module::function")?;
+        assert_eq!(
+            target,
+            path_target("/path/to/my_project", &["some_module", "function"])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn treats_current_and_parent_directory_as_paths() -> Result<()> {
+        assert_eq!(Target::parse(".")?, path_target(".", &[]));
+        assert_eq!(Target::parse("..")?, path_target("..", &[]));
+        Ok(())
+    }
+
+    #[test]
+    fn parses_plain_package_name() -> Result<()> {
+        let target = Target::parse("serde::Deserialize")?;
+        assert_eq!(target, name_target("serde", None, &["Deserialize"]));
+        Ok(())
+    }
+
+    #[test]
+    fn parses_versioned_package_name() -> Result<()> {
+        let target = Target::parse("serde@1.0.104::Serialize")?;
+        assert_eq!(
+            target,
+            name_target("serde", Some("1.0.104"), &["Serialize"])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn preserves_hyphenated_package_names() -> Result<()> {
+        let target = Target::parse("tracing-test")?;
+        assert_eq!(target, name_target("tracing-test", None, &[]));
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_trailing_separator() {
+        assert_invalid_target(
+            "foo::",
+            "Invalid target specification: empty path component at position 1",
+        );
+    }
+
+    #[test]
+    fn rejects_empty_path_component_in_the_middle() {
+        assert_invalid_target(
+            "foo::::bar",
+            "Invalid target specification: empty path component at position 1",
+        );
+    }
+
+    #[test]
+    fn rejects_missing_version_after_at_sign() {
+        assert_invalid_target("serde@", "Invalid name specification: serde@");
+    }
+
+    #[test]
+    fn rejects_multiple_at_signs_in_name_entrypoint() {
+        assert_invalid_target(
+            "serde@1.0.0@beta",
+            "Invalid name specification: serde@1.0.0@beta",
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_semver_versions() {
+        let error = Target::parse("serde@invalid").expect_err("version should be rejected");
+        assert!(
+            error
+                .to_string()
+                .starts_with("Invalid target: Invalid version: "),
+            "unexpected error message: {error}"
+        );
     }
 }

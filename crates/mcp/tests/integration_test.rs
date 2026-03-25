@@ -5,7 +5,7 @@
 use std::{env, io, sync::OnceLock, time::Duration};
 
 use libruskel::Ruskel;
-use ruskel_mcp::RuskelServer;
+use ruskel_mcp::{RuskelServer, RuskelServerDefaults};
 use tmcp::{Arguments, Client, Result, Server, schema::InitializeResult};
 use tokio::{
     io::{duplex, split},
@@ -18,12 +18,19 @@ type ServerTask = JoinHandle<()>;
 
 /// Helper to create a test MCP client connected to an in-process server.
 async fn create_test_client() -> Result<(Client, ServerTask)> {
+    create_test_client_with_defaults(RuskelServerDefaults::default()).await
+}
+
+/// Helper to create a test MCP client with explicit default request values.
+async fn create_test_client_with_defaults(
+    defaults: RuskelServerDefaults,
+) -> Result<(Client, ServerTask)> {
     TEST_MODE_ENV.get_or_init(|| unsafe {
         env::set_var("RUSKEL_MCP_TEST_MODE", "1");
     });
 
     let ruskel = Ruskel::new().with_silent(true);
-    let server = Server::new(move || RuskelServer::new(ruskel.clone()));
+    let server = Server::new(move || RuskelServer::with_defaults(ruskel.clone(), defaults));
 
     let (server_side, client_side) = duplex(64 * 1024);
     let (server_reader, server_writer) = split(server_side);
@@ -139,6 +146,47 @@ mod tests {
         assert!(!result.content.is_empty());
 
         // Clean up
+        terminate_child(&mut child)
+            .await
+            .expect("Failed to stop MCP server");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_server_applies_startup_defaults() {
+        let defaults = RuskelServerDefaults {
+            private: true,
+            frontmatter: false,
+        };
+        let (mut client, mut child) = create_test_client_with_defaults(defaults)
+            .await
+            .expect("Failed to create test client");
+
+        let _init_result = initialize_client(&mut client)
+            .await
+            .expect("Failed to initialize");
+
+        let arguments = json!({
+            "target": "serde"
+        });
+
+        let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
+        let result = timeout(Duration::from_secs(30), client.call_tool("ruskel", args))
+            .await
+            .expect("Timeout during tool call")
+            .expect("Failed to call tool");
+
+        let text = result
+            .content
+            .iter()
+            .find_map(|content| match content {
+                ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .expect("tool response should contain text");
+
+        assert!(text.contains("private: true"));
+        assert!(text.contains("frontmatter: false"));
+
         terminate_child(&mut child)
             .await
             .expect("Failed to stop MCP server");

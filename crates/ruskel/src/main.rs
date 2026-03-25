@@ -13,9 +13,15 @@ use libruskel::{
     Ruskel, SearchDomain, SearchOptions, highlight, parse_domain_token,
     toolchain::ensure_nightly_with_docs,
 };
+use ruskel_mcp::RuskelServerDefaults;
 use shell_words::split;
 use tokio::runtime::Runtime;
 use tracing_subscriber::filter::LevelFilter;
+
+/// Message printed when a search flag is present but contains only whitespace.
+const EMPTY_SEARCH_MESSAGE: &str = "Search query is empty; nothing to do.";
+/// Error returned when `--mcp` is combined with flags that belong on individual requests.
+const MCP_REQUEST_SCOPED_FLAGS_ERROR: &str = "--mcp can only be used with --auto-impls, --private, --no-frontmatter, --offline, --verbose, --addr, and --log";
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -112,6 +118,62 @@ struct Cli {
     log: Option<LevelFilter>,
 }
 
+impl Cli {
+    /// Resolve the active search domains specified by the CLI flags.
+    fn search_domains(&self) -> SearchDomain {
+        if self.search_spec.is_empty() {
+            SearchDomain::default()
+        } else {
+            self.search_spec
+                .iter()
+                .fold(SearchDomain::empty(), |mut acc, spec| {
+                    acc |= *spec;
+                    acc
+                })
+        }
+    }
+
+    /// Build search options for a concrete query using the CLI's current flags.
+    fn build_search_options(&self, query: &str) -> SearchOptions {
+        SearchOptions::configured(
+            query,
+            self.search_domains(),
+            self.search_case_sensitive,
+            self.private,
+            !self.direct_match_only,
+        )
+    }
+
+    /// Check whether the current CLI invocation uses request-scoped flags.
+    fn uses_request_scoped_flags(&self) -> bool {
+        self.target != "./"
+            || self.bin.is_some()
+            || self.raw
+            || self.list
+            || self.search.is_some()
+            || self.search_domains() != SearchDomain::default()
+            || self.search_case_sensitive
+            || self.direct_match_only
+            || self.no_default_features
+            || self.all_features
+            || !self.features.is_empty()
+            || !matches!(self.color, ColorChoice::Auto)
+            || self.no_page
+    }
+
+    /// Derive the MCP server defaults from the allowed server-scoped flags.
+    fn mcp_defaults(&self) -> Result<RuskelServerDefaults, Box<dyn Error>> {
+        if self.uses_request_scoped_flags() {
+            return Err(MCP_REQUEST_SCOPED_FLAGS_ERROR.into());
+        }
+
+        Ok(RuskelServerDefaults {
+            private: self.private,
+            frontmatter: !self.no_frontmatter,
+        })
+    }
+}
+
 /// Ensure the nightly toolchain and rust-docs JSON component are present.
 fn check_nightly_toolchain() -> Result<(), String> {
     match ensure_nightly_with_docs() {
@@ -128,36 +190,68 @@ fn check_nightly_toolchain() -> Result<(), String> {
     }
 }
 
-/// Launch the MCP server variant of ruskel using the provided CLI configuration.
-fn run_mcp(cli: &Cli) -> Result<(), Box<dyn Error>> {
-    // Validate that only configuration arguments are provided with --mcp
-    if cli.target != "./"
-        || cli.bin.is_some()
-        || cli.raw
-        || cli.no_default_features
-        || cli.all_features
-        || !cli.features.is_empty()
-        || !matches!(cli.color, ColorChoice::Auto)
-        || cli.no_page
-    {
-        return Err(
-            "--mcp can only be used with --auto-impls, --private, --offline, and --verbose".into(),
-        );
-    }
+/// Search-query state derived from CLI input.
+enum SearchQuery<'a> {
+    /// No search query was provided.
+    Missing,
+    /// A query argument was provided but contained only whitespace.
+    Empty,
+    /// A non-empty trimmed search query.
+    Present(&'a str),
+}
 
-    // Create configured Ruskel instance from CLI args
-    let ruskel = Ruskel::new()
+/// Normalize the optional `--search` argument into a simple state machine.
+fn search_query_state(query: Option<&str>) -> SearchQuery<'_> {
+    match query {
+        Some(query) => match query.trim() {
+            "" => SearchQuery::Empty,
+            trimmed => SearchQuery::Present(trimmed),
+        },
+        None => SearchQuery::Missing,
+    }
+}
+
+/// Construct a configured `Ruskel` instance from CLI arguments.
+fn ruskel_from_cli(cli: &Cli) -> Ruskel {
+    Ruskel::new()
         .with_offline(cli.offline)
         .with_auto_impls(cli.auto_impls)
         .with_frontmatter(!cli.no_frontmatter)
-        .with_silent(!cli.verbose);
+        .with_silent(!cli.verbose)
+        .with_bin_target(cli.bin.clone())
+}
 
-    // Run the MCP server
+/// Write generated output either through a pager or directly to stdout.
+fn emit_output(cli: &Cli, output: String) -> Result<(), Box<dyn Error>> {
+    if io::stdout().is_terminal() && !cli.no_page {
+        page_output(output)?;
+    } else {
+        print!("{output}");
+    }
+
+    Ok(())
+}
+
+/// Apply syntax highlighting when requested.
+fn highlight_output(output: String, should_highlight: bool) -> Result<String, Box<dyn Error>> {
+    if should_highlight {
+        Ok(highlight::highlight_code(&output)?)
+    } else {
+        Ok(output)
+    }
+}
+
+/// Launch the MCP server variant of ruskel using the provided CLI configuration.
+fn run_mcp(cli: &Cli) -> Result<(), Box<dyn Error>> {
+    let defaults = cli.mcp_defaults()?;
+    let ruskel = ruskel_from_cli(cli);
+
     let runtime = Runtime::new()?;
     runtime.block_on(ruskel_mcp::run_mcp_server(
         ruskel,
         cli.addr.clone(),
         cli.log,
+        defaults,
     ))?;
 
     Ok(())
@@ -171,22 +265,22 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
         ColorChoice::Auto => io::stdout().is_terminal(),
     };
 
-    let rs = Ruskel::new()
-        .with_offline(cli.offline)
-        .with_auto_impls(cli.auto_impls)
-        .with_frontmatter(!cli.no_frontmatter)
-        .with_silent(!cli.verbose)
-        .with_bin_target(cli.bin.clone());
+    let rs = ruskel_from_cli(cli);
 
     if cli.list {
         return run_list(cli, &rs);
     }
 
-    if let Some(query) = cli.search.as_deref() {
-        return run_search(cli, &rs, query, should_highlight);
+    match search_query_state(cli.search.as_deref()) {
+        SearchQuery::Present(query) => return run_search(cli, &rs, query, should_highlight),
+        SearchQuery::Empty => {
+            println!("{EMPTY_SEARCH_MESSAGE}");
+            return Ok(());
+        }
+        SearchQuery::Missing => {}
     }
 
-    let mut output = if cli.raw {
+    let output = if cli.raw {
         rs.raw_json(
             &cli.target,
             cli.no_default_features,
@@ -204,42 +298,8 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
         )?
     };
 
-    // Apply highlighting if enabled and not raw output
-    if should_highlight && !cli.raw {
-        output = highlight::highlight_code(&output)?;
-    }
-
-    if io::stdout().is_terminal() && !cli.no_page {
-        page_output(output)?;
-    } else {
-        println!("{output}");
-    }
-
-    Ok(())
-}
-
-/// Resolve the active search domains specified by the CLI flags.
-fn search_domains_from_cli(cli: &Cli) -> SearchDomain {
-    if cli.search_spec.is_empty() {
-        SearchDomain::default()
-    } else {
-        cli.search_spec
-            .iter()
-            .fold(SearchDomain::empty(), |mut acc, spec| {
-                acc |= *spec;
-                acc
-            })
-    }
-}
-
-/// Build a `SearchOptions` value using the provided CLI configuration and query.
-fn build_search_options(cli: &Cli, query: &str) -> SearchOptions {
-    let mut options = SearchOptions::new(query);
-    options.include_private = cli.private;
-    options.case_sensitive = cli.search_case_sensitive;
-    options.expand_containers = !cli.direct_match_only;
-    options.domains = search_domains_from_cli(cli);
-    options
+    let output = highlight_output(output, should_highlight && !cli.raw)?;
+    emit_output(cli, output)
 }
 
 /// Execute the list flow and print a structured item summary.
@@ -248,18 +308,14 @@ fn run_list(cli: &Cli, rs: &Ruskel) -> Result<(), Box<dyn Error>> {
         return Err("--raw cannot be combined with --list".into());
     }
 
-    let mut search_options: Option<SearchOptions> = None;
-    let mut trimmed_query: Option<String> = None;
-
-    if let Some(query) = cli.search.as_deref() {
-        let trimmed = query.trim();
-        if trimmed.is_empty() {
-            println!("Search query is empty; nothing to do.");
+    let (search_options, query_label) = match search_query_state(cli.search.as_deref()) {
+        SearchQuery::Missing => (None, None),
+        SearchQuery::Empty => {
+            println!("{EMPTY_SEARCH_MESSAGE}");
             return Ok(());
         }
-        trimmed_query = Some(trimmed.to_string());
-        search_options = Some(build_search_options(cli, trimmed));
-    }
+        SearchQuery::Present(query) => (Some(cli.build_search_options(query)), Some(query)),
+    };
 
     let listings = rs.list(
         &cli.target,
@@ -271,7 +327,7 @@ fn run_list(cli: &Cli, rs: &Ruskel) -> Result<(), Box<dyn Error>> {
     )?;
 
     if listings.is_empty() {
-        if let Some(query) = trimmed_query {
+        if let Some(query) = query_label {
             println!("No matches found for \"{query}\".");
         } else {
             println!("No items found.");
@@ -299,13 +355,7 @@ fn run_list(cli: &Cli, rs: &Ruskel) -> Result<(), Box<dyn Error>> {
         }
     }
 
-    if io::stdout().is_terminal() && !cli.no_page {
-        page_output(buffer)?;
-    } else {
-        print!("{}", buffer);
-    }
-
-    Ok(())
+    emit_output(cli, buffer)
 }
 
 /// Execute the search flow and print the filtered skeleton to stdout.
@@ -319,13 +369,7 @@ fn run_search(
         return Err("--raw cannot be combined with --search".into());
     }
 
-    let trimmed = query.trim();
-    if trimmed.is_empty() {
-        println!("Search query is empty; nothing to do.");
-        return Ok(());
-    }
-
-    let options = build_search_options(cli, trimmed);
+    let options = cli.build_search_options(query);
 
     let response = rs.search(
         &cli.target,
@@ -336,22 +380,12 @@ fn run_search(
     )?;
 
     if response.results.is_empty() {
-        println!("No matches found for \"{}\".", trimmed);
+        println!("No matches found for \"{}\".", query);
         return Ok(());
     }
 
-    let mut output = response.rendered;
-    if should_highlight {
-        output = highlight::highlight_code(&output)?;
-    }
-
-    if io::stdout().is_terminal() && !cli.no_page {
-        page_output(output)?;
-    } else {
-        print!("{}", output);
-    }
-
-    Ok(())
+    let output = highlight_output(response.rendered, should_highlight)?;
+    emit_output(cli, output)
 }
 
 fn main() {
@@ -446,5 +480,57 @@ fn page_output(content: String) -> Result<(), Box<dyn Error>> {
         Err(error) => Err(Box::new(io::Error::other(format!(
             "Failed to wait for pager: {error}"
         )))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_cli(args: &[&str]) -> Cli {
+        Cli::parse_from(args)
+    }
+
+    #[test]
+    fn mcp_defaults_allow_server_scoped_flags() {
+        let cli = parse_cli(&[
+            "ruskel",
+            "--mcp",
+            "--private",
+            "--no-frontmatter",
+            "--offline",
+            "--verbose",
+        ]);
+
+        let defaults = cli
+            .mcp_defaults()
+            .expect("server defaults should be accepted");
+
+        assert!(defaults.private);
+        assert!(!defaults.frontmatter);
+    }
+
+    #[test]
+    fn mcp_defaults_reject_request_scoped_flags() {
+        let cli = parse_cli(&["ruskel", "--mcp", "--search", "widget"]);
+
+        let error = cli.mcp_defaults().expect_err("search should be rejected");
+
+        assert_eq!(error.to_string(), MCP_REQUEST_SCOPED_FLAGS_ERROR);
+    }
+
+    #[test]
+    fn search_domains_fold_selected_flags() {
+        let cli = parse_cli(&["ruskel", "--search-spec", "name,path"]);
+        assert_eq!(
+            cli.search_domains(),
+            SearchDomain::NAMES | SearchDomain::PATHS
+        );
+    }
+
+    #[test]
+    fn request_scoped_flag_detection_tracks_search_options() {
+        let cli = parse_cli(&["ruskel", "--mcp", "--search-case-sensitive"]);
+        assert!(cli.uses_request_scoped_flags());
     }
 }
