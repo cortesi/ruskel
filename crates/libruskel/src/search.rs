@@ -1,7 +1,7 @@
 //! Internal search index implementation.
 #![allow(clippy::missing_docs_in_private_items)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use bitflags::bitflags;
 use rustdoc_types::{Crate, Id, Item, ItemEnum, Module, Struct, StructKind, Visibility};
@@ -264,29 +264,23 @@ impl SearchResult {
 #[derive(Debug, Default, Clone)]
 pub struct SearchIndex {
     entries: Vec<SearchEntry>,
-    id_to_entry: HashMap<Id, usize>,
 }
 
 impl SearchIndex {
     /// Construct a new index by traversing the provided crate.
-    pub fn build(crate_data: &Crate, include_private: bool) -> Self {
+    pub(crate) fn build(crate_data: &Crate, include_private: bool) -> Self {
         let mut builder = IndexBuilder::new(crate_data, include_private);
         builder.traverse();
         builder.finish()
     }
 
     /// Retrieve the immutable list of indexed entries.
-    pub fn entries(&self) -> &[SearchEntry] {
+    pub(crate) fn entries(&self) -> &[SearchEntry] {
         &self.entries
     }
 
-    /// Look up an indexed entry by ID.
-    pub fn get(&self, id: &Id) -> Option<&SearchEntry> {
-        self.id_to_entry.get(id).map(|idx| &self.entries[*idx])
-    }
-
     /// Execute a query against the index and return matching results.
-    pub fn search(&self, options: &SearchOptions) -> Vec<SearchResult> {
+    pub(crate) fn search(&self, options: &SearchOptions) -> Vec<SearchResult> {
         let mut opts = options.clone();
         opts.ensure_domains();
         let trimmed = opts.query.trim();
@@ -371,14 +365,8 @@ impl<'a> IndexBuilder<'a> {
     }
 
     fn finish(self) -> SearchIndex {
-        let entries: Vec<SearchEntry> = self.entries;
-        let mut id_to_entry = HashMap::with_capacity(entries.len());
-        for (idx, entry) in entries.iter().enumerate() {
-            id_to_entry.insert(entry.item_id, idx);
-        }
         SearchIndex {
-            entries,
-            id_to_entry,
+            entries: self.entries,
         }
     }
 

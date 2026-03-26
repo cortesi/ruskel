@@ -29,7 +29,7 @@ mod render;
 /// Public API surface for driving the renderer.
 mod ruskel;
 /// Search and indexing utilities used by the CLI.
-pub mod search;
+mod search;
 /// Shared signature formatting used by search and rendering.
 mod signature;
 /// Target parsing helpers for user-provided specifications.
@@ -41,10 +41,10 @@ pub use ruskel::Ruskel;
 
 pub use crate::{
     error::{Result, RuskelError},
+    frontmatter::{FrontmatterBinaryTarget, FrontmatterConfig, FrontmatterHit, FrontmatterSearch},
     render::Renderer,
     search::{
-        ListItem, SearchDomain, SearchEntry, SearchIndex, SearchItemKind, SearchOptions,
-        SearchPathSegment, SearchResponse, SearchResult, describe_domains, parse_domain_token,
-        parse_domain_tokens,
+        ListItem, SearchDomain, SearchItemKind, SearchOptions, SearchPathSegment, SearchResponse,
+        SearchResult, describe_domains, parse_domain_token, parse_domain_tokens,
     },
 };

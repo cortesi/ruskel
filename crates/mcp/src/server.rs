@@ -1,6 +1,6 @@
-use std::{env, io::stdout};
+use std::{env, io::stdout, result::Result as StdResult};
 
-use libruskel::{Ruskel, SearchDomain, SearchOptions, describe_domains, parse_domain_tokens};
+use libruskel::{Ruskel, SearchDomain, SearchOptions, describe_domains, parse_domain_token};
 use serde::{Deserialize, Serialize};
 use tmcp::{Result, Server, ServerCtx, mcp_server, schema::CallToolResult, tool};
 use tokio::signal::ctrl_c;
@@ -171,6 +171,14 @@ impl RuskelServer {
     /// - Pass `frontmatter=false` to omit the leading comment block.
     async fn ruskel(&self, _ctx: &ServerCtx, params: RuskelSkeletonTool) -> Result<CallToolResult> {
         let params = params.resolve(self.defaults);
+        let search_domains = match resolve_search_domains(params.search_spec.as_deref()) {
+            Ok(domains) => domains,
+            Err(error) => {
+                return Ok(CallToolResult::new()
+                    .with_text_content(error)
+                    .mark_as_error());
+            }
+        };
 
         if env::var_os("RUSKEL_MCP_TEST_MODE").is_some() {
             return Ok(run_test_mode(&params));
@@ -188,7 +196,7 @@ impl RuskelServer {
             .map(|q| q.trim())
             .filter(|q| !q.is_empty())
         {
-            return Ok(self.run_search_mode(&ruskel, &params, query));
+            return Ok(self.run_search_mode(&ruskel, &params, query, search_domains));
         }
 
         Ok(self.run_render_mode(&ruskel, &params))
@@ -200,11 +208,8 @@ impl RuskelServer {
         ruskel: &Ruskel,
         params: &ResolvedRuskelSkeletonTool,
         query: &str,
+        domains: SearchDomain,
     ) -> CallToolResult {
-        let domains = match params.search_spec.as_ref() {
-            Some(spec) if !spec.is_empty() => parse_domain_tokens(spec.iter().map(|s| s.as_str())),
-            _ => SearchDomain::default(),
-        };
         let options = SearchOptions::configured(
             query,
             domains,
@@ -288,6 +293,26 @@ impl RuskelServer {
     }
 }
 
+/// Resolve search domains from optional MCP parameters, rejecting invalid tokens.
+fn resolve_search_domains(search_spec: Option<&[String]>) -> StdResult<SearchDomain, String> {
+    let Some(search_spec) = search_spec else {
+        return Ok(SearchDomain::default());
+    };
+    if search_spec.is_empty() {
+        return Ok(SearchDomain::default());
+    }
+
+    let mut domains = SearchDomain::empty();
+    for token in search_spec {
+        domains |= parse_domain_token(token)?;
+    }
+    if domains.is_empty() {
+        Ok(SearchDomain::default())
+    } else {
+        Ok(domains)
+    }
+}
+
 /// Lightweight stubbed response used when the MCP server is started in test mode.
 ///
 /// This bypasses expensive rustdoc generation, allowing integration tests to run quickly
@@ -344,5 +369,31 @@ pub async fn run_mcp_server(
             handle.stop().await
         }
         None => server.serve_stdio().await,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use libruskel::SearchDomain;
+
+    use super::resolve_search_domains;
+
+    #[test]
+    fn resolve_search_domains_defaults_when_missing() {
+        assert_eq!(
+            resolve_search_domains(None).expect("default domains"),
+            SearchDomain::default()
+        );
+    }
+
+    #[test]
+    fn resolve_search_domains_rejects_invalid_tokens() {
+        let error = resolve_search_domains(Some(&[String::from("bogus")]))
+            .expect_err("invalid token should fail");
+
+        assert_eq!(
+            error,
+            "invalid search domain 'bogus'. Expected one of: name, doc, path, signature."
+        );
     }
 }

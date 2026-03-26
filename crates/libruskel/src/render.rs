@@ -518,7 +518,11 @@ fn impl_return_type_key(decl: &FunctionSignature) -> String {
 
 impl RenderSelection {
     /// Create a selection from explicit match and context sets.
-    pub fn new(matches: HashSet<Id>, mut context: HashSet<Id>, expanded: HashSet<Id>) -> Self {
+    pub(crate) fn new(
+        matches: HashSet<Id>,
+        mut context: HashSet<Id>,
+        expanded: HashSet<Id>,
+    ) -> Self {
         for id in &matches {
             context.insert(*id);
         }
@@ -539,7 +543,7 @@ impl RenderSelection {
     }
 
     /// Is the item an explicit match?
-    pub fn is_match(&self, id: &Id) -> bool {
+    pub(crate) fn is_match(&self, id: &Id) -> bool {
         self.entries
             .get(id)
             .map(|flags| flags.matched)
@@ -547,7 +551,7 @@ impl RenderSelection {
     }
 
     /// Is the item retained to preserve hierarchy context?
-    pub fn in_context(&self, id: &Id) -> bool {
+    pub(crate) fn in_context(&self, id: &Id) -> bool {
         self.entries
             .get(id)
             .map(|flags| flags.in_context)
@@ -555,7 +559,7 @@ impl RenderSelection {
     }
 
     /// Should the item's children be fully expanded?
-    pub fn is_expanded(&self, id: &Id) -> bool {
+    pub(crate) fn is_expanded(&self, id: &Id) -> bool {
         self.entries
             .get(id)
             .map(|flags| flags.expanded)
@@ -568,9 +572,9 @@ pub struct Renderer {
     /// Formatter used to produce tidy Rust output.
     formatter: RustFmt,
     /// Whether auto trait implementations should be included in the output.
-    pub render_auto_impls: bool,
+    render_auto_impls: bool,
     /// Whether private items should be rendered.
-    pub render_private_items: bool,
+    render_private_items: bool,
     /// Whether blanket implementations (with generics over `T`) should be rendered.
     render_blanket_impls: bool,
     /// Filter path relative to the crate root.
@@ -639,7 +643,7 @@ impl Renderer {
     }
 
     /// Restrict rendering to the provided selection.
-    pub fn with_selection(mut self, selection: RenderSelection) -> Self {
+    pub(crate) fn with_selection(mut self, selection: RenderSelection) -> Self {
         self.selection = Some(selection);
         self
     }
@@ -2350,17 +2354,14 @@ path = "src/lib.rs"
     #[test]
     fn frontmatter_lists_search_hits_with_domains() -> Result<()> {
         let crate_data = fixture_crate();
-        let hits = vec![FrontmatterHit {
-            path: "fixture::Widget".into(),
-            domains: SearchDomain::NAMES,
-        }];
-        let search_meta = FrontmatterSearch {
-            query: "Widget".into(),
-            domains: SearchDomain::NAMES | SearchDomain::DOCS,
-            case_sensitive: false,
-            expand_containers: true,
+        let hits = vec![FrontmatterHit::new("fixture::Widget", SearchDomain::NAMES)];
+        let search_meta = FrontmatterSearch::new(
+            "Widget",
+            SearchDomain::NAMES | SearchDomain::DOCS,
+            false,
+            true,
             hits,
-        };
+        );
         let frontmatter = FrontmatterConfig::for_target("fixture")
             .with_filter(Some("fixture".into()))
             .with_search(search_meta);

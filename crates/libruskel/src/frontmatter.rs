@@ -6,15 +6,15 @@ use crate::search::{SearchDomain, describe_domains};
 #[derive(Debug, Clone, Default)]
 pub struct FrontmatterConfig {
     /// Whether the frontmatter should be rendered.
-    pub enabled: bool,
+    enabled: bool,
     /// Original target specification requested by the user.
-    pub target: Option<String>,
+    target: Option<String>,
     /// Optional metadata for search-driven renders.
-    pub search: Option<FrontmatterSearch>,
+    search: Option<FrontmatterSearch>,
     /// Canonical module path selected during target resolution.
-    pub filter: Option<String>,
+    filter: Option<String>,
     /// Optional binary target information for the rendered output.
-    pub binary_target: Option<FrontmatterBinaryTarget>,
+    binary_target: Option<FrontmatterBinaryTarget>,
 }
 
 impl FrontmatterConfig {
@@ -144,9 +144,9 @@ impl FrontmatterConfig {
 #[derive(Debug, Clone)]
 pub struct FrontmatterBinaryTarget {
     /// Name of the binary target being rendered.
-    pub name: String,
+    name: String,
     /// Whether the package is a binary-only crate.
-    pub is_bin_only: bool,
+    is_bin_only: bool,
 }
 
 impl FrontmatterBinaryTarget {
@@ -202,24 +202,53 @@ mod tests {
 #[derive(Debug, Clone)]
 pub struct FrontmatterSearch {
     /// Query string executed against the index.
-    pub query: String,
+    query: String,
     /// Domains evaluated during matching.
-    pub domains: SearchDomain,
+    domains: SearchDomain,
     /// Whether matching respected case sensitivity.
-    pub case_sensitive: bool,
+    case_sensitive: bool,
     /// Whether matched containers were expanded to include their children.
-    pub expand_containers: bool,
+    expand_containers: bool,
     /// Matched items included in the rendered skeleton.
-    pub hits: Vec<FrontmatterHit>,
+    hits: Vec<FrontmatterHit>,
+}
+
+impl FrontmatterSearch {
+    /// Build a search summary for frontmatter output.
+    pub fn new(
+        query: impl Into<String>,
+        domains: SearchDomain,
+        case_sensitive: bool,
+        expand_containers: bool,
+        hits: Vec<FrontmatterHit>,
+    ) -> Self {
+        Self {
+            query: query.into(),
+            domains,
+            case_sensitive,
+            expand_containers,
+            hits,
+        }
+    }
 }
 
 /// Individual search hit included in the frontmatter summary.
 #[derive(Debug, Clone)]
 pub struct FrontmatterHit {
     /// Canonical path representing the matched item.
-    pub path: String,
+    path: String,
     /// Domains that contributed to the match.
-    pub domains: SearchDomain,
+    domains: SearchDomain,
+}
+
+impl FrontmatterHit {
+    /// Build a frontmatter search hit summary.
+    pub fn new(path: impl Into<String>, domains: SearchDomain) -> Self {
+        Self {
+            path: path.into(),
+            domains,
+        }
+    }
 }
 
 /// Render the search metadata section into the frontmatter buffer.

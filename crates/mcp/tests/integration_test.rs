@@ -378,4 +378,40 @@ mod tests {
             .await
             .expect("Failed to stop MCP server");
     }
+
+    #[tokio::test]
+    async fn test_mcp_server_rejects_invalid_search_spec() {
+        let (mut client, mut child) = create_test_client()
+            .await
+            .expect("Failed to create test client");
+
+        let _init_result = initialize_client(&mut client)
+            .await
+            .expect("Failed to initialize");
+
+        let arguments = json!({
+            "target": "serde",
+            "search": "serde",
+            "search_spec": ["bogus"]
+        });
+
+        let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
+        let result = client
+            .call_tool("ruskel", args)
+            .await
+            .expect("Failed to call tool");
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(result.content.iter().any(|content| {
+            if let ContentBlock::Text(text) = content {
+                text.text.contains("invalid search domain 'bogus'")
+            } else {
+                false
+            }
+        }));
+
+        terminate_child(&mut child)
+            .await
+            .expect("Failed to stop MCP server");
+    }
 }

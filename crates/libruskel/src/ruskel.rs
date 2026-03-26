@@ -56,7 +56,39 @@ struct LoadedTarget {
     /// Binary target metadata for bin rendering and frontmatter output.
     bin_target: Option<BinaryTarget>,
     /// Effective private-item visibility after accounting for bin-only targets.
-    include_private: bool,
+    render_private_items: bool,
+}
+
+/// Visibility policy used while generating rustdoc JSON and rendering output.
+#[derive(Debug, Clone, Copy)]
+struct VisibilityPolicy {
+    /// Whether rustdoc JSON should include private items.
+    document_private_items: bool,
+    /// Whether rendered output should include private items.
+    render_private_items: bool,
+}
+
+impl VisibilityPolicy {
+    /// Use the same privacy level for both rustdoc generation and rendering.
+    fn mirrored(include_private: bool) -> Self {
+        Self {
+            document_private_items: include_private,
+            render_private_items: include_private,
+        }
+    }
+
+    /// Render public output from a rustdoc document that still contains private items for filtering.
+    fn render_public() -> Self {
+        Self {
+            document_private_items: true,
+            render_private_items: false,
+        }
+    }
+
+    /// Compute the effective render visibility after accounting for bin-only targets.
+    fn effective_render_private(self, bin_target: Option<&BinaryTarget>) -> bool {
+        self.render_private_items || bin_target.is_some_and(|target| target.is_bin_only)
+    }
 }
 
 impl Default for Ruskel {
@@ -158,8 +190,7 @@ impl Ruskel {
                 no_default_features,
                 all_features,
                 features,
-                private_items,
-                private_items,
+                VisibilityPolicy::mirrored(private_items),
             )?
             .crate_data)
     }
@@ -181,10 +212,9 @@ impl Ruskel {
             no_default_features,
             all_features,
             features,
-            options.include_private,
-            options.include_private,
+            VisibilityPolicy::mirrored(options.include_private),
         )?;
-        let index = SearchIndex::build(&loaded.crate_data, loaded.include_private);
+        let index = SearchIndex::build(&loaded.crate_data, loaded.render_private_items);
         let results = index.search(options);
 
         if results.is_empty() {
@@ -199,18 +229,15 @@ impl Ruskel {
         if self.frontmatter {
             let hits = results
                 .iter()
-                .map(|result| FrontmatterHit {
-                    path: result.path_string.clone(),
-                    domains: result.matched,
-                })
+                .map(|result| FrontmatterHit::new(result.path_string.clone(), result.matched))
                 .collect();
-            let search_meta = FrontmatterSearch {
-                query: options.query.clone(),
-                domains: options.domains,
-                case_sensitive: options.case_sensitive,
-                expand_containers: options.expand_containers,
+            let search_meta = FrontmatterSearch::new(
+                options.query.clone(),
+                options.domains,
+                options.case_sensitive,
+                options.expand_containers,
                 hits,
-            };
+            );
             renderer = self.attach_frontmatter(renderer, &loaded, target, Some(search_meta));
         }
         let rendered = renderer.render(&loaded.crate_data)?;
@@ -235,10 +262,9 @@ impl Ruskel {
             no_default_features,
             all_features,
             features,
-            include_private,
-            include_private,
+            VisibilityPolicy::mirrored(include_private),
         )?;
-        let index = SearchIndex::build(&loaded.crate_data, loaded.include_private);
+        let index = SearchIndex::build(&loaded.crate_data, loaded.render_private_items);
 
         let mut results: Vec<ListItem> = if let Some(options) = search {
             index
@@ -280,8 +306,11 @@ impl Ruskel {
             no_default_features,
             all_features,
             features,
-            true,
-            private_items,
+            if private_items {
+                VisibilityPolicy::mirrored(true)
+            } else {
+                VisibilityPolicy::render_public()
+            },
         )?;
         let mut renderer = self.base_renderer(&loaded);
         if self.frontmatter {
@@ -325,15 +354,14 @@ impl Ruskel {
         no_default_features: bool,
         all_features: bool,
         features: Vec<String>,
-        document_private_items: bool,
-        include_private: bool,
+        visibility: VisibilityPolicy,
     ) -> Result<LoadedTarget> {
         let resolved_target = resolve_target(target, self.offline)?;
         let read_options = CrateReadOptions {
             no_default_features,
             all_features,
             features,
-            private_items: document_private_items,
+            private_items: visibility.document_private_items,
             silent: self.silent,
             offline: self.offline,
             bin_override: self.bin_target.clone(),
@@ -342,14 +370,13 @@ impl Ruskel {
             crate_data,
             bin_target,
         } = resolved_target.read_crate(&read_options)?;
-        let include_private =
-            include_private || bin_target.as_ref().is_some_and(|target| target.is_bin_only);
+        let render_private_items = visibility.effective_render_private(bin_target.as_ref());
 
         Ok(LoadedTarget {
             resolved_target,
             crate_data,
             bin_target,
-            include_private,
+            render_private_items,
         })
     }
 
@@ -358,7 +385,7 @@ impl Ruskel {
         Renderer::default()
             .with_filter(&loaded.resolved_target.filter)
             .with_auto_impls(self.auto_impls)
-            .with_private_items(loaded.include_private)
+            .with_private_items(loaded.render_private_items)
     }
 
     /// Attach frontmatter metadata to a renderer when enabled.
