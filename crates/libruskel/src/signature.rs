@@ -4,8 +4,8 @@ use rustdoc_types::{Crate, Item, ItemEnum, MacroKind, Variant, VariantKind};
 
 use crate::{
     crateutils::{
-        render_function_args, render_generic_bounds, render_generics, render_name,
-        render_return_type, render_type, render_vis, render_where_clause,
+        render_function_args, render_generic_bounds, render_generics, render_identifier,
+        render_name, render_return_type, render_type, render_vis, render_where_clause,
     },
     search::SearchItemKind,
 };
@@ -220,7 +220,7 @@ fn field_signature(item: &Item, ty: &rustdoc_types::Type) -> String {
         signature.push(' ');
     }
     if let Some(name) = item.name.as_deref() {
-        signature.push_str(name);
+        signature.push_str(&render_identifier(name));
         signature.push_str(": ");
     }
     signature.push_str(&render_type(ty));
@@ -255,7 +255,7 @@ fn variant_signature(crate_data: &Crate, item: &Item, variant: &Variant) -> Stri
                     let name = field_item
                         .name
                         .as_deref()
-                        .map(ToOwned::to_owned)
+                        .map(render_identifier)
                         .unwrap_or_else(|| "_".to_string());
                     parts.push(format!("{name}: {}", render_type(ty)));
                 }

@@ -67,18 +67,20 @@ pub fn render_vis(item: &Item) -> String {
     }
 }
 
+/// Render an identifier, escaping Rust keywords when necessary.
+pub fn render_identifier(ident: &str) -> String {
+    if is_reserved_word(ident) {
+        format!("r#{ident}")
+    } else {
+        ident.to_string()
+    }
+}
+
 /// Render an item name, escaping Rust keywords when necessary.
 pub fn render_name(item: &Item) -> String {
-    item.name.as_deref().map_or_else(
-        || "?".to_string(),
-        |n| {
-            if is_reserved_word(n) {
-                format!("r#{n}")
-            } else {
-                n.to_string()
-            }
-        },
-    )
+    item.name
+        .as_deref()
+        .map_or_else(|| "?".to_string(), render_identifier)
 }
 
 /// Render a rustdoc-provided expression into valid Rust source.
@@ -242,7 +244,10 @@ pub fn render_generic_param_def(param: &GenericParamDef) -> Option<String> {
                     .as_ref()
                     .map(|ty| format!(" = {}", render_type(ty)))
                     .unwrap_or_default();
-                Some(format!("{}{bounds}{default}", param.name))
+                Some(format!(
+                    "{}{bounds}{default}",
+                    render_identifier(&param.name)
+                ))
             }
         }
         GenericParamDefKind::Const { type_, default } => {
@@ -252,7 +257,7 @@ pub fn render_generic_param_def(param: &GenericParamDef) -> Option<String> {
                 .unwrap_or_default();
             Some(format!(
                 "const {}: {}{default}",
-                param.name,
+                render_identifier(&param.name),
                 render_type(type_)
             ))
         }
@@ -467,7 +472,7 @@ pub fn render_function_args(decl: &FunctionSignature) -> String {
                     _ => format!("self: {}", render_type(ty)),
                 }
             } else {
-                format!("{name}: {}", render_type(ty))
+                format!("{}: {}", render_identifier(name), render_type(ty))
             }
         })
         .collect::<Vec<_>>()
@@ -566,7 +571,7 @@ fn render_type_constraint(constraint: &AssocItemConstraint) -> String {
             }
         }
     };
-    format!("{}{binding_kind}", constraint.name)
+    format!("{}{binding_kind}", render_identifier(&constraint.name))
 }
 
 /// Render a `Term` appearing in associated type constraints.

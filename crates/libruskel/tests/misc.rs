@@ -327,6 +327,45 @@ mod tests {
     }
 
     #[test]
+    fn test_function_parameters_with_reserved_keywords() {
+        rt(
+            r#"
+                pub struct Builder;
+
+                impl Builder {
+                    pub fn add_userdata_type(self, r#type: impl Into<String>) -> Self {
+                        let _ = r#type.into();
+                        self
+                    }
+
+                    pub fn add_library_constant(
+                        self,
+                        name: impl AsRef<str>,
+                        r#const: usize,
+                    ) -> Self {
+                        let _ = name.as_ref();
+                        let _ = r#const;
+                        self
+                    }
+                }
+            "#,
+            r#"
+                pub struct Builder;
+
+                impl Builder {
+                    pub fn add_userdata_type(self, r#type: impl Into<String>) -> Self {}
+
+                    pub fn add_library_constant(
+                        self,
+                        name: impl AsRef<str>,
+                        r#const: usize,
+                    ) -> Self {}
+                }
+            "#,
+        );
+    }
+
+    #[test]
     fn test_struct_field_docs() {
         rt_idemp(
             r#"

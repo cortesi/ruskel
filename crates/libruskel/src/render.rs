@@ -501,7 +501,7 @@ fn impl_function_args_key(decl: &FunctionSignature) -> String {
                     _ => format!("self: {}", impl_type_key(ty)),
                 }
             } else {
-                format!("{name}: {}", impl_type_key(ty))
+                format!("{}: {}", render_identifier(name), impl_type_key(ty))
             }
         })
         .collect::<Vec<_>>()
