@@ -176,7 +176,7 @@ impl RuskelServer {
             Err(error) => {
                 return Ok(CallToolResult::new()
                     .with_text_content(error)
-                    .mark_as_error());
+                    .with_is_error(true));
             }
         };
 
@@ -261,7 +261,7 @@ impl RuskelServer {
                         "Failed to search '{}' with query '{}': {}",
                         params.target, query, e
                     ))
-                    .mark_as_error()
+                    .with_is_error(true)
             }
         }
     }
@@ -287,7 +287,7 @@ impl RuskelServer {
                         "Failed to generate skeleton for '{}': {}",
                         params.target, e
                     ))
-                    .mark_as_error()
+                    .with_is_error(true)
             }
         }
     }
