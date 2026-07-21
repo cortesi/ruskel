@@ -1317,7 +1317,7 @@ impl RenderState<'_, '_> {
         }
         let rendered = match &item.inner {
             ItemEnum::Function(_) => self.render_function(item, true)?,
-            ItemEnum::AssocConst { type_, value } => {
+            ItemEnum::AssocConst { type_, value, .. } => {
                 let default_str = value
                     .as_ref()
                     .map(|d| format!(" = {}", render_expression(d)))
@@ -1333,6 +1333,7 @@ impl RenderState<'_, '_> {
                 bounds,
                 generics,
                 type_,
+                ..
             } => {
                 let bounds_str = if !bounds.is_empty() {
                     format!(": {}", render_generic_bounds(bounds))
@@ -1600,6 +1601,8 @@ mod tests {
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Macro("macro placeholder_macro { () => {} } { ... }".into()),
             },
         );
@@ -1724,6 +1727,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Module(Module {
                     is_crate: true,
                     items: vec![
@@ -1751,6 +1756,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Struct(Struct {
                     kind: StructKind::Plain {
                         fields: vec![widget_field_id, widget_field_name],
@@ -1774,6 +1781,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::StructField(Type::Primitive("u32".into())),
             },
         );
@@ -1790,6 +1799,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::StructField(Type::Generic("String".into())),
             },
         );
@@ -1806,6 +1817,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Impl(Impl {
                     is_unsafe: false,
                     generics: empty_generics(),
@@ -1836,6 +1849,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Impl(Impl {
                     is_unsafe: false,
                     generics: empty_generics(),
@@ -1866,6 +1881,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Function(Function {
                     sig: FunctionSignature {
                         inputs: vec![(
@@ -1882,6 +1899,7 @@ path = "src/lib.rs"
                     generics: empty_generics(),
                     header: default_header(),
                     has_body: true,
+                    default_unstable: None,
                 }),
             },
         );
@@ -1898,6 +1916,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Function(Function {
                     sig: FunctionSignature {
                         inputs: vec![(
@@ -1922,6 +1942,7 @@ path = "src/lib.rs"
                     generics: empty_generics(),
                     header: default_header(),
                     has_body: true,
+                    default_unstable: None,
                 }),
             },
         );
@@ -1938,6 +1959,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Module(Module {
                     is_crate: false,
                     items: vec![tool_function],
@@ -1958,6 +1981,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Function(Function {
                     sig: FunctionSignature {
                         inputs: Vec::new(),
@@ -1967,6 +1992,7 @@ path = "src/lib.rs"
                     generics: empty_generics(),
                     header: default_header(),
                     has_body: true,
+                    default_unstable: None,
                 }),
             },
         );
@@ -1983,6 +2009,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Function(Function {
                     sig: FunctionSignature {
                         inputs: vec![(
@@ -1999,6 +2027,7 @@ path = "src/lib.rs"
                     generics: empty_generics(),
                     header: default_header(),
                     has_body: true,
+                    default_unstable: None,
                 }),
             },
         );
@@ -2015,6 +2044,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Enum(rustdoc_types::Enum {
                     generics: empty_generics(),
                     has_stripped_variants: false,
@@ -2036,6 +2067,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Variant(Variant {
                     kind: VariantKind::Struct {
                         fields: vec![named_field],
@@ -2058,6 +2091,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::StructField(Type::Generic("String".into())),
             },
         );
@@ -2074,6 +2109,8 @@ path = "src/lib.rs"
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Variant(Variant {
                     kind: VariantKind::Plain,
                     discriminant: None,

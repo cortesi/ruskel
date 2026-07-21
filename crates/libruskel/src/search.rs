@@ -1017,6 +1017,8 @@ mod tests {
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Module(Module {
                     is_crate: true,
                     items: vec![widget, helper_fn, paintable_trait, widget_impl],
@@ -1037,6 +1039,8 @@ mod tests {
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Struct(Struct {
                     kind: StructKind::Plain {
                         fields: vec![widget_field],
@@ -1060,6 +1064,8 @@ mod tests {
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::StructField(Type::Primitive("u32".into())),
             },
         );
@@ -1076,6 +1082,8 @@ mod tests {
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Impl(Impl {
                     is_unsafe: false,
                     generics: empty_generics(),
@@ -1106,6 +1114,8 @@ mod tests {
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Function(Function {
                     sig: FunctionSignature {
                         inputs: vec![(
@@ -1122,6 +1132,7 @@ mod tests {
                     generics: empty_generics(),
                     header: default_header(),
                     has_body: true,
+                    default_unstable: None,
                 }),
             },
         );
@@ -1138,6 +1149,8 @@ mod tests {
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Function(Function {
                     sig: FunctionSignature {
                         inputs: vec![("count".into(), Type::Primitive("i32".into()))],
@@ -1151,6 +1164,7 @@ mod tests {
                     generics: empty_generics(),
                     header: default_header(),
                     has_body: true,
+                    default_unstable: None,
                 }),
             },
         );
@@ -1167,6 +1181,8 @@ mod tests {
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Trait(Trait {
                     is_auto: false,
                     is_unsafe: false,
@@ -1191,6 +1207,8 @@ mod tests {
                 links: HashMap::new(),
                 attrs: Vec::new(),
                 deprecation: None,
+                stability: None,
+                const_stability: None,
                 inner: ItemEnum::Function(Function {
                     sig: FunctionSignature {
                         inputs: vec![(
@@ -1207,6 +1225,7 @@ mod tests {
                     generics: empty_generics(),
                     header: default_header(),
                     has_body: false,
+                    default_unstable: None,
                 }),
             },
         );
