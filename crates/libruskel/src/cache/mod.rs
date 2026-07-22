@@ -365,8 +365,8 @@ impl CacheOwner {
             failures: Vec::new(),
             usage_after: 0,
         };
-        self.clean_build_entries(&mut report)?;
         self.clean_trash_entries(&mut report)?;
+        self.clean_build_entries(&mut report)?;
         let status = self.status_unlocked()?;
         report.usage_after = status.total_bytes;
         report.skipped.extend(status.skipped);
@@ -994,7 +994,7 @@ mod tests {
 
         let report = owner.clean()?;
         assert!(!report.is_complete());
-        assert!(!report.failures().is_empty());
+        assert_eq!(report.failures().len(), 1);
 
         for entry in read_dir_sorted(&owner.layout.trash_dir())? {
             let protected = entry.path().join(&workspace_identity);
