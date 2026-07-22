@@ -192,6 +192,19 @@ impl CacheLayout {
 
 /// Write a metadata timestamp with an atomic same-directory rename.
 pub(super) fn write_timestamp(path: &Path, unix_seconds: u64) -> Result<()> {
+    write_atomic_metadata(
+        path,
+        format!("{unix_seconds}\n").as_bytes(),
+        "write metadata",
+    )
+}
+
+/// Atomically replace one cache metadata file in its owning directory.
+pub(super) fn write_atomic_metadata(
+    path: &Path,
+    content: &[u8],
+    action: &'static str,
+) -> Result<()> {
     let parent = path.parent().ok_or_else(|| RuskelError::CacheLayout {
         path: path.to_path_buf(),
         message: "metadata path has no parent".to_string(),
@@ -199,11 +212,7 @@ pub(super) fn write_timestamp(path: &Path, unix_seconds: u64) -> Result<()> {
     ensure_directory(parent, "create metadata directory")?;
     let counter = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
     let temp = parent.join(format!(".ruskel.tmp.{}.{}", process::id(), counter));
-    write_new_file(
-        &temp,
-        format!("{unix_seconds}\n").as_bytes(),
-        "write metadata",
-    )?;
+    write_new_file(&temp, content, action)?;
     fs::rename(&temp, path).map_err(|source| {
         drop(fs::remove_file(&temp));
         cache_io("replace metadata", path, source)
@@ -212,17 +221,30 @@ pub(super) fn write_timestamp(path: &Path, unix_seconds: u64) -> Result<()> {
 
 /// Read a metadata timestamp as seconds since the Unix epoch.
 pub(super) fn read_timestamp(path: &Path) -> Result<Option<u64>> {
-    match fs::read_to_string(path) {
-        Ok(value) => value
-            .trim()
-            .parse::<u64>()
+    read_optional_metadata(path)?.map_or(Ok(None), |value| {
+        str::from_utf8(&value)
+            .ok()
+            .and_then(|value| value.trim().parse::<u64>().ok())
             .map(Some)
-            .map_err(|_| RuskelError::CacheLayout {
+            .ok_or_else(|| RuskelError::CacheLayout {
                 path: path.to_path_buf(),
                 message: "metadata timestamp is invalid".to_string(),
-            }),
+            })
+    })
+}
+
+/// Read an optional regular metadata file without following symbolic links.
+pub(super) fn read_optional_metadata(path: &Path) -> Result<Option<Vec<u8>>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => fs::read(path)
+            .map(Some)
+            .map_err(|source| cache_io("read metadata", path, source)),
+        Ok(_) => Err(RuskelError::CacheLayout {
+            path: path.to_path_buf(),
+            message: "cache metadata must be a regular file".to_string(),
+        }),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(cache_io("read metadata", path, source)),
+        Err(source) => Err(cache_io("inspect metadata", path, source)),
     }
 }
 

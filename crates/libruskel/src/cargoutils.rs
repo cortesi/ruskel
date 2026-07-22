@@ -313,6 +313,8 @@ impl CargoPath {
             package_target,
             bin_target,
             workspace_root,
+            package_name,
+            package_version,
         } = select_package_target(
             &manifest_path,
             options.offline,
@@ -327,7 +329,12 @@ impl CargoPath {
         while retry_budget.begin_attempt() {
             let toolchain_before = nightly_identity()
                 .map_err(|error| with_recovery_context(&mut storage_retry, error))?;
-            let lease = match owner.begin_build(&toolchain_before, &workspace_root) {
+            let lease = match owner.begin_build(
+                &toolchain_before,
+                &workspace_root,
+                &package_name,
+                &package_version,
+            ) {
                 Ok(lease) => lease,
                 Err(error) if owner.is_entry_error(&error) && retry_budget.take_storage_retry() => {
                     let original = error.to_string();
@@ -596,6 +603,8 @@ fn select_package_target(
     let package = workspace
         .current()
         .map_err(|err| convert_cargo_error(&err))?;
+    let package_name = package.name().to_string();
+    let package_version = package.version().to_string();
 
     let has_lib = package.targets().iter().any(|target| target.is_lib());
     let bin_targets: Vec<_> = package
@@ -614,6 +623,8 @@ fn select_package_target(
                     is_bin_only: !has_lib,
                 }),
                 workspace_root,
+                package_name,
+                package_version,
             });
         }
 
@@ -633,6 +644,8 @@ fn select_package_target(
             package_target: PackageTarget::Lib,
             bin_target: None,
             workspace_root,
+            package_name,
+            package_version,
         });
     }
 
@@ -652,6 +665,8 @@ fn select_package_target(
                 is_bin_only: true,
             }),
             workspace_root,
+            package_name,
+            package_version,
         });
     }
 
@@ -664,6 +679,8 @@ fn select_package_target(
                 is_bin_only: true,
             }),
             workspace_root,
+            package_name,
+            package_version,
         });
     }
 
@@ -773,6 +790,10 @@ struct PackageTargetSelection {
     bin_target: Option<BinaryTarget>,
     /// Canonical root shared by all members of the selected workspace.
     workspace_root: PathBuf,
+    /// Selected package name for cache display metadata.
+    package_name: String,
+    /// Selected package version for cache display metadata.
+    package_version: String,
 }
 
 /// A resolved Rust package or module target.

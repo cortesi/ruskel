@@ -1,6 +1,9 @@
 //! CLI integration tests for ruskel's top-level flag validation.
 
-use std::fs;
+use std::{
+    fs,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use assert_cmd::Command;
 use predicates::str::contains;
@@ -8,7 +11,7 @@ use tempfile::tempdir;
 
 #[cfg(test)]
 mod tests {
-    use super::{Command, contains, fs, tempdir};
+    use super::{Command, SystemTime, UNIX_EPOCH, contains, fs, tempdir};
 
     const MCP_FLAGS_ERROR: &str = "--mcp can only be used with --cache-dir, --auto-impls, --private, --no-frontmatter, --offline, --verbose, --addr, and --log";
 
@@ -61,7 +64,9 @@ mod tests {
 
         let assertion = command.assert().success();
         let canonical = fs::canonicalize(explicit_root).expect("canonical explicit cache root");
-        assertion.stdout(contains(format!("Cache root: {}", canonical.display())));
+        assertion
+            .stdout(contains(format!("Cache root: {}", canonical.display())))
+            .stdout(contains("Recognized usage: 0 B"));
         assert!(!environment_root.exists());
     }
 
@@ -78,6 +83,50 @@ mod tests {
         let assertion = command.assert().success();
         let canonical = fs::canonicalize(environment_root).expect("canonical environment root");
         assertion.stdout(contains(format!("Cache root: {}", canonical.display())));
+    }
+
+    #[test]
+    fn cache_status_formats_sizes_and_last_use_as_relative_age() {
+        let temp = tempdir().expect("temporary directory");
+        let root = temp.path().join("cache");
+        let mut initialize = Command::cargo_bin("ruskel").expect("binary should build");
+        initialize
+            .args([
+                "--cache-status",
+                "--cache-dir",
+                root.to_str().expect("UTF-8 path"),
+            ])
+            .env("PATH", "")
+            .assert()
+            .success();
+
+        let toolchain = root.join("build").join("a".repeat(64));
+        let workspace = toolchain.join("b".repeat(64));
+        fs::create_dir_all(&workspace).expect("cache fixture directory");
+        let last_use = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("current Unix time")
+            .as_secs()
+            - 42 * 60;
+        fs::write(toolchain.join("ruskel.last-use"), format!("{last_use}\n"))
+            .expect("toolchain last-use timestamp");
+        fs::write(workspace.join("ruskel.last-use"), format!("{last_use}\n"))
+            .expect("workspace last-use timestamp");
+        fs::write(workspace.join("artifact"), vec![0_u8; 1_572_864])
+            .expect("cache fixture artifact");
+
+        let mut status = Command::cargo_bin("ruskel").expect("binary should build");
+        status
+            .args([
+                "--cache-status",
+                "--cache-dir",
+                root.to_str().expect("UTF-8 path"),
+            ])
+            .env("PATH", "")
+            .assert()
+            .success()
+            .stdout(contains("Recognized usage: 1.5 MiB"))
+            .stdout(contains("size=1.5 MiB last_use=42 minutes ago"));
     }
 
     #[test]

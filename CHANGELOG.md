@@ -2,6 +2,8 @@
 
 - [feat] Isolate rustdoc JSON builds in a dedicated Ruskel cache.
 - [feat] Add `--cache-dir`, `--cache-status`, and `--clean-cache` controls.
+- [change] Show readable sizes, relative last-use times, workspace paths, and
+  package versions in cache reports.
 - [change] Add safe retention, soft-budget eviction, and storage recovery for
   cache-owned build data.
 - [feat] Add search support with `--search`, `--search-spec`, and

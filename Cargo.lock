@@ -287,6 +287,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
+name = "bytesize"
+version = "2.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3d7c8918969267b2932ffd5655509bbbea0833823058c378876953217f5fc50e"
+
+[[package]]
 name = "camino"
 version = "1.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2773,6 +2779,7 @@ dependencies = [
  "rustdoc-json",
  "rustdoc-types",
  "semver",
+ "serde",
  "serde_json",
  "sha2 0.10.9",
  "syntect",
@@ -3601,12 +3608,15 @@ name = "ruskel"
 version = "0.0.11"
 dependencies = [
  "assert_cmd",
+ "bytesize",
  "clap",
+ "dirs",
  "libruskel",
  "predicates",
  "ruskel-mcp",
  "shell-words",
  "tempfile",
+ "timeago",
  "tokio",
  "tracing-subscriber",
  "which",
@@ -4260,6 +4270,12 @@ dependencies = [
  "num-conv",
  "time-core",
 ]
+
+[[package]]
+name = "timeago"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46c29b13d230e9cd58513d38701a661fc06e1215398937532a2d938ecca6f219"
 
 [[package]]
 name = "tinystr"

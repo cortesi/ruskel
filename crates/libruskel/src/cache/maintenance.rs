@@ -13,9 +13,9 @@ use std::{
 };
 
 use super::{
-    CacheIssue, HIGH_WATER_BYTES, is_owned_directory, layout,
-    layout::{CacheLayout, LAST_USE, is_identity, is_trash_name},
-    read_dir_sorted,
+    layout::{self, CacheLayout, LAST_USE, is_identity, is_trash_name},
+    owner::{HIGH_WATER_BYTES, is_owned_directory, read_dir_sorted},
+    report::CacheIssue,
 };
 use crate::error::{Result, RuskelError};
 

@@ -169,7 +169,10 @@ trash first. It removes inactive old-toolchain data after one hour and
 workspace data after 14 days. If recognized usage exceeds 20 GB, Ruskel evicts
 the oldest safe workspace entries until usage is below 15 GB. Active entries,
 the newest valid workspace, and entries with invalid metadata remain in place.
-`--cache-status` reports entries that maintenance cannot safely remove.
+`--cache-status` reports recorded workspace paths, package names and versions,
+and entries that maintenance cannot safely remove. Cache entries created by an
+older Ruskel version show their identity hash until the next query refreshes
+their metadata.
 
 Versions before this cache feature can leave artifacts in a project target
 directory or a Cargo registry source directory. Run `cargo clean` in each

@@ -125,6 +125,15 @@ mod tests {
         let status = ruskel.cache_status()?;
         assert_eq!(status.toolchains().len(), 1);
         assert_eq!(status.toolchains()[0].workspaces().len(), 1);
+        let workspace_status = &status.toolchains()[0].workspaces()[0];
+        assert_eq!(
+            workspace_status.workspace_root(),
+            Some(fs::canonicalize(workspace.path())?.as_path())
+        );
+        assert_eq!(
+            workspace_status.packages(),
+            &["first 0.1.0", "second 0.1.0"]
+        );
         Ok(())
     }
 

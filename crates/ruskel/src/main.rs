@@ -7,9 +7,10 @@ use std::{
     path::{Path, PathBuf},
     process::{self, Command, Stdio},
     thread,
-    time::{SystemTime, UNIX_EPOCH},
+    time::SystemTime,
 };
 
+use bytesize::ByteSize;
 use clap::{ColorChoice, Parser};
 use libruskel::{
     CacheIssue, CacheStatus, CleanReport, Ruskel, SearchDomain, SearchOptions, highlight,
@@ -17,6 +18,7 @@ use libruskel::{
 };
 use ruskel_mcp::RuskelServerDefaults;
 use shell_words::split;
+use timeago::Formatter as TimeAgoFormatter;
 use tokio::runtime::Runtime;
 use tracing_subscriber::filter::LevelFilter;
 
@@ -445,27 +447,32 @@ fn run(cli: &Cli) -> Result<bool, Box<dyn Error>> {
 
 /// Print a deterministic cache-status report.
 fn print_cache_status(status: &CacheStatus) {
+    let now = SystemTime::now();
     println!("Cache root: {}", status.root().display());
-    println!("Recognized usage: {} bytes", status.total_bytes());
-    println!("Trash usage: {} bytes", status.trash_bytes());
-    println!("Soft-budget excess: {} bytes", status.excess_bytes());
+    println!("Recognized usage: {}", format_size(status.total_bytes()));
+    println!("Trash usage: {}", format_size(status.trash_bytes()));
+    println!("Soft-budget excess: {}", format_size(status.excess_bytes()));
     println!("Toolchains: {}", status.toolchains().len());
     for toolchain in status.toolchains() {
         println!(
             "toolchain {} size={} last_use={} locked={}",
             toolchain.identity(),
-            toolchain.size_bytes(),
-            format_time(toolchain.last_use()),
+            format_size(toolchain.size_bytes()),
+            format_last_use(toolchain.last_use(), now),
             toolchain.is_locked()
         );
         for workspace in toolchain.workspaces() {
+            let label = format_workspace_label(workspace.workspace_root(), workspace.identity());
             println!(
                 "  workspace {} size={} last_use={} locked={}",
-                workspace.identity(),
-                workspace.size_bytes(),
-                format_time(workspace.last_use()),
+                label,
+                format_size(workspace.size_bytes()),
+                format_last_use(workspace.last_use(), now),
                 workspace.is_locked()
             );
+            if !workspace.packages().is_empty() {
+                println!("    packages: {}", workspace.packages().join(", "));
+            }
         }
     }
     print_issues("Skipped", status.skipped());
@@ -483,10 +490,10 @@ fn print_clean_report(root: &Path, report: &CleanReport) {
     println!("Cache root: {}", root.display());
     println!("Clean result: {outcome}");
     println!("Removed entries: {}", report.removed_entries());
-    println!("Removed bytes: {}", report.removed_bytes());
+    println!("Removed bytes: {}", format_size(report.removed_bytes()));
     println!(
-        "Recognized usage after clean: {} bytes",
-        report.usage_after()
+        "Recognized usage after clean: {}",
+        format_size(report.usage_after())
     );
     print_issues("Skipped", report.skipped());
     print_issues("Failures", report.failures());
@@ -500,13 +507,53 @@ fn print_issues(label: &str, issues: &[CacheIssue]) {
     }
 }
 
-/// Format a cache time as Unix seconds or `unknown`.
-fn format_time(time: Option<SystemTime>) -> String {
-    time.and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-        .map_or_else(
-            || "unknown".to_string(),
-            |duration| duration.as_secs().to_string(),
-        )
+/// Format a byte count with an IEC size suffix.
+fn format_size(bytes: u64) -> String {
+    ByteSize::b(bytes).to_string()
+}
+
+/// Prefer recorded workspace context and retain the identity as a legacy fallback.
+fn format_workspace_label(workspace_root: Option<&Path>, identity: &str) -> String {
+    workspace_root.map_or_else(
+        || identity.to_string(),
+        |root| format_path_with_home(root, dirs::home_dir().as_deref()),
+    )
+}
+
+/// Replace the user's home-directory prefix with `~` for display.
+fn format_path_with_home(path: &Path, home: Option<&Path>) -> String {
+    let Some(home) = home else {
+        return path.display().to_string();
+    };
+    let Ok(relative) = path.strip_prefix(home) else {
+        return path.display().to_string();
+    };
+    if relative.as_os_str().is_empty() {
+        "~".to_string()
+    } else {
+        Path::new("~").join(relative).display().to_string()
+    }
+}
+
+/// Format a cache timestamp relative to one report time.
+fn format_last_use(time: Option<SystemTime>, now: SystemTime) -> String {
+    let Some(time) = time else {
+        return "unknown".to_string();
+    };
+
+    match now.duration_since(time) {
+        Ok(elapsed) => TimeAgoFormatter::new().convert(elapsed),
+        Err(error) => {
+            let mut formatter = TimeAgoFormatter::new();
+            formatter.ago("");
+            let delta = formatter.convert(error.duration());
+            if delta == "now" {
+                delta
+            } else {
+                format!("in {delta}")
+            }
+        }
+    }
 }
 
 /// Check whether the given command is discoverable on the current `PATH`.
@@ -637,5 +684,47 @@ mod tests {
     fn request_scoped_flag_detection_tracks_search_options() {
         let cli = parse_cli(&["ruskel", "--mcp", "--search-case-sensitive"]);
         assert!(cli.uses_request_scoped_flags());
+    }
+
+    #[test]
+    fn cache_values_use_human_readable_formats() {
+        use std::time::Duration;
+
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+
+        assert_eq!(format_size(0), "0 B");
+        assert_eq!(format_size(1_572_864), "1.5 MiB");
+        assert_eq!(
+            format_path_with_home(
+                Path::new("/home/alice/git/ruskel"),
+                Some(Path::new("/home/alice"))
+            ),
+            Path::new("~").join("git/ruskel").display().to_string()
+        );
+        assert_eq!(
+            format_path_with_home(Path::new("/home/alice"), Some(Path::new("/home/alice"))),
+            "~"
+        );
+        assert_eq!(
+            format_path_with_home(
+                Path::new("/home/alice2/ruskel"),
+                Some(Path::new("/home/alice"))
+            ),
+            "/home/alice2/ruskel"
+        );
+        assert_eq!(
+            format_path_with_home(Path::new("/work/ruskel"), None),
+            "/work/ruskel"
+        );
+        assert_eq!(format_workspace_label(None, "legacy-hash"), "legacy-hash");
+        assert_eq!(
+            format_last_use(Some(now - Duration::from_secs(42 * 60)), now),
+            "42 minutes ago"
+        );
+        assert_eq!(
+            format_last_use(Some(now + Duration::from_secs(2 * 60 * 60)), now),
+            "in 2 hours"
+        );
+        assert_eq!(format_last_use(None, now), "unknown");
     }
 }

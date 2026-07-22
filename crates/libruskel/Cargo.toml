@@ -27,6 +27,7 @@ rust-format = { workspace = true }
 rustdoc-json = { workspace = true }
 rustdoc-types = { workspace = true }
 semver = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 syntect = { workspace = true }
