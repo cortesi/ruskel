@@ -19,6 +19,8 @@ anyhow = { workspace = true }
 bitflags = { workspace = true }
 cargo = { workspace = true }
 cargo_toml = { workspace = true }
+dirs = { workspace = true }
+fs4 = { workspace = true }
 once_cell = { workspace = true }
 regex = { workspace = true }
 rust-format = { workspace = true }
@@ -26,6 +28,7 @@ rustdoc-json = { workspace = true }
 rustdoc-types = { workspace = true }
 semver = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 syntect = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }

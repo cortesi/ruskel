@@ -5,6 +5,8 @@ use std::{
     process::{Command, Output, Stdio},
 };
 
+use sha2::{Digest, Sha256};
+
 use crate::error::{Result, RuskelError};
 
 /// User-facing installation hint reused across nightly toolchain checks.
@@ -57,6 +59,23 @@ pub fn ensure_nightly_with_docs() -> Result<bool> {
     ))
 }
 
+/// Return the SHA-256 identity of the current nightly compiler description.
+pub(crate) fn nightly_identity() -> Result<String> {
+    let output = run_command(
+        "rustup",
+        &["run", "nightly", "rustc", "-vV"],
+        true,
+        "Failed to identify the nightly toolchain",
+    )?;
+    ensure_success(&output, NIGHTLY_INSTALL_HINT)?;
+    Ok(identity_from_stdout(&output.stdout))
+}
+
+/// Hash exact command output bytes into a stable full identity.
+fn identity_from_stdout(stdout: &[u8]) -> String {
+    format!("{:x}", Sha256::digest(stdout))
+}
+
 /// Execute a subprocess and convert spawn failures into `RuskelError::Generate`.
 fn run_command(
     program: &str,
@@ -101,7 +120,7 @@ fn has_installed_component(stdout: &[u8], component: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{has_installed_component, parse_sysroot_path};
+    use super::{has_installed_component, identity_from_stdout, parse_sysroot_path};
     use crate::error::Result;
 
     #[test]
@@ -131,5 +150,14 @@ mod tests {
     fn component_parser_ignores_available_but_uninstalled_component() {
         let stdout = b"rust-docs-json-x86_64-apple-darwin\n";
         assert!(!has_installed_component(stdout, "rust-docs-json"));
+    }
+
+    #[test]
+    fn nightly_identity_hashes_exact_stdout_bytes() {
+        assert_eq!(identity_from_stdout(b"nightly\n").len(), 64);
+        assert_ne!(
+            identity_from_stdout(b"nightly\n"),
+            identity_from_stdout(b"nightly")
+        );
     }
 }

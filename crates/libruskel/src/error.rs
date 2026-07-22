@@ -1,4 +1,4 @@
-use std::{io, result};
+use std::{io, path::PathBuf, result};
 
 use thiserror::Error;
 
@@ -15,6 +15,27 @@ pub enum RuskelError {
     /// Indicates a failure in reading a file, wrapping the underlying IO error.
     #[error("Failed to read file: {0}")]
     FileRead(#[from] io::Error),
+
+    /// Indicates an I/O failure in a cache-owned path.
+    #[error("Cache {action} failed for '{}': {source}", path.display())]
+    CacheIo {
+        /// Operation that failed.
+        action: &'static str,
+        /// Cache-owned path associated with the failure.
+        path: PathBuf,
+        /// Underlying filesystem error.
+        #[source]
+        source: io::Error,
+    },
+
+    /// Indicates that a cache root or entry has an invalid layout.
+    #[error("Invalid Ruskel cache at '{}': {message}", path.display())]
+    CacheLayout {
+        /// Path that failed validation.
+        path: PathBuf,
+        /// Actionable validation failure.
+        message: String,
+    },
 
     /// Indicates a failure in the code generation process.
     #[error("{0}")]

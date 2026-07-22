@@ -3,6 +3,7 @@ use std::{
     env, fs,
     io::{self, Write},
     path::{Component, Path, PathBuf, absolute},
+    result,
 };
 
 use cargo::{core::Workspace, ops, util::context::GlobalContext};
@@ -14,8 +15,9 @@ use tempfile::TempDir;
 
 use super::target::{Entrypoint, Target};
 use crate::{
+    cache::{BuildLease, CacheHandle},
     error::{Result, RuskelError, convert_cargo_error},
-    toolchain::nightly_sysroot,
+    toolchain::{nightly_identity, nightly_sysroot},
 };
 
 /// Check if a crate name is a standard library crate
@@ -310,6 +312,7 @@ impl CargoPath {
         let PackageTargetSelection {
             package_target,
             bin_target,
+            workspace_root,
         } = select_package_target(
             &manifest_path,
             options.offline,
@@ -317,43 +320,66 @@ impl CargoPath {
         )?;
         let include_private =
             options.private_items || bin_target.as_ref().is_some_and(|target| target.is_bin_only);
+        let owner = options.cache.owner()?;
+        let mut storage_retry: Option<(String, String)> = None;
+        let mut retry_budget = RetryBudget::default();
 
-        let mut captured_stdout = Vec::new();
-        let mut captured_stderr = Vec::new();
+        while retry_budget.begin_attempt() {
+            let toolchain_before = nightly_identity()?;
+            let lease = owner.begin_build(&toolchain_before, &workspace_root)?;
+            let attempt_result = build_once(
+                &manifest_path,
+                package_target.clone(),
+                bin_target.clone(),
+                include_private,
+                options,
+                &lease,
+            );
 
-        let build_result = rustdoc_json::Builder::default()
-            .toolchain("nightly")
-            .manifest_path(manifest_path)
-            .package_target(package_target)
-            .document_private_items(include_private)
-            .no_default_features(options.no_default_features)
-            .all_features(options.all_features)
-            .features(&options.features)
-            .quiet(options.silent)
-            .silent(false)
-            .build_with_captured_output(&mut captured_stdout, &mut captured_stderr);
-
-        if !options.silent {
-            if !captured_stdout.is_empty() && io::stdout().write_all(&captured_stdout).is_err() {
-                // Best-effort output mirroring; ignore write failures.
-            }
-            if !captured_stderr.is_empty() && io::stderr().write_all(&captured_stderr).is_err() {
-                // Best-effort output mirroring; ignore write failures.
+            match attempt_result {
+                Ok(crate_read) => {
+                    lease.touch_success()?;
+                    let toolchain_after = nightly_identity()?;
+                    if toolchain_after != toolchain_before {
+                        drop(lease);
+                        if !retry_budget.take_toolchain_retry() {
+                            return Err(RuskelError::Generate(
+                                "The nightly toolchain changed repeatedly while Ruskel generated rustdoc JSON. Retry the request after the update completes."
+                                    .to_string(),
+                            ));
+                        }
+                        continue;
+                    }
+                    return Ok(crate_read);
+                }
+                Err(BuildAttemptFailure::Storage(error)) if retry_budget.take_storage_retry() => {
+                    let original = error.to_string();
+                    let recovery = match lease.move_to_trash() {
+                        Ok(path) => {
+                            format!("moved the damaged cache entry to '{}'", path.display())
+                        }
+                        Err(recovery_error) => {
+                            format!("could not move the damaged cache entry: {recovery_error}")
+                        }
+                    };
+                    drop(lease);
+                    storage_retry = Some((original, recovery));
+                }
+                Err(failure) => {
+                    let retry_error = failure.into_error();
+                    if let Some((original, recovery)) = storage_retry {
+                        return Err(RuskelError::Generate(format!(
+                            "Rustdoc cache recovery failed.\nOriginal failure: {original}\nRecovery: {recovery}\nRetry failure: {retry_error}"
+                        )));
+                    }
+                    return Err(retry_error);
+                }
             }
         }
 
-        let json_path = build_result
-            .map_err(|err| map_rustdoc_build_error(&err, &captured_stderr, options.silent))?;
-        let json_content = fs::read_to_string(&json_path)?;
-        let crate_data: Crate = serde_json::from_str(&json_content).map_err(|e| {
-            RuskelError::Generate(format!(
-                "Failed to parse rustdoc JSON, which may indicate an outdated nightly toolchain - try running 'rustup update nightly':\nError: {e}"
-            ))
-        })?;
-        Ok(CrateRead {
-            crate_data,
-            bin_target,
-        })
+        Err(RuskelError::Generate(
+            "Ruskel exhausted the rustdoc build retry budget".to_string(),
+        ))
     }
 
     /// Compute the absolute `Cargo.toml` path for this source.
@@ -518,6 +544,12 @@ fn select_package_target(
     let config = create_quiet_cargo_config(offline)?;
     let workspace =
         Workspace::new(manifest_path, &config).map_err(|err| convert_cargo_error(&err))?;
+    let workspace_root =
+        fs::canonicalize(workspace.root()).map_err(|source| RuskelError::CacheIo {
+            action: "canonicalize Cargo workspace root",
+            path: workspace.root().to_path_buf(),
+            source,
+        })?;
     let package = workspace
         .current()
         .map_err(|err| convert_cargo_error(&err))?;
@@ -538,6 +570,7 @@ fn select_package_target(
                     name: bin_name.to_string(),
                     is_bin_only: !has_lib,
                 }),
+                workspace_root,
             });
         }
 
@@ -556,6 +589,7 @@ fn select_package_target(
         return Ok(PackageTargetSelection {
             package_target: PackageTarget::Lib,
             bin_target: None,
+            workspace_root,
         });
     }
 
@@ -574,6 +608,7 @@ fn select_package_target(
                 name: default_run.to_string(),
                 is_bin_only: true,
             }),
+            workspace_root,
         });
     }
 
@@ -585,6 +620,7 @@ fn select_package_target(
                 name: name.to_string(),
                 is_bin_only: true,
             }),
+            workspace_root,
         });
     }
 
@@ -681,6 +717,8 @@ pub struct CrateReadOptions {
     pub(crate) offline: bool,
     /// Optional override of the binary target name.
     pub(crate) bin_override: Option<String>,
+    /// Dedicated cache handle for non-standard-library builds.
+    pub(crate) cache: CacheHandle,
 }
 
 /// Internal package target selection details for rustdoc JSON.
@@ -690,6 +728,8 @@ struct PackageTargetSelection {
     package_target: PackageTarget,
     /// Binary target metadata for frontmatter output.
     bin_target: Option<BinaryTarget>,
+    /// Canonical root shared by all members of the selected workspace.
+    workspace_root: PathBuf,
 }
 
 /// A resolved Rust package or module target.
@@ -986,6 +1026,147 @@ fn to_import_name(package_name: &str) -> String {
     package_name.replace('-', "_")
 }
 
+/// Failure category retained until the build path makes its retry decision.
+#[derive(Debug)]
+enum BuildAttemptFailure {
+    /// Probable cache storage damage that permits one cold retry.
+    Storage(RuskelError),
+    /// A diagnostic, compatibility, manifest, metadata, or tool invocation failure.
+    Final(RuskelError),
+}
+
+/// Independent retry reasons within the shared three-attempt limit.
+#[derive(Debug, Default)]
+struct RetryBudget {
+    /// Attempts already started.
+    attempts: u8,
+    /// Whether the storage retry was consumed.
+    storage_used: bool,
+    /// Whether the toolchain-change retry was consumed.
+    toolchain_used: bool,
+}
+
+impl RetryBudget {
+    /// Start an attempt when the total limit has not been reached.
+    fn begin_attempt(&mut self) -> bool {
+        if self.attempts >= 3 {
+            return false;
+        }
+        self.attempts += 1;
+        true
+    }
+
+    /// Consume the one storage retry when another attempt remains.
+    fn take_storage_retry(&mut self) -> bool {
+        if self.storage_used || self.attempts >= 3 {
+            return false;
+        }
+        self.storage_used = true;
+        true
+    }
+
+    /// Consume the one toolchain-change retry when another attempt remains.
+    fn take_toolchain_retry(&mut self) -> bool {
+        if self.toolchain_used || self.attempts >= 3 {
+            return false;
+        }
+        self.toolchain_used = true;
+        true
+    }
+}
+
+impl BuildAttemptFailure {
+    /// Discard the internal retry category after the retry decision.
+    fn into_error(self) -> RuskelError {
+        match self {
+            Self::Storage(error) | Self::Final(error) => error,
+        }
+    }
+}
+
+/// Run one rustdoc build and read its JSON from a leased cache entry.
+fn build_once(
+    manifest_path: &Path,
+    package_target: PackageTarget,
+    bin_target: Option<BinaryTarget>,
+    include_private: bool,
+    options: &CrateReadOptions,
+    lease: &BuildLease,
+) -> result::Result<CrateRead, BuildAttemptFailure> {
+    let mut captured_stdout = Vec::new();
+    let mut captured_stderr = Vec::new();
+    let build_dir = lease.build_dir();
+
+    let build_result = rustdoc_json::Builder::default()
+        .toolchain("nightly")
+        .manifest_path(manifest_path)
+        .package_target(package_target)
+        .document_private_items(include_private)
+        .no_default_features(options.no_default_features)
+        .all_features(options.all_features)
+        .features(&options.features)
+        .target_dir(build_dir)
+        .env("CARGO_BUILD_BUILD_DIR", build_dir)
+        .quiet(options.silent)
+        .silent(false)
+        .build_with_captured_output(&mut captured_stdout, &mut captured_stderr);
+
+    if !options.silent {
+        if !captured_stdout.is_empty() && io::stdout().write_all(&captured_stdout).is_err() {
+            // Output mirroring is best effort.
+        }
+        if !captured_stderr.is_empty() && io::stderr().write_all(&captured_stderr).is_err() {
+            // Output mirroring is best effort.
+        }
+    }
+
+    let json_path = match build_result {
+        Ok(path) => path,
+        Err(rustdoc_json::BuildError::IoError(source)) => {
+            return Err(BuildAttemptFailure::Storage(RuskelError::CacheIo {
+                action: "generate rustdoc JSON",
+                path: build_dir.to_path_buf(),
+                source,
+            }));
+        }
+        Err(error) => {
+            return Err(BuildAttemptFailure::Final(map_rustdoc_build_error(
+                &error,
+                &captured_stderr,
+                options.silent,
+            )));
+        }
+    };
+
+    let json_content = fs::read_to_string(&json_path).map_err(|source| {
+        BuildAttemptFailure::Storage(RuskelError::CacheIo {
+            action: "read generated rustdoc JSON",
+            path: json_path.clone(),
+            source,
+        })
+    })?;
+    let crate_data: Crate = serde_json::from_str(&json_content).map_err(|error| {
+        use serde_json::error::Category;
+
+        match error.classify() {
+            Category::Syntax | Category::Eof | Category::Io => {
+                BuildAttemptFailure::Storage(RuskelError::CacheLayout {
+                    path: json_path.clone(),
+                    message: format!("generated rustdoc JSON is incomplete or invalid: {error}"),
+                })
+            }
+            Category::Data => BuildAttemptFailure::Final(RuskelError::Generate(format!(
+                "Failed to parse rustdoc JSON, which may indicate an outdated nightly toolchain. Run: rustup update nightly\nError: {error}"
+            ))),
+        }
+    })?;
+
+    Ok(CrateRead {
+        crate_data,
+        bin_target,
+    })
+}
+
 /// Maximum number of characters from rustdoc stderr included in failure reports.
 const MAX_STDERR_CHARS: usize = 8_192;
 
@@ -1157,6 +1338,24 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn retry_budget_keeps_reasons_independent_with_three_attempts_total() {
+        let mut budget = RetryBudget::default();
+
+        assert!(budget.begin_attempt());
+        assert!(budget.take_storage_retry());
+        assert!(!budget.take_storage_retry());
+
+        assert!(budget.begin_attempt());
+        assert!(budget.take_toolchain_retry());
+        assert!(!budget.take_toolchain_retry());
+
+        assert!(budget.begin_attempt());
+        assert!(!budget.take_storage_retry());
+        assert!(!budget.take_toolchain_retry());
+        assert!(!budget.begin_attempt());
+    }
 
     #[test]
     fn primary_diagnostic_extracts_compiler_error() -> Result<()> {

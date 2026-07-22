@@ -1,6 +1,9 @@
+use std::path::PathBuf;
+
 use rustdoc_types::Crate;
 
 use super::{
+    cache::{CacheHandle, CacheStatus, CleanReport},
     cargoutils::*,
     error::*,
     frontmatter::{FrontmatterBinaryTarget, FrontmatterConfig, FrontmatterHit, FrontmatterSearch},
@@ -34,6 +37,9 @@ pub struct Ruskel {
 
     /// Optional binary target override for bin-only crates or bin rendering.
     bin_target: Option<String>,
+
+    /// Lazy handle for the dedicated rustdoc build cache.
+    cache: CacheHandle,
 }
 
 /// Drop `use` matches when more specific items are present.
@@ -134,6 +140,7 @@ impl Ruskel {
             silent: false,
             frontmatter: true,
             bin_target: None,
+            cache: CacheHandle::new(None),
         }
     }
 
@@ -166,6 +173,24 @@ impl Ruskel {
     pub fn with_bin_target(mut self, bin_target: Option<String>) -> Self {
         self.bin_target = bin_target;
         self
+    }
+
+    /// Override the dedicated cache root.
+    ///
+    /// Pass `None` to restore `RUSKEL_CACHE_DIR` and platform cache resolution.
+    pub fn with_cache_dir(mut self, dir: Option<PathBuf>) -> Self {
+        self.cache = CacheHandle::new(dir);
+        self
+    }
+
+    /// Return a read-only snapshot of the dedicated cache.
+    pub fn cache_status(&self) -> Result<CacheStatus> {
+        self.cache.owner()?.status()
+    }
+
+    /// Remove cache-owned build data when no request is active.
+    pub fn clean_cache(&self) -> Result<CleanReport> {
+        self.cache.owner()?.clean()
     }
 
     /// Returns the parsed representation of the crate's API.
@@ -365,6 +390,7 @@ impl Ruskel {
             silent: self.silent,
             offline: self.offline,
             bin_override: self.bin_target.clone(),
+            cache: self.cache.clone(),
         };
         let CrateRead {
             crate_data,

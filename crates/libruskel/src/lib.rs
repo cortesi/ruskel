@@ -13,6 +13,8 @@
 //!
 //! You must have the nightly Rust toolchain installed to use (but not to install) Ruskel.
 
+/// Dedicated cache ownership and lifecycle controls.
+mod cache;
 /// Helper utilities for querying Cargo metadata and managing crate sources.
 mod cargoutils;
 /// Utilities for normalising rustdoc structures before rendering.
@@ -40,6 +42,7 @@ pub mod toolchain;
 pub use ruskel::Ruskel;
 
 pub use crate::{
+    cache::{CacheIssue, CacheStatus, CleanReport, ToolchainCacheStatus, WorkspaceCacheStatus},
     error::{Result, RuskelError},
     frontmatter::{FrontmatterBinaryTarget, FrontmatterConfig, FrontmatterHit, FrontmatterSearch},
     render::Renderer,
