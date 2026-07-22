@@ -1,6 +1,7 @@
 //! Dedicated cache ownership, identity, reporting, and build leases.
 
 mod layout;
+mod maintenance;
 
 use std::{
     collections::HashMap,
@@ -15,7 +16,10 @@ use std::{
 use once_cell::sync::Lazy;
 use sha2::{Digest, Sha256};
 
-use self::layout::{CacheLayout, LAST_USE, is_identity, is_trash_name};
+use self::{
+    layout::{CacheLayout, LAST_USE, is_identity, is_trash_name},
+    maintenance::MaintenanceWorker,
+};
 use crate::error::{Result, RuskelError};
 
 /// Default maximum recognized cache usage before maintenance evicts entries.
@@ -266,16 +270,17 @@ impl CacheHandle {
             RuskelError::Generate("Ruskel cache owner registry is unavailable".to_string())
         })?;
         owners.retain(|_, owner| owner.strong_count() > 0);
-        let owner = owners
-            .get(&canonical_root)
-            .and_then(Weak::upgrade)
-            .unwrap_or_else(|| {
-                let owner = Arc::new(CacheOwner {
-                    layout: initialized,
-                });
-                owners.insert(canonical_root, Arc::downgrade(&owner));
-                owner
+        let owner = if let Some(owner) = owners.get(&canonical_root).and_then(Weak::upgrade) {
+            owner
+        } else {
+            let maintenance = MaintenanceWorker::start(initialized.clone())?;
+            let owner = Arc::new(CacheOwner {
+                layout: initialized,
+                maintenance,
             });
+            owners.insert(canonical_root, Arc::downgrade(&owner));
+            owner
+        };
         drop(self.resolved.set(Arc::clone(&owner)));
         Ok(owner)
     }
@@ -286,6 +291,8 @@ impl CacheHandle {
 pub struct CacheOwner {
     /// Validated filesystem layout.
     layout: CacheLayout,
+    /// Coalesced process-local maintenance worker.
+    maintenance: MaintenanceWorker,
 }
 
 impl CacheOwner {
@@ -364,6 +371,67 @@ impl CacheOwner {
         report.usage_after = status.total_bytes;
         report.skipped.extend(status.skipped);
         Ok(report)
+    }
+
+    /// Return whether the cache filesystem currently has low available space.
+    pub fn is_low_space(&self) -> bool {
+        self.maintenance.is_low_space(self.layout.root())
+    }
+
+    /// Submit one maintenance signal after a completed build attempt.
+    pub fn signal_maintenance(&self, toolchain_identity: &str, urgent: bool) {
+        self.maintenance.signal(toolchain_identity, urgent);
+    }
+
+    /// Run synchronous storage recovery after build leases are released.
+    pub fn recover_storage(&self, toolchain_identity: &str) -> Result<String> {
+        let result = self.maintenance.recover(&self.layout, toolchain_identity)?;
+        if result.waited {
+            return Ok("waited for the active maintenance pass".to_string());
+        }
+        if !result.ran {
+            return Ok("maintenance was not required".to_string());
+        }
+        Ok(format!(
+            "completed synchronous maintenance and removed {} entries ({} bytes, {} skipped issues)",
+            result.removed_entries,
+            result.removed_bytes,
+            result.issues.len()
+        ))
+    }
+
+    /// Return whether an error path is inside the owned build namespace.
+    pub fn is_entry_error(&self, error: &RuskelError) -> bool {
+        matches!(
+            error,
+            RuskelError::CacheIo { path, .. } if path.starts_with(self.layout.build_dir())
+        )
+    }
+
+    /// Move one known workspace entry to trash after a lease-setup failure.
+    pub fn quarantine_workspace(
+        &self,
+        toolchain_identity: &str,
+        workspace_root: &Path,
+    ) -> Result<Option<PathBuf>> {
+        let workspace_identity = identity_for_path(workspace_root);
+        let _root = self.layout.lock_root_shared()?;
+        let _toolchain = self
+            .layout
+            .lock_shared(&self.layout.toolchain_lock(toolchain_identity))?;
+        let _workspace = self
+            .layout
+            .lock_exclusive(&self.layout.workspace_lock(&workspace_identity))?;
+        let path = self
+            .layout
+            .build_dir()
+            .join(toolchain_identity)
+            .join(&workspace_identity);
+        if !path.exists() {
+            return Ok(None);
+        }
+        let label = format!("{toolchain_identity}.{workspace_identity}");
+        layout::move_to_trash(self.layout.root(), &path, &label).map(Some)
     }
 
     /// Collect status when the caller already holds the required root lease.
@@ -524,6 +592,12 @@ impl CacheOwner {
     }
 }
 
+impl Drop for CacheOwner {
+    fn drop(&mut self) {
+        self.maintenance.shutdown();
+    }
+}
+
 /// Held leases and output location for one rustdoc build attempt.
 #[derive(Debug)]
 pub struct BuildLease {
@@ -612,7 +686,15 @@ fn unix_now() -> Result<u64> {
 /// Read one last-use timestamp and convert invalid metadata into a status issue.
 fn read_system_time(path: &Path, skipped: &mut Vec<CacheIssue>) -> Option<SystemTime> {
     match layout::read_timestamp(path) {
-        Ok(Some(seconds)) => Some(UNIX_EPOCH + Duration::from_secs(seconds)),
+        Ok(Some(seconds)) => {
+            let timestamp = UNIX_EPOCH + Duration::from_secs(seconds);
+            if timestamp > SystemTime::now() {
+                skipped.push(CacheIssue::new(path, "last-use metadata is in the future"));
+                None
+            } else {
+                Some(timestamp)
+            }
+        }
         Ok(None) => {
             skipped.push(CacheIssue::new(path, "last-use metadata is missing"));
             None
@@ -672,7 +754,14 @@ fn hash_path_bytes(hasher: &mut Sha256, path: &Path) {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{
+        env, fs,
+        io::{self, BufRead, BufReader, Read, Write},
+        process::{Command, Stdio},
+        sync::{Barrier, mpsc::sync_channel},
+        thread,
+        time::Duration,
+    };
 
     use tempfile::tempdir;
 
@@ -735,5 +824,186 @@ mod tests {
         assert_eq!(identity.len(), 64);
         assert!(is_identity(&identity));
         assert_ne!(identity, identity_for_path(Path::new("/two/workspace")));
+    }
+
+    #[test]
+    fn build_leases_serialize_one_workspace_with_barrier_coordination() -> Result<()> {
+        let temp = tempdir()?;
+        let owner = owner(&temp.path().join("cache"))?;
+        let toolchain = "c".repeat(64);
+        let workspace = fs::canonicalize(temp.path())?;
+        let first = owner.begin_build(&toolchain, &workspace)?;
+        let start = Arc::new(Barrier::new(2));
+        let thread_start = Arc::clone(&start);
+        let thread_owner = Arc::clone(&owner);
+        let thread_toolchain = toolchain;
+        let thread_workspace = workspace.clone();
+        let handle = thread::spawn(move || {
+            thread_start.wait();
+            thread_owner.begin_build(&thread_toolchain, &thread_workspace)
+        });
+
+        start.wait();
+        assert!(
+            owner
+                .layout
+                .is_locked(&owner.layout.workspace_lock(&identity_for_path(&workspace)))?
+        );
+        drop(first);
+        let second = handle.join().expect("workspace lease thread")?;
+        drop(second);
+        Ok(())
+    }
+
+    #[test]
+    fn build_leases_allow_different_workspaces_to_overlap() -> Result<()> {
+        let temp = tempdir()?;
+        let first_workspace = temp.path().join("first");
+        let second_workspace = temp.path().join("second");
+        fs::create_dir_all(&first_workspace)?;
+        fs::create_dir_all(&second_workspace)?;
+        let first_workspace = fs::canonicalize(first_workspace)?;
+        let second_workspace = fs::canonicalize(second_workspace)?;
+        let owner = owner(&temp.path().join("cache"))?;
+        let toolchain = "d".repeat(64);
+        let first = owner.begin_build(&toolchain, &first_workspace)?;
+        let start = Arc::new(Barrier::new(2));
+        let thread_start = Arc::clone(&start);
+        let thread_owner = Arc::clone(&owner);
+        let thread_toolchain = toolchain;
+        let (acquired_tx, acquired_rx) = sync_channel(0);
+        let handle = thread::spawn(move || -> Result<()> {
+            thread_start.wait();
+            let second = thread_owner.begin_build(&thread_toolchain, &second_workspace)?;
+            acquired_tx
+                .send(())
+                .map_err(|error| RuskelError::Generate(error.to_string()))?;
+            drop(second);
+            Ok(())
+        });
+
+        start.wait();
+        acquired_rx
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|error| RuskelError::Generate(error.to_string()))?;
+        drop(first);
+        handle.join().expect("parallel workspace lease thread")?;
+        Ok(())
+    }
+
+    #[test]
+    fn cache_lock_subprocess_helper() -> Result<()> {
+        let Some(mode) = env::var_os("RUSKEL_CACHE_LOCK_HELPER") else {
+            return Ok(());
+        };
+        let root = PathBuf::from(
+            env::var_os("RUSKEL_CACHE_LOCK_ROOT")
+                .ok_or_else(|| RuskelError::Generate("missing helper root".to_string()))?,
+        );
+        let layout = CacheLayout::initialize(root)?;
+        let identity = "e".repeat(64);
+        let _lease = match mode.to_string_lossy().as_ref() {
+            "root" => layout.lock_root_shared()?,
+            "toolchain" => layout.lock_shared(&layout.toolchain_lock(&identity))?,
+            "workspace" => layout.lock_exclusive(&layout.workspace_lock(&identity))?,
+            "gc" => layout.lock_exclusive(&layout.gc_lock())?,
+            other => {
+                return Err(RuskelError::Generate(format!(
+                    "unknown lock helper mode: {other}"
+                )));
+            }
+        };
+        println!("READY");
+        io::stdout().flush()?;
+        let mut release = [0_u8; 1];
+        io::stdin().read_exact(&mut release)?;
+        Ok(())
+    }
+
+    #[test]
+    fn subprocesses_expose_root_toolchain_workspace_and_gc_locks() -> Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path().join("cache");
+        let layout = CacheLayout::initialize(root.clone())?;
+        let identity = "e".repeat(64);
+
+        for mode in ["root", "toolchain", "workspace", "gc"] {
+            let mut child = Command::new(env::current_exe()?)
+                .args([
+                    "--exact",
+                    "cache::tests::cache_lock_subprocess_helper",
+                    "--nocapture",
+                ])
+                .env("RUSKEL_CACHE_LOCK_HELPER", mode)
+                .env("RUSKEL_CACHE_LOCK_ROOT", &root)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .spawn()?;
+            let stdout = child
+                .stdout
+                .take()
+                .ok_or_else(|| RuskelError::Generate("missing helper stdout".to_string()))?;
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                if reader.read_line(&mut line)? == 0 || line.contains("READY") {
+                    break;
+                }
+            }
+            assert!(line.contains("READY"), "lock helper did not become ready");
+
+            let busy = match mode {
+                "root" => layout.try_lock_root()?.is_none(),
+                "toolchain" => layout
+                    .try_lock_exclusive(&layout.toolchain_lock(&identity))?
+                    .is_none(),
+                "workspace" => layout
+                    .try_lock_exclusive(&layout.workspace_lock(&identity))?
+                    .is_none(),
+                "gc" => layout.try_lock_exclusive(&layout.gc_lock())?.is_none(),
+                _ => unreachable!(),
+            };
+            assert!(busy, "{mode} lock was not visible across processes");
+
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| RuskelError::Generate("missing helper stdin".to_string()))?
+                .write_all(b"x")?;
+            assert!(child.wait()?.success());
+        }
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn clean_reports_partial_removal_failure() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempdir()?;
+        let owner = owner(&temp.path().join("cache"))?;
+        let toolchain = "f".repeat(64);
+        let workspace = fs::canonicalize(temp.path())?;
+        let lease = owner.begin_build(&toolchain, &workspace)?;
+        fs::write(lease.build_dir().join("artifact"), b"data")?;
+        let workspace_identity = identity_for_path(&workspace);
+        let workspace_path = lease.build_dir().to_path_buf();
+        drop(lease);
+        fs::set_permissions(&workspace_path, fs::Permissions::from_mode(0o500))?;
+
+        let report = owner.clean()?;
+        assert!(!report.is_complete());
+        assert!(!report.failures().is_empty());
+
+        for entry in read_dir_sorted(&owner.layout.trash_dir())? {
+            let protected = entry.path().join(&workspace_identity);
+            if protected.exists() {
+                fs::set_permissions(protected, fs::Permissions::from_mode(0o700))?;
+            }
+        }
+        let cleanup = owner.clean()?;
+        assert!(cleanup.failures().is_empty());
+        Ok(())
     }
 }

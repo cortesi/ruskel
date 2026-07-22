@@ -325,8 +325,35 @@ impl CargoPath {
         let mut retry_budget = RetryBudget::default();
 
         while retry_budget.begin_attempt() {
-            let toolchain_before = nightly_identity()?;
-            let lease = owner.begin_build(&toolchain_before, &workspace_root)?;
+            let toolchain_before = nightly_identity()
+                .map_err(|error| with_recovery_context(&mut storage_retry, error))?;
+            let lease = match owner.begin_build(&toolchain_before, &workspace_root) {
+                Ok(lease) => lease,
+                Err(error) if owner.is_entry_error(&error) && retry_budget.take_storage_retry() => {
+                    let original = error.to_string();
+                    let quarantine = match owner
+                        .quarantine_workspace(&toolchain_before, &workspace_root)
+                    {
+                        Ok(Some(path)) => {
+                            format!("moved the damaged cache entry to '{}'", path.display())
+                        }
+                        Ok(None) => "the damaged cache entry did not exist".to_string(),
+                        Err(quarantine_error) => {
+                            format!("could not move the damaged cache entry: {quarantine_error}")
+                        }
+                    };
+                    let maintenance = match owner.recover_storage(&toolchain_before) {
+                        Ok(action) => action,
+                        Err(maintenance_error) => {
+                            format!("synchronous maintenance failed: {maintenance_error}")
+                        }
+                    };
+                    owner.signal_maintenance(&toolchain_before, false);
+                    storage_retry = Some((original, format!("{quarantine}; {maintenance}")));
+                    continue;
+                }
+                Err(error) => return Err(with_recovery_context(&mut storage_retry, error)),
+            };
             let attempt_result = build_once(
                 &manifest_path,
                 package_target.clone(),
@@ -335,11 +362,26 @@ impl CargoPath {
                 options,
                 &lease,
             );
+            let attempt_result = match attempt_result {
+                Ok(crate_read) => lease
+                    .touch_success()
+                    .map(|()| crate_read)
+                    .map_err(BuildAttemptFailure::Storage),
+                error => error,
+            };
+            let low_space = owner.is_low_space();
+            let attempt_result = match attempt_result {
+                Err(BuildAttemptFailure::Diagnostic(error)) if low_space => {
+                    Err(BuildAttemptFailure::Storage(error))
+                }
+                other => other,
+            };
 
             match attempt_result {
                 Ok(crate_read) => {
-                    lease.touch_success()?;
-                    let toolchain_after = nightly_identity()?;
+                    owner.signal_maintenance(&toolchain_before, low_space);
+                    let toolchain_after = nightly_identity()
+                        .map_err(|error| with_recovery_context(&mut storage_retry, error))?;
                     if toolchain_after != toolchain_before {
                         drop(lease);
                         if !retry_budget.take_toolchain_retry() {
@@ -363,16 +405,17 @@ impl CargoPath {
                         }
                     };
                     drop(lease);
-                    storage_retry = Some((original, recovery));
+                    let maintenance = match owner.recover_storage(&toolchain_before) {
+                        Ok(action) => action,
+                        Err(error) => format!("synchronous maintenance failed: {error}"),
+                    };
+                    owner.signal_maintenance(&toolchain_before, false);
+                    storage_retry = Some((original, format!("{recovery}; {maintenance}")));
                 }
                 Err(failure) => {
                     let retry_error = failure.into_error();
-                    if let Some((original, recovery)) = storage_retry {
-                        return Err(RuskelError::Generate(format!(
-                            "Rustdoc cache recovery failed.\nOriginal failure: {original}\nRecovery: {recovery}\nRetry failure: {retry_error}"
-                        )));
-                    }
-                    return Err(retry_error);
+                    owner.signal_maintenance(&toolchain_before, low_space);
+                    return Err(with_recovery_context(&mut storage_retry, retry_error));
                 }
             }
         }
@@ -1031,7 +1074,9 @@ fn to_import_name(package_name: &str) -> String {
 enum BuildAttemptFailure {
     /// Probable cache storage damage that permits one cold retry.
     Storage(RuskelError),
-    /// A diagnostic, compatibility, manifest, metadata, or tool invocation failure.
+    /// Compiler or rustdoc diagnostics that low space can reclassify.
+    Diagnostic(RuskelError),
+    /// A compatibility, manifest, metadata, or tool invocation failure.
     Final(RuskelError),
 }
 
@@ -1075,11 +1120,24 @@ impl RetryBudget {
     }
 }
 
+/// Attach the original storage failure and recovery action to a retry failure.
+fn with_recovery_context(
+    context: &mut Option<(String, String)>,
+    retry_error: RuskelError,
+) -> RuskelError {
+    let Some((original, recovery)) = context.take() else {
+        return retry_error;
+    };
+    RuskelError::Generate(format!(
+        "Rustdoc cache recovery failed.\nOriginal failure: {original}\nRecovery: {recovery}\nRetry failure: {retry_error}"
+    ))
+}
+
 impl BuildAttemptFailure {
     /// Discard the internal retry category after the retry decision.
     fn into_error(self) -> RuskelError {
         match self {
-            Self::Storage(error) | Self::Final(error) => error,
+            Self::Storage(error) | Self::Diagnostic(error) | Self::Final(error) => error,
         }
     }
 }
@@ -1130,11 +1188,11 @@ fn build_once(
             }));
         }
         Err(error) => {
-            return Err(BuildAttemptFailure::Final(map_rustdoc_build_error(
-                &error,
-                &captured_stderr,
-                options.silent,
-            )));
+            let mapped = map_rustdoc_build_error(&error, &captured_stderr, options.silent);
+            if matches!(error, rustdoc_json::BuildError::BuildRustdocJsonError) {
+                return Err(BuildAttemptFailure::Diagnostic(mapped));
+            }
+            return Err(BuildAttemptFailure::Final(mapped));
         }
     };
 

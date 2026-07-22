@@ -26,7 +26,7 @@ const CACHE_TAG_CONTENT: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# 
 static TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Validated paths that form one cache layout.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct CacheLayout {
     /// Absolute cache root.
     root: PathBuf,
@@ -120,6 +120,16 @@ impl CacheLayout {
             .join(format!("{identity}.lock"))
     }
 
+    /// Return the cross-process garbage-collection lock path.
+    pub(super) fn gc_lock(&self) -> PathBuf {
+        self.root.join("locks/gc.lock")
+    }
+
+    /// Return the completed-maintenance timestamp path.
+    pub(super) fn maintenance_stamp(&self) -> PathBuf {
+        self.root.join(MAINTENANCE_STAMP)
+    }
+
     /// Open and acquire a shared root lease.
     pub(super) fn lock_root_shared(&self) -> Result<File> {
         let path = self.root.join(MARKER_NAME);
@@ -155,6 +165,18 @@ impl CacheLayout {
         FileExt::lock(&file)
             .map_err(|source| cache_io("acquire exclusive cache lease", path, source))?;
         Ok(file)
+    }
+
+    /// Try to acquire an exclusive lease on a stable lock file.
+    pub(super) fn try_lock_exclusive(&self, path: &Path) -> Result<Option<File>> {
+        let file = open_or_create_lock(path)?;
+        match FileExt::try_lock(&file) {
+            Ok(()) => Ok(Some(file)),
+            Err(TryLockError::WouldBlock) => Ok(None),
+            Err(TryLockError::Error(source)) => {
+                Err(cache_io("acquire exclusive cache lease", path, source))
+            }
+        }
     }
 
     /// Return whether a stable lock file is currently held.
@@ -438,6 +460,20 @@ mod tests {
         assert_eq!(first.root(), root);
 
         CacheLayout::initialize(root)?;
+        Ok(())
+    }
+
+    #[test]
+    fn completes_empty_interrupted_marker() -> Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path().join("cache");
+        fs::create_dir(&root)?;
+        fs::File::create(root.join(MARKER_NAME))?;
+
+        CacheLayout::initialize(root.clone())?;
+
+        assert_eq!(fs::read_to_string(root.join(MARKER_NAME))?, MARKER_CONTENT);
+        assert!(root.join("locks/toolchain").is_dir());
         Ok(())
     }
 

@@ -301,33 +301,33 @@ with bounded retry behavior.
 This stage adds coalesced maintenance, safe eviction, and deterministic shutdown
 to the isolated cache.
 
-- [ ] Add `crates/libruskel/src/cache/maintenance.rs` with the worker, pending
+- [x] Add `crates/libruskel/src/cache/maintenance.rs` with the worker, pending
   reason, shutdown, and cross-process GC lease.
-- [ ] Submit one normal or urgent maintenance signal after each
+- [x] Submit one normal or urgent maintenance signal after each
   non-standard-library build attempt.
-- [ ] Implement the 24-hour schedule, trash cleanup, one-hour old-toolchain
+- [x] Implement the 24-hour schedule, trash cleanup, one-hour old-toolchain
   retention, and 14-day workspace retention.
-- [ ] Implement the 20,000,000,000-byte high-water mark and
+- [x] Implement the 20,000,000,000-byte high-water mark and
   15,000,000,000-byte eviction target.
-- [ ] Retain the newest workspace and report locked, invalid, future-dated,
+- [x] Retain the newest workspace and report locked, invalid, future-dated,
   unrecognized, or failed entries.
-- [ ] Insert synchronous maintenance between the Stage 1 lease release and
+- [x] Insert synchronous maintenance between the Stage 1 lease release and
   storage-recovery retry.
-- [ ] Make synchronous recovery wait for active GC. Do not run a duplicate pass
+- [x] Make synchronous recovery wait for active GC. Do not run a duplicate pass
   after that wait.
-- [ ] Drain pending maintenance and join the worker when the final `CacheOwner`
+- [x] Drain pending maintenance and join the worker when the final `CacheOwner`
   drops.
-- [ ] Add barrier-based thread tests for same-workspace serialization and
+- [x] Add barrier-based thread tests for same-workspace serialization and
   different-workspace concurrency.
-- [ ] Add subprocess helper tests for root, toolchain, workspace, and GC lock
+- [x] Add subprocess helper tests for root, toolchain, workspace, and GC lock
   behavior.
-- [ ] Add deterministic clock, space, and maintenance hooks for retention and
+- [x] Add deterministic clock, space, and maintenance hooks for retention and
   budget tests.
-- [ ] Test interrupted initialization, interrupted trash deletion, partial
+- [x] Test interrupted initialization, interrupted trash deletion, partial
   clean failure, and an over-budget locked cache.
-- [ ] Run the exact maintenance unit tests and the complete `libruskel` package
+- [x] Run the exact maintenance unit tests and the complete `libruskel` package
   test suite.
-- [ ] Review the Stage 2 diff for lock order, worker ownership, deletion scope,
+- [x] Review the Stage 2 diff for lock order, worker ownership, deletion scope,
   and shutdown behavior.
 
 ### Stage 3: Expose And Document Cache Operations
