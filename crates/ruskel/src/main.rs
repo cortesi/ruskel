@@ -4,14 +4,16 @@ use std::{
     env,
     error::Error,
     io::{self, IsTerminal, Write},
+    path::{Path, PathBuf},
     process::{self, Command, Stdio},
     thread,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use clap::{ColorChoice, Parser};
 use libruskel::{
-    Ruskel, SearchDomain, SearchOptions, highlight, parse_domain_token,
-    toolchain::ensure_nightly_with_docs,
+    CacheIssue, CacheStatus, CleanReport, Ruskel, SearchDomain, SearchOptions, highlight,
+    parse_domain_token, toolchain::ensure_nightly_with_docs,
 };
 use ruskel_mcp::RuskelServerDefaults;
 use shell_words::split;
@@ -21,15 +23,26 @@ use tracing_subscriber::filter::LevelFilter;
 /// Message printed when a search flag is present but contains only whitespace.
 const EMPTY_SEARCH_MESSAGE: &str = "Search query is empty; nothing to do.";
 /// Error returned when `--mcp` is combined with flags that belong on individual requests.
-const MCP_REQUEST_SCOPED_FLAGS_ERROR: &str = "--mcp can only be used with --auto-impls, --private, --no-frontmatter, --offline, --verbose, --addr, and --log";
+const MCP_REQUEST_SCOPED_FLAGS_ERROR: &str = "--mcp can only be used with --cache-dir, --auto-impls, --private, --no-frontmatter, --offline, --verbose, --addr, and --log";
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 /// Parsed command-line options for the ruskel CLI.
 struct Cli {
     /// Target to generate - a directory, file path, or a module name
-    #[arg(default_value = "./")]
-    target: String,
+    target: Option<String>,
+
+    /// Override the dedicated Ruskel cache root
+    #[arg(long, value_name = "PATH", env = "RUSKEL_CACHE_DIR")]
+    cache_dir: Option<PathBuf>,
+
+    /// Remove cache-owned build data and report the result
+    #[arg(long, conflicts_with_all = ["cache_status", "mcp", "target"])]
+    clean_cache: bool,
+
+    /// Report cache usage, entries, and last-use times
+    #[arg(long, conflicts_with_all = ["clean_cache", "mcp", "target"])]
+    cache_status: bool,
 
     /// Select a specific binary target when rendering a package
     #[arg(long, value_name = "NAME")]
@@ -146,7 +159,7 @@ impl Cli {
 
     /// Check whether the current CLI invocation uses request-scoped flags.
     fn uses_request_scoped_flags(&self) -> bool {
-        self.target != "./"
+        self.target.is_some()
             || self.bin.is_some()
             || self.raw
             || self.list
@@ -219,6 +232,12 @@ fn ruskel_from_cli(cli: &Cli) -> Ruskel {
         .with_frontmatter(!cli.no_frontmatter)
         .with_silent(!cli.verbose)
         .with_bin_target(cli.bin.clone())
+        .with_cache_dir(cli.cache_dir.clone())
+}
+
+/// Return the positional target or the current-project default.
+fn target_or_default(cli: &Cli) -> &str {
+    cli.target.as_deref().unwrap_or("./")
 }
 
 /// Write generated output either through a pager or directly to stdout.
@@ -266,6 +285,7 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
     };
 
     let rs = ruskel_from_cli(cli);
+    let target = target_or_default(cli);
 
     if cli.list {
         return run_list(cli, &rs);
@@ -282,7 +302,7 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
 
     let output = if cli.raw {
         rs.raw_json(
-            &cli.target,
+            target,
             cli.no_default_features,
             cli.all_features,
             cli.features.clone(),
@@ -290,7 +310,7 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
         )?
     } else {
         rs.render(
-            &cli.target,
+            target,
             cli.no_default_features,
             cli.all_features,
             cli.features.clone(),
@@ -318,7 +338,7 @@ fn run_list(cli: &Cli, rs: &Ruskel) -> Result<(), Box<dyn Error>> {
     };
 
     let listings = rs.list(
-        &cli.target,
+        target_or_default(cli),
         cli.no_default_features,
         cli.all_features,
         cli.features.clone(),
@@ -372,7 +392,7 @@ fn run_search(
     let options = cli.build_search_options(query);
 
     let response = rs.search(
-        &cli.target,
+        target_or_default(cli),
         cli.no_default_features,
         cli.all_features,
         cli.features.clone(),
@@ -389,22 +409,104 @@ fn run_search(
 }
 
 fn main() {
-    let cli = Cli::parse();
-
-    let result = if cli.mcp {
-        run_mcp(&cli)
-    } else {
-        if let Err(e) = check_nightly_toolchain() {
-            eprintln!("{e}");
+    match run(&Cli::parse()) {
+        Ok(true) => {}
+        Ok(false) => process::exit(1),
+        Err(error) => {
+            eprintln!("{error}");
             process::exit(1);
         }
-        run_cmdline(&cli)
-    };
-
-    if let Err(e) = result {
-        eprintln!("{e}");
-        process::exit(1);
     }
+}
+
+/// Dispatch cache operations before nightly checks and ordinary commands.
+fn run(cli: &Cli) -> Result<bool, Box<dyn Error>> {
+    let ruskel = ruskel_from_cli(cli);
+    if cli.cache_status {
+        let status = ruskel.cache_status()?;
+        print_cache_status(&status);
+        return Ok(true);
+    }
+    if cli.clean_cache {
+        let root = ruskel.cache_status()?.root().to_path_buf();
+        let report = ruskel.clean_cache()?;
+        print_clean_report(&root, &report);
+        return Ok(report.is_complete());
+    }
+    if cli.mcp {
+        run_mcp(cli)?;
+        return Ok(true);
+    }
+
+    check_nightly_toolchain().map_err(io::Error::other)?;
+    run_cmdline(cli)?;
+    Ok(true)
+}
+
+/// Print a deterministic cache-status report.
+fn print_cache_status(status: &CacheStatus) {
+    println!("Cache root: {}", status.root().display());
+    println!("Recognized usage: {} bytes", status.total_bytes());
+    println!("Trash usage: {} bytes", status.trash_bytes());
+    println!("Soft-budget excess: {} bytes", status.excess_bytes());
+    println!("Toolchains: {}", status.toolchains().len());
+    for toolchain in status.toolchains() {
+        println!(
+            "toolchain {} size={} last_use={} locked={}",
+            toolchain.identity(),
+            toolchain.size_bytes(),
+            format_time(toolchain.last_use()),
+            toolchain.is_locked()
+        );
+        for workspace in toolchain.workspaces() {
+            println!(
+                "  workspace {} size={} last_use={} locked={}",
+                workspace.identity(),
+                workspace.size_bytes(),
+                format_time(workspace.last_use()),
+                workspace.is_locked()
+            );
+        }
+    }
+    print_issues("Skipped", status.skipped());
+}
+
+/// Print a deterministic cache-clean report.
+fn print_clean_report(root: &Path, report: &CleanReport) {
+    let outcome = if report.root_busy() {
+        "busy"
+    } else if report.failures().is_empty() {
+        "complete"
+    } else {
+        "partial"
+    };
+    println!("Cache root: {}", root.display());
+    println!("Clean result: {outcome}");
+    println!("Removed entries: {}", report.removed_entries());
+    println!("Removed bytes: {}", report.removed_bytes());
+    println!(
+        "Recognized usage after clean: {} bytes",
+        report.usage_after()
+    );
+    print_issues("Skipped", report.skipped());
+    print_issues("Failures", report.failures());
+}
+
+/// Print one ordered issue section when it is not empty.
+fn print_issues(label: &str, issues: &[CacheIssue]) {
+    println!("{label}: {}", issues.len());
+    for issue in issues {
+        println!("  {}: {}", issue.path().display(), issue.message());
+    }
+}
+
+/// Format a cache time as Unix seconds or `unknown`.
+fn format_time(time: Option<SystemTime>) -> String {
+    time.and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map_or_else(
+            || "unknown".to_string(),
+            |duration| duration.as_secs().to_string(),
+        )
 }
 
 /// Check whether the given command is discoverable on the current `PATH`.
@@ -496,6 +598,8 @@ mod tests {
         let cli = parse_cli(&[
             "ruskel",
             "--mcp",
+            "--cache-dir",
+            "/tmp/ruskel-cache",
             "--private",
             "--no-frontmatter",
             "--offline",
@@ -508,6 +612,7 @@ mod tests {
 
         assert!(defaults.private);
         assert!(!defaults.frontmatter);
+        assert_eq!(cli.cache_dir, Some(PathBuf::from("/tmp/ruskel-cache")));
     }
 
     #[test]

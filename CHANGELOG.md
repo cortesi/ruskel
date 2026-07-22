@@ -1,5 +1,9 @@
 # v0.0.11
 
+- [feat] Isolate rustdoc JSON builds in a dedicated Ruskel cache.
+- [feat] Add `--cache-dir`, `--cache-status`, and `--clean-cache` controls.
+- [change] Add safe retention, soft-budget eviction, and storage recovery for
+  cache-owned build data.
 - [feat] Add search support with `--search`, `--search-spec`, and
   `--direct-match-only`.
 - [feat] Add `--list` mode to emit an item catalog for navigation.

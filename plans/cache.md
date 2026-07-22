@@ -335,35 +335,35 @@ to the isolated cache.
 This stage connects the cache to the CLI, MCP startup, documentation, and
 workspace-wide proof.
 
-- [ ] Change `Cli::target` to `Option<String>` in `crates/ruskel/src/main.rs`.
+- [x] Change `Cli::target` to `Option<String>` in `crates/ruskel/src/main.rs`.
   Preserve the `./` default.
-- [ ] Add `cache_dir`, `clean_cache`, and `cache_status` arguments with the
+- [x] Add `cache_dir`, `clean_cache`, and `cache_status` arguments with the
   specified Clap conflicts and environment binding.
-- [ ] Pass the selected cache directory through `ruskel_from_cli`, including
+- [x] Pass the selected cache directory through `ruskel_from_cli`, including
   the `--mcp` path.
-- [ ] Dispatch status and clean before `check_nightly_toolchain` and ordinary
+- [x] Dispatch status and clean before `check_nightly_toolchain` and ordinary
   target handling.
-- [ ] Print deterministic status and clean reports with busy, skipped, failed,
+- [x] Print deterministic status and clean reports with busy, skipped, failed,
   and excess states.
-- [ ] Return a failing CLI status when clean is busy or contains removal
+- [x] Return a failing CLI status when clean is busy or contains removal
   failures.
-- [ ] Extend `crates/ruskel/tests/cli.rs` with conflict, precedence, output,
+- [x] Extend `crates/ruskel/tests/cli.rs` with conflict, precedence, output,
   exit-status, and no-nightly cache-command tests.
-- [ ] Add a CLI unit test that proves `--cache-dir` is server-scoped and
+- [x] Add a CLI unit test that proves `--cache-dir` is server-scoped and
   accepted by `Cli::mcp_defaults`.
-- [ ] Verify that `crates/mcp/src/server.rs` clones retain one cache owner.
+- [x] Verify that `crates/mcp/src/server.rs` clones retain one cache owner.
   Do not add request-level cache controls.
-- [ ] Document cache selection, status, cleaning, retention, and legacy
+- [x] Document cache selection, status, cleaning, retention, and legacy
   artifact removal in `README.md`.
-- [ ] Record the dedicated cache and its controls in `CHANGELOG.md`.
-- [ ] Run
+- [x] Record the dedicated cache and its controls in `CHANGELOG.md`.
+- [x] Run
   `cargo +nightly fmt --all -- --check --config-path ./rustfmt-nightly.toml`.
-- [ ] Run
+- [x] Run
   `cargo clippy --workspace --all-targets --all-features -- -D warnings`.
-- [ ] Run `cargo nextest run --workspace --all-features` without doctests.
-- [ ] Smoke-test local, registry, standard-library, clean, status, and MCP
+- [x] Run `cargo nextest run --workspace --all-features` without doctests.
+- [x] Smoke-test local, registry, standard-library, clean, status, and MCP
   startup paths with a temporary cache.
-- [ ] Confirm project targets and registry sources receive no build artifacts
+- [x] Confirm project targets and registry sources receive no build artifacts
   during smoke tests.
-- [ ] Run `git diff --check` and review the final diff against every spec
+- [x] Run `git diff --check` and review the final diff against every spec
   requirement.

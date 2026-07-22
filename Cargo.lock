@@ -3606,6 +3606,7 @@ dependencies = [
  "predicates",
  "ruskel-mcp",
  "shell-words",
+ "tempfile",
  "tokio",
  "tracing-subscriber",
  "which",

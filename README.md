@@ -56,6 +56,7 @@ pub mod termsize {
 - Syntax highlighting for terminal output
 - Include private items and auto-implemented traits
 - Custom feature flags and version specification
+- Dedicated, bounded rustdoc build cache
 
 
 ---
@@ -141,6 +142,45 @@ ruskel core                 # Core library (no_std compatible)
 ruskel alloc                # Allocation library
 ```
 
+## Build cache
+
+Ruskel writes non-standard-library rustdoc builds to a dedicated cache. This
+keeps generated artifacts out of project target directories and Cargo registry
+source directories. Standard-library queries continue to read the prebuilt JSON
+from the nightly sysroot.
+
+Ruskel selects the cache root in this order:
+
+1. `--cache-dir PATH` or `Ruskel::with_cache_dir(Some(path))`
+2. A nonempty `RUSKEL_CACHE_DIR` value
+3. The platform cache directory with a `ruskel` child
+
+Use these commands to inspect or clean the cache. They do not require the
+nightly toolchain.
+
+```sh
+ruskel --cache-status
+ruskel --clean-cache
+ruskel --cache-dir /custom/cache --cache-status
+```
+
+Ruskel runs cache maintenance after build requests. It removes interrupted
+trash first. It removes inactive old-toolchain data after one hour and
+workspace data after 14 days. If recognized usage exceeds 20 GB, Ruskel evicts
+the oldest safe workspace entries until usage is below 15 GB. Active entries,
+the newest valid workspace, and entries with invalid metadata remain in place.
+`--cache-status` reports entries that maintenance cannot safely remove.
+
+Versions before this cache feature can leave artifacts in a project target
+directory or a Cargo registry source directory. Run `cargo clean` in each
+affected project. For registry sources, inspect the selected package directory
+under the Cargo registry source cache and remove only its generated `target`
+directory. Ruskel does not remove these legacy artifacts automatically.
+
+Cargo still coordinates dependency resolution and downloads through its global
+package-cache lock. A Ruskel query can wait for another Cargo process that holds
+this lock.
+
 
 ---
 
@@ -206,7 +246,7 @@ For Codex CLI, Claude Code, or other coding agents:
   "mcpServers": {
     "ruskel": {
       "command": "ruskel",
-      "args": ["--mcp"]
+      "args": ["--mcp", "--cache-dir", "/custom/cache"]
     }
   }
 }
@@ -246,9 +286,9 @@ The underlying library can be used directly:
 use libruskel::Ruskel;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let rs = Ruskel::new("/path/to/target")?;
-    let rendered = rs.render(false, false)?;
-    println!("{}", rendered);
+    let ruskel = Ruskel::new().with_cache_dir(None);
+    let rendered = ruskel.render("/path/to/target", false, false, Vec::new(), false)?;
+    println!("{rendered}");
     Ok(())
 }
 ```
