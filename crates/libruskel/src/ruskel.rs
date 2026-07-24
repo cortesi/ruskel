@@ -4,12 +4,13 @@ use rustdoc_types::Crate;
 
 use super::{
     cache::{CacheHandle, CacheStatus, CleanReport},
-    cargoutils::*,
     error::*,
     frontmatter::{FrontmatterBinaryTarget, FrontmatterConfig, FrontmatterHit, FrontmatterSearch},
     render::*,
+    rustdoc_build::{self, BinaryTarget, CrateRead, CrateReadOptions},
     search::{ListItem, SearchIndex, SearchItemKind, SearchOptions, SearchResponse},
     selection::build_render_selection,
+    target_resolution::{ResolvedTarget, resolve_target},
 };
 
 /// Ruskel generates a skeletonized version of a Rust crate in a single page.
@@ -349,7 +350,7 @@ impl Ruskel {
         let CrateRead {
             crate_data,
             bin_target,
-        } = resolved_target.read_crate(&read_options)?;
+        } = rustdoc_build::build(&resolved_target, &read_options)?;
         let render_private_items = visibility.effective_render_private(bin_target.as_ref());
 
         Ok(LoadedTarget {

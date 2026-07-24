@@ -15,8 +15,6 @@
 
 /// Dedicated cache ownership and lifecycle controls.
 mod cache;
-/// Helper utilities for querying Cargo metadata and managing crate sources.
-mod cargoutils;
 /// Utilities for normalising rustdoc structures before rendering.
 mod crateutils;
 /// Error types exposed by the libruskel crate.
@@ -30,6 +28,8 @@ mod keywords;
 mod render;
 /// Public API surface for driving the renderer.
 mod ruskel;
+/// Rustdoc execution, caching, retry, and diagnostic handling.
+mod rustdoc_build;
 /// Search and indexing utilities used by the CLI.
 mod search;
 /// Item-ID selections shared by filtering and search rendering.
@@ -42,6 +42,8 @@ mod stdlib;
 mod stdlib_mapping;
 /// Target parsing helpers for user-provided specifications.
 mod target;
+/// Filesystem, registry, and standard-library target resolution.
+mod target_resolution;
 /// Shared nightly/rustup helpers.
 pub mod toolchain;
 

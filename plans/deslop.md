@@ -122,7 +122,7 @@ Standard-library mapping generation is isolated, sorted, and checkable.
 
 Resolution produces passive input for one explicit rustdoc build coordinator.
 
-- [ ] Implement D7 as specified.
-- [ ] Complete D7's required supporting and downstream work.
-- [ ] Run D7's proof.
-- [ ] Review the settled stage.
+- [x] Implement D7 as specified.
+- [x] Complete D7's required supporting and downstream work.
+- [x] Run D7's proof.
+- [x] Review the settled stage.
