@@ -3,9 +3,9 @@
 
 mod utils;
 
-use libruskel::{Ruskel, SearchDomain, SearchItemKind, SearchOptions};
+use libruskel::{SearchDomain, SearchItemKind, SearchOptions};
 use pretty_assertions::assert_eq;
-use utils::create_test_crate;
+use utils::{create_test_crate, isolated_ruskel};
 
 #[test]
 fn list_respects_visibility_flags() {
@@ -20,7 +20,7 @@ fn list_respects_visibility_flags() {
     "#;
 
     let (_temp_dir, target) = create_test_crate(source, false);
-    let ruskel = Ruskel::new().with_offline(true).with_silent(true);
+    let (_cache, ruskel) = isolated_ruskel();
 
     let public_items = ruskel
         .list(&target, false, false, Vec::new(), false, None)
@@ -72,7 +72,7 @@ fn list_omits_nameless_use_items() {
     "#;
 
     let (_temp_dir, target) = create_test_crate(source, false);
-    let ruskel = Ruskel::new().with_offline(true).with_silent(true);
+    let (_cache, ruskel) = isolated_ruskel();
 
     let items = ruskel
         .list(&target, false, false, Vec::new(), false, None)
@@ -95,7 +95,7 @@ fn list_applies_search_filters() {
     "#;
 
     let (_temp_dir, target) = create_test_crate(source, false);
-    let ruskel = Ruskel::new().with_offline(true).with_silent(true);
+    let (_cache, ruskel) = isolated_ruskel();
 
     let mut options = SearchOptions::new("widget");
     options.domains = SearchDomain::NAMES;

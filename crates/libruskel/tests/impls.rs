@@ -139,42 +139,6 @@ gen_tests! {
             }
         }
         rt {
-            amalgamate_reexported_impls: {
-                input: r#"
-                    pub mod db {
-                        pub struct DB;
-                    }
-
-                    pub use db::DB;
-
-                    impl DB {
-                        pub fn open(&self) {}
-                    }
-
-                    impl crate::db::DB {
-                        pub fn close(&self) {}
-                    }
-                "#,
-                output: r#"
-                    pub mod db {
-                        pub struct DB;
-
-                        impl DB {
-                            pub fn open(&self) {}
-                            pub fn close(&self) {}
-                        }
-                    }
-
-                    pub struct DB;
-
-                    impl DB {
-                        pub fn open(&self) {}
-                        pub fn close(&self) {}
-                    }
-                "#
-            }
-        }
-        rt {
             deserialize: {
                 input:
                     r#"
@@ -278,6 +242,11 @@ gen_tests! {
                 "#
             }
         }
+    }
+}
+
+gen_tests! {
+    blanket_disabled, {
         rt {
             blanket_impl_disabled: {
                 input: r#"
@@ -296,6 +265,11 @@ gen_tests! {
                 "#
             }
         }
+    }
+}
+
+gen_tests! {
+    impl_rendering, {
         rt_custom {
             default_impl: {
                 renderer: Renderer::default().with_private_items(true),
@@ -414,5 +388,48 @@ gen_tests! {
                 "#
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod standalone {
+    use super::*;
+
+    #[test]
+    fn amalgamate_reexported_impls() {
+        rt(
+            r#"
+                pub mod db {
+                    pub struct DB;
+                }
+
+                pub use db::DB;
+
+                impl DB {
+                    pub fn open(&self) {}
+                }
+
+                impl crate::db::DB {
+                    pub fn close(&self) {}
+                }
+            "#,
+            r#"
+                pub mod db {
+                    pub struct DB;
+
+                    impl DB {
+                        pub fn open(&self) {}
+                        pub fn close(&self) {}
+                    }
+                }
+
+                pub struct DB;
+
+                impl DB {
+                    pub fn open(&self) {}
+                    pub fn close(&self) {}
+                }
+            "#,
+        );
     }
 }

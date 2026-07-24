@@ -10,7 +10,7 @@ Ruskel has good behavior coverage, but several paths express the same policy mor
 
 - Outcome: Renderer integration targets share a small set of real rustdoc documents within each default test-harness process, and all test harnesses avoid the user's default Ruskel cache.
 - Evidence: `crates/libruskel/tests/utils.rs::create_test_crate` creates a new random workspace for each generated test. `inspect_crate` then uses `Ruskel::new()` without `with_cache_dir`, so each case creates a persistent default-cache workspace. The `gen_tests!` suites define 127 source cases. A live `ruskel --cache-status` inspection found 456 retained `dummy_crate 0.1.0` workspaces with random temporary roots.
-- Change: Replace the per-case crate builder with checked-in fixture crates grouped by integration-test concern. Under the default test harness, compile each fixture once per integration-test process and retain its `Crate` in a test fixture guarded by `OnceLock`. Give every build-heavy process an explicit temporary cache whose guard lives as long as the fixture. Use the same fixture definitions under `nextest`, but do not claim compiled-fixture reuse across its isolated test processes. Keep a small, separate end-to-end set for target resolution and cache integration. Do not commit generated rustdoc JSON.
+- Change: Replace the per-case crate builder with checked-in fixture definitions grouped by integration-test concern. Compose each group into one temporary fixture crate. Under the default test harness, compile each fixture once per integration-test process and retain its `Crate` in a test fixture guarded by `OnceLock`. Give every build-heavy process an explicit temporary cache whose guard lives as long as the fixture. Use the same fixture definitions under `nextest`, but do not claim compiled-fixture reuse across its isolated test processes. Keep a small, separate end-to-end set for target resolution, proc macros, crate-absolute paths, and cache integration. Do not commit generated rustdoc JSON.
 - Constraints: Preserve the current syntax, privacy, procedural-macro, filtering, and formatting cases. Keep rustdoc schema changes visible by generating JSON with the selected nightly toolchain. Support parallel `nextest` processes without global environment mutation or shared temporary paths. Treat default-harness reuse and cache isolation under all harnesses as separate guarantees. Do not add doctests.
 - Proof: Add a fixture-construction counter that proves each fixture builds once in a default-harness integration-test process. Run each renderer integration target with the default Cargo test harness twice. Run `cargo nextest run -p libruskel` for behavior and isolation, not as proof of cross-process reuse. Compare default cache status before and after both harnesses and prove that no new test workspace appears. Run Clippy for all `libruskel` targets.
 
@@ -68,10 +68,10 @@ Ruskel has good behavior coverage, but several paths express the same policy mor
 
 Renderer integration targets reuse isolated rustdoc fixtures under the default harness, and all harnesses avoid the default cache.
 
-- [ ] Implement D1 as specified.
-- [ ] Complete D1's required supporting and downstream work.
-- [ ] Run D1's proof.
-- [ ] Review the settled stage.
+- [x] Implement D1 as specified.
+- [x] Complete D1's required supporting and downstream work.
+- [x] Run D1's proof.
+- [x] Review the settled stage.
 
 ### Stage 2: D2 — Remove the MCP Test-Mode Backdoor
 

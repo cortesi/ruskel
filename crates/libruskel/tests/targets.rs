@@ -33,7 +33,9 @@ mod tests {
         )?;
 
         let target = format!("{}::DummyStruct", foo_path.display());
-        let ruskel = Ruskel::new().with_silent(true);
+        let ruskel = Ruskel::new()
+            .with_cache_dir(Some(temp_dir.path().join("ruskel-cache")))
+            .with_silent(true);
         let output = ruskel.render(&target, false, false, Vec::new(), false)?;
 
         assert!(output.contains("pub struct DummyStruct;"));

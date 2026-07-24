@@ -8,7 +8,7 @@ use std::fs;
 use libruskel::{Renderer, Ruskel};
 use pretty_assertions::assert_eq;
 use rust_format::{Formatter, RustFmt};
-use rustdoc_types::Crate;
+use rustdoc_types::{Crate, ItemEnum};
 use tempfile::TempDir;
 
 /// Normalize indentation and remove blank lines for reliable string comparisons.
@@ -91,22 +91,29 @@ pub fn create_test_crate(source: &str, is_proc_macro: bool) -> (TempDir, String)
     (temp_dir, target)
 }
 
+/// Create a Ruskel instance with a process-local temporary cache.
+pub fn isolated_ruskel() -> (TempDir, Ruskel) {
+    let cache = TempDir::new().unwrap();
+    let ruskel = Ruskel::new()
+        .with_cache_dir(Some(cache.path().to_path_buf()))
+        .with_offline(true)
+        .with_silent(true);
+    (cache, ruskel)
+}
+
 /// Compile the provided source into rustdoc JSON for assertions.
 pub fn inspect_crate(source: &str, private_items: bool, is_proc_macro: bool) -> Crate {
     let (_temp_dir, target) = create_test_crate(source, is_proc_macro);
-    let ruskel = Ruskel::new().with_offline(true).with_silent(true);
+    let (_cache, ruskel) = isolated_ruskel();
     ruskel
         .inspect(&target, false, false, Vec::new(), private_items)
         .unwrap()
 }
 
-/// Render a crate and compare the formatted output against `expected_output`.
-pub fn render(renderer: &Renderer, source: &str, expected_output: &str, is_proc_macro: bool) {
-    let crate_data = inspect_crate(source, true, is_proc_macro);
-
-    // Render the crate data
+/// Render compiled crate data and compare the formatted output with `expected_output`.
+pub fn render_crate(renderer: &Renderer, crate_data: &Crate, expected_output: &str) {
     let normalized_rendered = normalize_whitespace(&strip_module_declaration(
-        &renderer.render(&crate_data).unwrap(),
+        &renderer.render(crate_data).unwrap(),
     ));
 
     let normalized_expected = normalize_whitespace(expected_output);
@@ -116,6 +123,64 @@ pub fn render(renderer: &Renderer, source: &str, expected_output: &str, is_proc_
         formatter.format_str(normalized_rendered).unwrap(),
         formatter.format_str(normalized_expected).unwrap(),
     );
+}
+
+/// Render a crate and compare the formatted output against `expected_output`.
+pub fn render(renderer: &Renderer, source: &str, expected_output: &str, is_proc_macro: bool) {
+    let crate_data = inspect_crate(source, true, is_proc_macro);
+    render_crate(renderer, &crate_data, expected_output);
+}
+
+/// A compiled fixture crate and the temporary paths that keep it valid.
+pub struct TestFixture {
+    /// Temporary source workspace.
+    _workspace: TempDir,
+    /// Temporary Ruskel cache.
+    _cache: TempDir,
+    /// Rustdoc JSON for every case in the fixture.
+    crate_data: Crate,
+}
+
+impl TestFixture {
+    /// Compile one fixture source for all tests in an integration-test concern.
+    pub fn new(source: &str) -> Self {
+        let (workspace, target) = create_test_crate(source, false);
+        let (cache, ruskel) = isolated_ruskel();
+        let crate_data = ruskel
+            .inspect(&target, false, false, Vec::new(), true)
+            .unwrap();
+        Self {
+            _workspace: workspace,
+            _cache: cache,
+            crate_data,
+        }
+    }
+
+    /// Return crate data rooted at one named fixture-case module.
+    pub fn case(&self, name: &str) -> Crate {
+        let root = self
+            .crate_data
+            .index
+            .get(&self.crate_data.root)
+            .expect("fixture crate root");
+        let ItemEnum::Module(module) = &root.inner else {
+            panic!("fixture crate root is not a module");
+        };
+        let case_root = module
+            .items
+            .iter()
+            .find(|id| {
+                self.crate_data
+                    .index
+                    .get(id)
+                    .is_some_and(|item| item.name.as_deref() == Some(name))
+            })
+            .expect("fixture case module");
+
+        let mut crate_data = self.crate_data.clone();
+        crate_data.root = *case_root;
+        crate_data
+    }
 }
 
 /// Idempotent rendering test
@@ -156,9 +221,12 @@ pub fn rt_procmacro(source: &str, expected_output: &str) {
 /// Assert that rendering fails with a specific error message.
 pub fn render_err(renderer: &Renderer, source: &str, expected_error: &str) {
     let crate_data = inspect_crate(source, true, false);
+    render_crate_err(renderer, &crate_data, expected_error);
+}
 
-    // Render the crate data
-    let result = renderer.render(&crate_data);
+/// Assert that rendering compiled crate data fails with a specific error message.
+pub fn render_crate_err(renderer: &Renderer, crate_data: &Crate, expected_error: &str) {
+    let result = renderer.render(crate_data);
 
     assert!(
         result.is_err(),
@@ -206,17 +274,58 @@ macro_rules! gen_tests {
         mod $prefix {
             use super::*;
 
+            const FIXTURE_SOURCE: &str = concat!(
+                $(
+                    "pub mod ", stringify!($idemp_name), " {\n", $input, "\n}\n",
+                )*
+                $(
+                    "pub mod ", stringify!($rt_name), " {\n", $rt_input, "\n}\n",
+                )*
+                $(
+                    "pub mod ", stringify!($rt_custom_name), " {\n",
+                    $rt_custom_input, "\n}\n",
+                )*
+                $(
+                    "pub mod ", stringify!($rt_err_name), " {\n", $rt_err_input, "\n}\n",
+                )*
+            );
+
+            static FIXTURE: std::sync::OnceLock<TestFixture> = std::sync::OnceLock::new();
+            static FIXTURE_BUILDS: std::sync::atomic::AtomicUsize =
+                std::sync::atomic::AtomicUsize::new(0);
+
+            fn fixture_case(name: &str) -> rustdoc_types::Crate {
+                let fixture = FIXTURE.get_or_init(|| {
+                    let previous =
+                        FIXTURE_BUILDS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    assert_eq!(previous, 0, "fixture must build once per test process");
+                    TestFixture::new(FIXTURE_SOURCE)
+                });
+                assert_eq!(
+                    FIXTURE_BUILDS.load(std::sync::atomic::Ordering::Relaxed),
+                    1,
+                    "fixture must build once per test process"
+                );
+                fixture.case(name)
+            }
+
             $(
                 #[test]
                 fn $idemp_name() {
-                    rt_priv_idemp($input);
+                    let crate_data = fixture_case(stringify!($idemp_name));
+                    render_crate(
+                        &libruskel::Renderer::default().with_private_items(true),
+                        &crate_data,
+                        $input,
+                    );
                 }
             )*
 
             $(
                 #[test]
                 fn $rt_name() {
-                    rt($rt_input, $rt_output);
+                    let crate_data = fixture_case(stringify!($rt_name));
+                    render_crate(&libruskel::Renderer::default(), &crate_data, $rt_output);
                 }
             )*
 
@@ -224,7 +333,8 @@ macro_rules! gen_tests {
                 #[test]
                 fn $rt_custom_name() {
                     let custom_renderer = $rt_custom_renderer;
-                    render(&custom_renderer, $rt_custom_input, $rt_custom_output, false);
+                    let crate_data = fixture_case(stringify!($rt_custom_name));
+                    render_crate(&custom_renderer, &crate_data, $rt_custom_output);
                 }
             )*
 
@@ -232,7 +342,8 @@ macro_rules! gen_tests {
                 #[test]
                 fn $rt_err_name() {
                     let custom_renderer = $rt_err_renderer;
-                    render_err(&custom_renderer, $rt_err_input, $rt_err_error);
+                    let crate_data = fixture_case(stringify!($rt_err_name));
+                    render_crate_err(&custom_renderer, &crate_data, $rt_err_error);
                 }
             )*
         }
