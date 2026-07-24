@@ -10,7 +10,7 @@ mod tests {
         sync::{Mutex, MutexGuard},
     };
 
-    use libruskel::{Result, Ruskel};
+    use libruskel::{CrateRequest, Result, Ruskel};
     use once_cell::sync::Lazy;
     use tempfile::{TempDir, tempdir};
 
@@ -106,17 +106,11 @@ mod tests {
 
         ruskel.inspect(
             first.to_str().expect("UTF-8 path"),
-            false,
-            false,
-            Vec::new(),
-            false,
+            &CrateRequest::default(),
         )?;
         ruskel.inspect(
             second.to_str().expect("UTF-8 path"),
-            false,
-            false,
-            Vec::new(),
-            false,
+            &CrateRequest::default(),
         )?;
 
         assert!(!workspace.path().join("target").exists());
@@ -146,7 +140,7 @@ mod tests {
         let crate_data = Ruskel::new()
             .with_cache_dir(Some(invalid_root))
             .with_silent(true)
-            .inspect("std::vec::Vec", false, false, Vec::new(), false)?;
+            .inspect("std::vec::Vec", &CrateRequest::default())?;
 
         assert!(!crate_data.index.is_empty());
         Ok(())

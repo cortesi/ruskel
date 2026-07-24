@@ -1,6 +1,6 @@
 use std::{io::stdout, result::Result as StdResult};
 
-use libruskel::{Ruskel, SearchDomain, SearchOptions, describe_domains, parse_domain_token};
+use libruskel::{CrateRequest, Ruskel, SearchDomain, SearchOptions};
 use serde::{Deserialize, Serialize};
 use tmcp::{Result, Server, ServerCtx, mcp_server, schema::CallToolResult, tool};
 use tokio::signal::ctrl_c;
@@ -118,6 +118,18 @@ impl RuskelSkeletonTool {
     }
 }
 
+impl ResolvedRuskelSkeletonTool {
+    /// Build the crate request shared by render and search modes.
+    fn crate_request(&self) -> CrateRequest {
+        CrateRequest {
+            no_default_features: self.no_default_features,
+            all_features: self.all_features,
+            features: self.features.clone(),
+            private_items: self.private,
+        }
+    }
+}
+
 #[derive(Clone)]
 /// MCP server implementation that forwards requests to an underlying `Ruskel` instance.
 pub struct RuskelServer {
@@ -210,17 +222,10 @@ impl RuskelServer {
             query,
             domains,
             params.search_case_sensitive,
-            params.private,
             !params.direct_match_only,
         );
 
-        match ruskel.search(
-            &params.target,
-            params.no_default_features,
-            params.all_features,
-            params.features.clone(),
-            &options,
-        ) {
+        match ruskel.search(&params.target, &params.crate_request(), &options) {
             Ok(response) => {
                 if response.results.is_empty() {
                     return CallToolResult::new()
@@ -234,7 +239,7 @@ impl RuskelServer {
                     query
                 ));
                 for result in &response.results {
-                    let labels = describe_domains(result.matched);
+                    let labels = result.matched.labels();
                     if labels.is_empty() {
                         summary.push_str(&format!(" - {}\n", result.path_string));
                     } else {
@@ -268,13 +273,7 @@ impl RuskelServer {
         ruskel: &Ruskel,
         params: &ResolvedRuskelSkeletonTool,
     ) -> CallToolResult {
-        match ruskel.render(
-            &params.target,
-            params.no_default_features,
-            params.all_features,
-            params.features.clone(),
-            params.private,
-        ) {
+        match ruskel.render(&params.target, &params.crate_request()) {
             Ok(output) => CallToolResult::new().with_text_content(output),
             Err(e) => {
                 error!("Failed to generate skeleton: {}", e);
@@ -300,7 +299,7 @@ fn resolve_search_domains(search_spec: Option<&[String]>) -> StdResult<SearchDom
 
     let mut domains = SearchDomain::empty();
     for token in search_spec {
-        domains |= parse_domain_token(token)?;
+        domains |= SearchDomain::parse(token)?;
     }
     if domains.is_empty() {
         Ok(SearchDomain::default())
@@ -346,7 +345,7 @@ pub async fn run_mcp_server(
 
 #[cfg(test)]
 mod tests {
-    use libruskel::SearchDomain;
+    use libruskel::{CrateRequest, SearchDomain};
 
     use super::{RuskelServerDefaults, RuskelSkeletonTool, resolve_search_domains};
 
@@ -391,5 +390,33 @@ mod tests {
 
         assert!(resolved.private);
         assert!(!resolved.frontmatter);
+    }
+
+    #[test]
+    fn crate_request_collects_resolved_feature_and_visibility_fields() {
+        let resolved = RuskelSkeletonTool {
+            target: String::from("std::option::Option"),
+            private: Some(true),
+            search: None,
+            bin: None,
+            search_spec: None,
+            frontmatter: None,
+            search_case_sensitive: false,
+            direct_match_only: false,
+            no_default_features: true,
+            all_features: true,
+            features: vec![String::from("derive"), String::from("std")],
+        }
+        .resolve(RuskelServerDefaults::default());
+
+        assert_eq!(
+            resolved.crate_request(),
+            CrateRequest {
+                no_default_features: true,
+                all_features: true,
+                features: vec![String::from("derive"), String::from("std")],
+                private_items: true,
+            }
+        );
     }
 }

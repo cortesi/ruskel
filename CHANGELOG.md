@@ -15,6 +15,8 @@
   private-by-default handling.
 - [change] Merge impl blocks across alias/re-export paths to reduce duplicate
   output.
+- [change] Replace positional `libruskel` feature and privacy arguments with
+  the borrowed `CrateRequest` options type.
 - [fix] Improve rustdoc/cargo diagnostics and target specification validation.
 - [bug] Include struct field docs in output
 - [feat] MCP server

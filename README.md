@@ -286,11 +286,12 @@ The `ruskel` tool accepts the following JSON parameters:
 The underlying library can be used directly:
 
 ```rust
-use libruskel::Ruskel;
+use libruskel::{CrateRequest, Ruskel};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ruskel = Ruskel::new().with_cache_dir(None);
-    let rendered = ruskel.render("/path/to/target", false, false, Vec::new(), false)?;
+    let request = CrateRequest::default();
+    let rendered = ruskel.render("/path/to/target", &request)?;
     println!("{rendered}");
     Ok(())
 }

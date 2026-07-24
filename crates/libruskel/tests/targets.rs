@@ -2,7 +2,7 @@
 
 use std::fs;
 
-use libruskel::{Result, Ruskel};
+use libruskel::{CrateRequest, Result, Ruskel};
 use tempfile::tempdir;
 
 #[cfg(test)]
@@ -36,7 +36,7 @@ mod tests {
         let ruskel = Ruskel::new()
             .with_cache_dir(Some(temp_dir.path().join("ruskel-cache")))
             .with_silent(true);
-        let output = ruskel.render(&target, false, false, Vec::new(), false)?;
+        let output = ruskel.render(&target, &CrateRequest::default())?;
 
         assert!(output.contains("pub struct DummyStruct;"));
 

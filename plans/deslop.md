@@ -104,10 +104,10 @@ All cache readers and collectors use one recognized-tree policy.
 
 Each public operation receives one coherent crate request.
 
-- [ ] Implement D5 as specified.
-- [ ] Complete D5's required supporting and downstream work.
-- [ ] Run D5's proof.
-- [ ] Review the settled stage.
+- [x] Implement D5 as specified.
+- [x] Complete D5's required supporting and downstream work.
+- [x] Run D5's proof.
+- [x] Review the settled stage.
 
 ### Stage 6: D6 — Make Standard-Library Mapping a Deterministic Artifact
 

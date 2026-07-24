@@ -3,7 +3,7 @@
 
 mod utils;
 
-use libruskel::{SearchDomain, SearchItemKind, SearchOptions};
+use libruskel::{CrateRequest, SearchDomain, SearchItemKind, SearchOptions};
 use pretty_assertions::assert_eq;
 use utils::{create_test_crate, isolated_ruskel};
 
@@ -23,7 +23,7 @@ fn list_respects_visibility_flags() {
     let (_cache, ruskel) = isolated_ruskel();
 
     let public_items = ruskel
-        .list(&target, false, false, Vec::new(), false, None)
+        .list(&target, &CrateRequest::default(), None)
         .unwrap();
     let public_paths: Vec<String> = public_items.into_iter().map(|item| item.path).collect();
 
@@ -43,7 +43,14 @@ fn list_respects_visibility_flags() {
     );
 
     let items_with_private = ruskel
-        .list(&target, false, false, Vec::new(), true, None)
+        .list(
+            &target,
+            &CrateRequest {
+                private_items: true,
+                ..CrateRequest::default()
+            },
+            None,
+        )
         .unwrap();
     let private_paths: Vec<String> = items_with_private
         .iter()
@@ -75,7 +82,7 @@ fn list_omits_nameless_use_items() {
     let (_cache, ruskel) = isolated_ruskel();
 
     let items = ruskel
-        .list(&target, false, false, Vec::new(), false, None)
+        .list(&target, &CrateRequest::default(), None)
         .unwrap();
 
     assert!(items.iter().any(|item| item.path.ends_with("::exported")));
@@ -99,10 +106,8 @@ fn list_applies_search_filters() {
 
     let mut options = SearchOptions::new("widget");
     options.domains = SearchDomain::NAMES;
-    options.include_private = false;
-
     let filtered = ruskel
-        .list(&target, false, false, Vec::new(), false, Some(&options))
+        .list(&target, &CrateRequest::default(), Some(&options))
         .unwrap();
 
     let filtered_pairs: Vec<(String, String)> = filtered
@@ -134,9 +139,9 @@ fn path_search_includes_named_and_glob_reexports() {
     let (_cache, ruskel) = isolated_ruskel();
 
     for path in ["dummy_crate::Alias", "dummy_crate::Globbed"] {
-        let options = SearchOptions::configured(path, SearchDomain::PATHS, true, false, false);
+        let options = SearchOptions::configured(path, SearchDomain::PATHS, true, false);
         let items = ruskel
-            .list(&target, false, false, Vec::new(), false, Some(&options))
+            .list(&target, &CrateRequest::default(), Some(&options))
             .unwrap();
 
         assert!(

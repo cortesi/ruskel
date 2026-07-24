@@ -41,7 +41,7 @@ mod target;
 /// Shared nightly/rustup helpers.
 pub mod toolchain;
 
-pub use ruskel::Ruskel;
+pub use ruskel::{CrateRequest, Ruskel};
 
 pub use crate::{
     cache::{CacheIssue, CacheStatus, CleanReport, ToolchainCacheStatus, WorkspaceCacheStatus},
@@ -50,6 +50,6 @@ pub use crate::{
     render::Renderer,
     search::{
         ListItem, SearchDomain, SearchItemKind, SearchOptions, SearchPathSegment, SearchResponse,
-        SearchResult, describe_domains, parse_domain_token, parse_domain_tokens,
+        SearchResult,
     },
 };

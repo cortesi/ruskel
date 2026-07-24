@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use crate::search::{SearchDomain, describe_domains};
+use crate::search::SearchDomain;
 
 /// Configuration describing optional frontmatter comments rendered ahead of skeleton output.
 #[derive(Debug, Clone, Default)]
@@ -253,7 +253,7 @@ impl FrontmatterHit {
 
 /// Render the search metadata section into the frontmatter buffer.
 fn write_search_section(buffer: &mut String, search: &FrontmatterSearch) {
-    let domains = describe_domains(search.domains);
+    let domains = search.domains.labels();
     let mut details = String::new();
 
     if search.case_sensitive {
@@ -298,7 +298,7 @@ fn write_search_section(buffer: &mut String, search: &FrontmatterSearch) {
 
     writeln!(buffer, "// hits ({}):", search.hits.len()).expect("write frontmatter hit count");
     for hit in &search.hits {
-        let labels = describe_domains(hit.domains);
+        let labels = hit.domains.labels();
         if labels.is_empty() {
             writeln!(buffer, "//   - {}", hit.path).expect("write frontmatter hit path");
         } else {

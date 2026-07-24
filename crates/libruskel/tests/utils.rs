@@ -5,7 +5,7 @@
 
 use std::fs;
 
-use libruskel::{Renderer, Ruskel};
+use libruskel::{CrateRequest, Renderer, Ruskel};
 use pretty_assertions::assert_eq;
 use rust_format::{Formatter, RustFmt};
 use rustdoc_types::{Crate, ItemEnum};
@@ -106,7 +106,13 @@ pub fn inspect_crate(source: &str, private_items: bool, is_proc_macro: bool) -> 
     let (_temp_dir, target) = create_test_crate(source, is_proc_macro);
     let (_cache, ruskel) = isolated_ruskel();
     ruskel
-        .inspect(&target, false, false, Vec::new(), private_items)
+        .inspect(
+            &target,
+            &CrateRequest {
+                private_items,
+                ..CrateRequest::default()
+            },
+        )
         .unwrap()
 }
 
@@ -147,7 +153,13 @@ impl TestFixture {
         let (workspace, target) = create_test_crate(source, false);
         let (cache, ruskel) = isolated_ruskel();
         let crate_data = ruskel
-            .inspect(&target, false, false, Vec::new(), true)
+            .inspect(
+                &target,
+                &CrateRequest {
+                    private_items: true,
+                    ..CrateRequest::default()
+                },
+            )
             .unwrap();
         Self {
             _workspace: workspace,

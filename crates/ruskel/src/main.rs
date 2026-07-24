@@ -13,8 +13,8 @@ use std::{
 use bytesize::ByteSize;
 use clap::{ColorChoice, Parser};
 use libruskel::{
-    CacheIssue, CacheStatus, CleanReport, Ruskel, SearchDomain, SearchOptions, highlight,
-    parse_domain_token, toolchain::ensure_nightly_with_docs,
+    CacheIssue, CacheStatus, CleanReport, CrateRequest, Ruskel, SearchDomain, SearchOptions,
+    highlight, toolchain::ensure_nightly_with_docs,
 };
 use ruskel_mcp::RuskelServerDefaults;
 use shell_words::split;
@@ -68,7 +68,7 @@ struct Cli {
         value_delimiter = ',',
         value_name = "DOMAIN[,DOMAIN...]",
         default_value = "name,doc,signature",
-        value_parser = parse_domain_token
+        value_parser = SearchDomain::parse
     )]
     search_spec: Vec<SearchDomain>,
 
@@ -154,9 +154,18 @@ impl Cli {
             query,
             self.search_domains(),
             self.search_case_sensitive,
-            self.private,
             !self.direct_match_only,
         )
+    }
+
+    /// Build one crate request from Cargo feature and visibility flags.
+    fn crate_request(&self) -> CrateRequest {
+        CrateRequest {
+            no_default_features: self.no_default_features,
+            all_features: self.all_features,
+            features: self.features.clone(),
+            private_items: self.private,
+        }
     }
 
     /// Check whether the current CLI invocation uses request-scoped flags.
@@ -288,6 +297,7 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
 
     let rs = ruskel_from_cli(cli);
     let target = target_or_default(cli);
+    let request = cli.crate_request();
 
     if cli.list {
         return run_list(cli, &rs);
@@ -303,21 +313,9 @@ fn run_cmdline(cli: &Cli) -> Result<(), Box<dyn Error>> {
     }
 
     let output = if cli.raw {
-        rs.raw_json(
-            target,
-            cli.no_default_features,
-            cli.all_features,
-            cli.features.clone(),
-            cli.private,
-        )?
+        rs.raw_json(target, &request)?
     } else {
-        rs.render(
-            target,
-            cli.no_default_features,
-            cli.all_features,
-            cli.features.clone(),
-            cli.private,
-        )?
+        rs.render(target, &request)?
     };
 
     let output = highlight_output(output, should_highlight && !cli.raw)?;
@@ -341,10 +339,7 @@ fn run_list(cli: &Cli, rs: &Ruskel) -> Result<(), Box<dyn Error>> {
 
     let listings = rs.list(
         target_or_default(cli),
-        cli.no_default_features,
-        cli.all_features,
-        cli.features.clone(),
-        cli.private,
+        &cli.crate_request(),
         search_options.as_ref(),
     )?;
 
@@ -393,13 +388,7 @@ fn run_search(
 
     let options = cli.build_search_options(query);
 
-    let response = rs.search(
-        target_or_default(cli),
-        cli.no_default_features,
-        cli.all_features,
-        cli.features.clone(),
-        &options,
-    )?;
+    let response = rs.search(target_or_default(cli), &cli.crate_request(), &options)?;
 
     if response.results.is_empty() {
         println!("No matches found for \"{}\".", query);
@@ -676,6 +665,28 @@ mod tests {
         assert_eq!(
             cli.search_domains(),
             SearchDomain::NAMES | SearchDomain::PATHS
+        );
+    }
+
+    #[test]
+    fn crate_request_collects_feature_and_visibility_flags() {
+        let cli = parse_cli(&[
+            "ruskel",
+            "--no-default-features",
+            "--all-features",
+            "--features",
+            "derive,std",
+            "--private",
+        ]);
+
+        assert_eq!(
+            cli.crate_request(),
+            CrateRequest {
+                no_default_features: true,
+                all_features: true,
+                features: vec![String::from("derive"), String::from("std")],
+                private_items: true,
+            }
         );
     }
 

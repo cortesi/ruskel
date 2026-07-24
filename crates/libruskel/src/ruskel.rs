@@ -40,6 +40,19 @@ pub struct Ruskel {
     cache: CacheHandle,
 }
 
+/// Cargo feature and visibility options for one crate inspection request.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CrateRequest {
+    /// Build without the crate's default features.
+    pub no_default_features: bool,
+    /// Build with every optional feature.
+    pub all_features: bool,
+    /// Explicit features to enable.
+    pub features: Vec<String>,
+    /// Include private and crate-private items.
+    pub private_items: bool,
+}
+
 /// Drop `use` matches when more specific items are present.
 fn prune_redundant_use_items(results: &mut Vec<ListItem>) {
     let has_non_use = results
@@ -195,25 +208,13 @@ impl Ruskel {
     ///
     /// # Arguments
     /// * `target` - The target specification (see new() documentation for format)
-    /// * `no_default_features` - Whether to build without default features
-    /// * `all_features` - Whether to build with all features
-    /// * `features` - List of specific features to enable
-    /// * `private_items` - Whether to include private items in the output
-    pub fn inspect(
-        &self,
-        target: &str,
-        no_default_features: bool,
-        all_features: bool,
-        features: Vec<String>,
-        private_items: bool,
-    ) -> Result<Crate> {
+    /// * `request` - Cargo feature and visibility options
+    pub fn inspect(&self, target: &str, request: &CrateRequest) -> Result<Crate> {
         Ok(self
             .load_target(
                 target,
-                no_default_features,
-                all_features,
-                features,
-                VisibilityPolicy::mirrored(private_items),
+                request,
+                VisibilityPolicy::mirrored(request.private_items),
             )?
             .crate_data)
     }
@@ -225,17 +226,13 @@ impl Ruskel {
     pub fn search(
         &self,
         target: &str,
-        no_default_features: bool,
-        all_features: bool,
-        features: Vec<String>,
+        request: &CrateRequest,
         options: &SearchOptions,
     ) -> Result<SearchResponse> {
         let loaded = self.load_target(
             target,
-            no_default_features,
-            all_features,
-            features,
-            VisibilityPolicy::mirrored(options.include_private),
+            request,
+            VisibilityPolicy::mirrored(request.private_items),
         )?;
         let index = SearchIndex::build(&loaded.crate_data, loaded.render_private_items);
         let results = index.search(options);
@@ -272,20 +269,13 @@ impl Ruskel {
     pub fn list(
         &self,
         target: &str,
-        no_default_features: bool,
-        all_features: bool,
-        features: Vec<String>,
-        include_private: bool,
+        request: &CrateRequest,
         search: Option<&SearchOptions>,
     ) -> Result<Vec<ListItem>> {
-        let include_private =
-            include_private || search.is_some_and(|options| options.include_private);
         let loaded = self.load_target(
             target,
-            no_default_features,
-            all_features,
-            features,
-            VisibilityPolicy::mirrored(include_private),
+            request,
+            VisibilityPolicy::mirrored(request.private_items),
         )?;
         let index = SearchIndex::build(&loaded.crate_data, loaded.render_private_items);
 
@@ -316,20 +306,11 @@ impl Ruskel {
     }
 
     /// Render the crate target into a Rust skeleton without filtering.
-    pub fn render(
-        &self,
-        target: &str,
-        no_default_features: bool,
-        all_features: bool,
-        features: Vec<String>,
-        private_items: bool,
-    ) -> Result<String> {
+    pub fn render(&self, target: &str, request: &CrateRequest) -> Result<String> {
         let loaded = self.load_target(
             target,
-            no_default_features,
-            all_features,
-            features,
-            if private_items {
+            request,
+            if request.private_items {
                 VisibilityPolicy::mirrored(true)
             } else {
                 VisibilityPolicy::render_public()
@@ -349,47 +330,22 @@ impl Ruskel {
     ///
     /// # Arguments
     /// * `target` - The target specification (see new() documentation for format)
-    /// * `no_default_features` - Whether to build without default features
-    /// * `all_features` - Whether to build with all features
-    /// * `features` - List of specific features to enable
-    /// * `private_items` - Whether to include private items in the JSON output
-    pub fn raw_json(
-        &self,
-        target: &str,
-        no_default_features: bool,
-        all_features: bool,
-        features: Vec<String>,
-        private_items: bool,
-    ) -> Result<String> {
-        Ok(serde_json::to_string_pretty(&self.inspect(
-            target,
-            no_default_features,
-            all_features,
-            features,
-            private_items,
-        )?)?)
+    /// * `request` - Cargo feature and visibility options
+    pub fn raw_json(&self, target: &str, request: &CrateRequest) -> Result<String> {
+        Ok(serde_json::to_string_pretty(
+            &self.inspect(target, request)?,
+        )?)
     }
 
     /// Load crate data and normalize the privacy policy derived from the selected target.
     fn load_target(
         &self,
         target: &str,
-        no_default_features: bool,
-        all_features: bool,
-        features: Vec<String>,
+        request: &CrateRequest,
         visibility: VisibilityPolicy,
     ) -> Result<LoadedTarget> {
         let resolved_target = resolve_target(target, self.offline)?;
-        let read_options = CrateReadOptions {
-            no_default_features,
-            all_features,
-            features,
-            private_items: visibility.document_private_items,
-            silent: self.silent,
-            offline: self.offline,
-            bin_override: self.bin_target.clone(),
-            cache: self.cache.clone(),
-        };
+        let read_options = self.crate_read_options(request, visibility);
         let CrateRead {
             crate_data,
             bin_target,
@@ -402,6 +358,24 @@ impl Ruskel {
             bin_target,
             render_private_items,
         })
+    }
+
+    /// Combine request-scoped and process-scoped settings for one rustdoc build.
+    fn crate_read_options(
+        &self,
+        request: &CrateRequest,
+        visibility: VisibilityPolicy,
+    ) -> CrateReadOptions {
+        CrateReadOptions {
+            no_default_features: request.no_default_features,
+            all_features: request.all_features,
+            features: request.features.clone(),
+            private_items: visibility.document_private_items,
+            silent: self.silent,
+            offline: self.offline,
+            bin_override: self.bin_target.clone(),
+            cache: self.cache.clone(),
+        }
     }
 
     /// Create the renderer preconfigured with target filtering and visibility policy.
@@ -494,5 +468,41 @@ mod tests {
             items,
             vec![list_item(SearchItemKind::Use, "widget::prelude")]
         );
+    }
+
+    #[test]
+    fn crate_request_preserves_each_cargo_feature_mode() {
+        let ruskel = Ruskel::new();
+        let cases = [
+            CrateRequest::default(),
+            CrateRequest {
+                no_default_features: true,
+                ..CrateRequest::default()
+            },
+            CrateRequest {
+                all_features: true,
+                ..CrateRequest::default()
+            },
+            CrateRequest {
+                features: vec![String::from("derive"), String::from("std")],
+                ..CrateRequest::default()
+            },
+            CrateRequest {
+                no_default_features: true,
+                all_features: true,
+                features: vec![String::from("derive")],
+                private_items: true,
+            },
+        ];
+
+        for request in cases {
+            let options = ruskel
+                .crate_read_options(&request, VisibilityPolicy::mirrored(request.private_items));
+
+            assert_eq!(options.no_default_features, request.no_default_features);
+            assert_eq!(options.all_features, request.all_features);
+            assert_eq!(options.features, request.features);
+            assert_eq!(options.private_items, request.private_items);
+        }
     }
 }

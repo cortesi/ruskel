@@ -33,6 +33,39 @@ impl Default for SearchDomain {
     }
 }
 
+impl SearchDomain {
+    /// Parse one case-insensitive search-domain token.
+    pub fn parse(token: &str) -> Result<Self, String> {
+        match token.to_ascii_lowercase().as_str() {
+            "name" | "names" => Ok(Self::NAMES),
+            "doc" | "docs" | "documentation" => Ok(Self::DOCS),
+            "path" | "paths" => Ok(Self::PATHS),
+            "signature" | "signatures" => Ok(Self::SIGNATURES),
+            other => Err(format!(
+                "invalid search domain '{other}'. Expected one of: name, doc, path, signature."
+            )),
+        }
+    }
+
+    /// Return human-friendly labels for every selected domain.
+    pub fn labels(self) -> Vec<&'static str> {
+        let mut labels = Vec::new();
+        if self.contains(Self::NAMES) {
+            labels.push("name");
+        }
+        if self.contains(Self::DOCS) {
+            labels.push("doc");
+        }
+        if self.contains(Self::PATHS) {
+            labels.push("path");
+        }
+        if self.contains(Self::SIGNATURES) {
+            labels.push("signature");
+        }
+        labels
+    }
+}
+
 /// Options that control how a crate search should be performed.
 #[derive(Debug, Clone)]
 pub struct SearchOptions {
@@ -42,8 +75,6 @@ pub struct SearchOptions {
     pub domains: SearchDomain,
     /// Whether matching should respect letter casing.
     pub case_sensitive: bool,
-    /// Whether to include private or crate-private items.
-    pub include_private: bool,
     /// Whether matched container items should expand to include their children.
     pub expand_containers: bool,
 }
@@ -55,7 +86,6 @@ impl SearchOptions {
             query: query.into(),
             domains: SearchDomain::default(),
             case_sensitive: false,
-            include_private: false,
             expand_containers: true,
         }
     }
@@ -65,13 +95,11 @@ impl SearchOptions {
         query: impl Into<String>,
         domains: SearchDomain,
         case_sensitive: bool,
-        include_private: bool,
         expand_containers: bool,
     ) -> Self {
         let mut options = Self::new(query);
         options.domains = domains;
         options.case_sensitive = case_sensitive;
-        options.include_private = include_private;
         options.expand_containers = expand_containers;
         options.ensure_domains();
         options
@@ -979,55 +1007,6 @@ fn contains(haystack: &str, needle: &str, case_sensitive: bool) -> bool {
     }
 }
 
-/// Format the set of matched domains into human-friendly labels.
-pub fn describe_domains(domains: SearchDomain) -> Vec<&'static str> {
-    let mut labels = Vec::new();
-    if domains.contains(SearchDomain::NAMES) {
-        labels.push("name");
-    }
-    if domains.contains(SearchDomain::DOCS) {
-        labels.push("doc");
-    }
-    if domains.contains(SearchDomain::PATHS) {
-        labels.push("path");
-    }
-    if domains.contains(SearchDomain::SIGNATURES) {
-        labels.push("signature");
-    }
-    labels
-}
-
-/// Parse a single domain token (case-insensitive) into a [`SearchDomain`] flag.
-pub fn parse_domain_token(token: &str) -> Result<SearchDomain, String> {
-    match token.to_ascii_lowercase().as_str() {
-        "name" | "names" => Ok(SearchDomain::NAMES),
-        "doc" | "docs" | "documentation" => Ok(SearchDomain::DOCS),
-        "path" | "paths" => Ok(SearchDomain::PATHS),
-        "signature" | "signatures" => Ok(SearchDomain::SIGNATURES),
-        other => Err(format!(
-            "invalid search domain '{other}'. Expected one of: name, doc, path, signature."
-        )),
-    }
-}
-
-/// Combine multiple domain tokens into a single [`SearchDomain`] set.
-pub fn parse_domain_tokens<'a, I>(tokens: I) -> SearchDomain
-where
-    I: IntoIterator<Item = &'a str>,
-{
-    let mut domains = SearchDomain::empty();
-    for token in tokens {
-        if let Ok(flag) = parse_domain_token(token) {
-            domains |= flag;
-        }
-    }
-    if domains.is_empty() {
-        SearchDomain::default()
-    } else {
-        domains
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1389,15 +1368,18 @@ mod tests {
     }
 
     #[test]
-    fn describe_domains_lists_selected_flags() {
+    fn domain_labels_list_selected_flags() {
+        assert_eq!(SearchDomain::empty().labels(), Vec::<&str>::new());
+        assert_eq!(SearchDomain::NAMES.labels(), vec!["name"]);
         assert_eq!(
-            super::describe_domains(SearchDomain::empty()),
-            Vec::<&str>::new()
-        );
-        assert_eq!(super::describe_domains(SearchDomain::NAMES), vec!["name"]);
-        assert_eq!(
-            super::describe_domains(SearchDomain::NAMES | SearchDomain::DOCS),
+            (SearchDomain::NAMES | SearchDomain::DOCS).labels(),
             vec!["name", "doc"]
         );
+    }
+
+    #[test]
+    fn domain_parser_rejects_unknown_tokens() {
+        assert_eq!(SearchDomain::parse("PATH"), Ok(SearchDomain::PATHS));
+        assert!(SearchDomain::parse("unknown").is_err());
     }
 }

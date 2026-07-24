@@ -2084,13 +2084,8 @@ path = "src/lib.rs"
         let filter =
             RenderSelection::for_filter(&crate_data, "Widget::render", false, false, false)?;
         let index = SearchIndex::build(&crate_data, false);
-        let options = SearchOptions::configured(
-            "fixture::Widget::render",
-            SearchDomain::PATHS,
-            true,
-            false,
-            false,
-        );
+        let options =
+            SearchOptions::configured("fixture::Widget::render", SearchDomain::PATHS, true, false);
         let result = index
             .search(&options)
             .into_iter()
