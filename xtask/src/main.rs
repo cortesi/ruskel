@@ -1,10 +1,82 @@
-//! Build-time code generation and project maintenance tasks
+//! Build-time code generation and project maintenance tasks.
 
-use std::{collections::HashMap, error::Error, fs, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
 use clap::{Parser, Subcommand};
 use libruskel::toolchain::nightly_sysroot;
 use rustdoc_types::{Crate, ItemEnum, Visibility};
+use tempfile::NamedTempFile;
+
+/// Corrections for modules whose ownership is not represented reliably by top-level rustdoc uses.
+const STD_MODULE_OVERRIDES: &[(&str, &str)] = &[
+    ("alloc", "alloc"),
+    ("any", "core"),
+    ("array", "core"),
+    ("ascii", "core"),
+    ("backtrace", "std"),
+    ("borrow", "alloc"),
+    ("boxed", "alloc"),
+    ("cell", "core"),
+    ("char", "core"),
+    ("clone", "core"),
+    ("cmp", "core"),
+    ("collections", "alloc"),
+    ("convert", "core"),
+    ("default", "core"),
+    ("env", "std"),
+    ("error", "core"),
+    ("f32", "core"),
+    ("f64", "core"),
+    ("ffi", "core"),
+    ("fmt", "core"),
+    ("fs", "std"),
+    ("future", "core"),
+    ("hash", "core"),
+    ("hint", "core"),
+    ("i128", "core"),
+    ("i16", "core"),
+    ("i32", "core"),
+    ("i64", "core"),
+    ("i8", "core"),
+    ("io", "std"),
+    ("isize", "core"),
+    ("iter", "core"),
+    ("marker", "core"),
+    ("mem", "core"),
+    ("net", "std"),
+    ("num", "core"),
+    ("ops", "core"),
+    ("option", "core"),
+    ("os", "std"),
+    ("panic", "core"),
+    ("path", "std"),
+    ("pin", "core"),
+    ("primitive", "core"),
+    ("process", "std"),
+    ("ptr", "core"),
+    ("rc", "alloc"),
+    ("result", "core"),
+    ("slice", "core"),
+    ("str", "core"),
+    ("string", "alloc"),
+    ("sync", "alloc"),
+    ("task", "core"),
+    ("thread", "std"),
+    ("time", "core"),
+    ("u128", "core"),
+    ("u16", "core"),
+    ("u32", "core"),
+    ("u64", "core"),
+    ("u8", "core"),
+    ("usize", "core"),
+    ("vec", "alloc"),
+];
 
 #[derive(Parser)]
 #[command(name = "xtask")]
@@ -19,12 +91,26 @@ struct Cli {
 #[derive(Subcommand)]
 /// Supported automation commands.
 enum Commands {
-    /// Generate the standard library module mapping
+    /// Generate the standard-library module mapping.
     GenStdMapping {
-        /// Write the output to the source file instead of stdout
-        #[arg(short, long)]
+        /// Write the generated artifact to the repository.
+        #[arg(short, long, conflicts_with = "check")]
         write: bool,
+        /// Fail when the checked-in artifact differs from generated output.
+        #[arg(long, conflicts_with = "write")]
+        check: bool,
     },
+}
+
+/// Requested handling for generated output.
+#[derive(Clone, Copy)]
+enum OutputMode {
+    /// Print generated output.
+    Print,
+    /// Atomically update the checked-in artifact.
+    Write,
+    /// Compare generated output with the checked-in artifact.
+    Check,
 }
 
 /// Run the CLI and dispatch to the selected subcommand.
@@ -32,286 +118,164 @@ fn main() -> Result<(), Box<dyn Error>> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::GenStdMapping { write } => generate_std_mapping(write),
+        Commands::GenStdMapping { write, check } => {
+            let mode = if write {
+                OutputMode::Write
+            } else if check {
+                OutputMode::Check
+            } else {
+                OutputMode::Print
+            };
+            generate_std_mapping(mode)
+        }
     }
 }
 
-/// Load the rustdoc JSON metadata for the provided crate name.
+/// Load rustdoc JSON metadata for one standard-library crate.
 fn load_crate_json(crate_name: &str) -> Result<Crate, Box<dyn Error>> {
-    let sysroot = nightly_sysroot()?;
-    let json_path = sysroot
+    let json_path = nightly_sysroot()?
         .join("share/doc/rust/json")
-        .join(format!("{}.json", crate_name));
+        .join(format!("{crate_name}.json"));
 
     if !json_path.exists() {
         return Err(format!(
-            "JSON file not found: {:?}\nEnsure rust-docs-json component is installed: rustup component add --toolchain nightly rust-docs-json",
-            json_path
-        ).into());
+            "JSON file not found: '{}'\nEnsure rust-docs-json is installed: rustup component add --toolchain nightly rust-docs-json",
+            json_path.display()
+        )
+        .into());
     }
 
-    let json_str = fs::read_to_string(&json_path)?;
-    let crate_data: Crate = serde_json::from_str(&json_str)?;
-    Ok(crate_data)
+    Ok(serde_json::from_str(&fs::read_to_string(json_path)?)?)
 }
 
-/// Map top-level `std` modules to the crate that actually provides them.
-fn find_std_reexports() -> Result<HashMap<String, String>, Box<dyn Error>> {
-    // Load std crate
+/// Discover top-level `std` modules and the crate that defines each re-export.
+fn find_std_reexports() -> Result<BTreeMap<String, String>, Box<dyn Error>> {
     let std_crate = load_crate_json("std")?;
+    let mut mapping = BTreeMap::new();
 
-    let mut mapping = HashMap::new();
-
-    // Get the root module
     if let Some(root_item) = std_crate.index.get(&std_crate.root)
         && let ItemEnum::Module(root_module) = &root_item.inner
     {
-        // Iterate through top-level items in std
         for item_id in &root_module.items {
-            if let Some(item) = std_crate.index.get(item_id) {
-                // Only consider public items
-                if !matches!(item.visibility, Visibility::Public) {
-                    continue;
-                }
+            let Some(item) = std_crate.index.get(item_id) else {
+                continue;
+            };
+            if !matches!(item.visibility, Visibility::Public) {
+                continue;
+            }
+            let Some(name) = &item.name else {
+                continue;
+            };
 
-                if let Some(name) = &item.name {
-                    match &item.inner {
-                        ItemEnum::Use(use_item) => {
-                            // This is a re-export - analyze where it comes from
-                            if use_item.source.starts_with("core::") {
-                                // Extract module name from path like "core::mem"
-                                if let Some(module) = use_item.source.strip_prefix("core::")
-                                    && let Some(module_name) = module.split("::").next()
-                                    && module_name == name
-                                {
-                                    mapping.insert(name.clone(), "core".to_string());
-                                }
-                            } else if use_item.source.starts_with("alloc::") {
-                                // Extract module name from path like "alloc::vec"
-                                if let Some(module) = use_item.source.strip_prefix("alloc::")
-                                    && let Some(module_name) = module.split("::").next()
-                                    && module_name == name
-                                {
-                                    mapping.insert(name.clone(), "alloc".to_string());
-                                }
-                            }
+            match &item.inner {
+                ItemEnum::Use(use_item) => {
+                    for crate_name in ["core", "alloc"] {
+                        if let Some(path) = use_item.source.strip_prefix(crate_name)
+                            && let Some(path) = path.strip_prefix("::")
+                            && path.split("::").next() == Some(name.as_str())
+                        {
+                            mapping.insert(name.clone(), String::from(crate_name));
                         }
-                        ItemEnum::Module(_)
-                            // For modules that are not re-exports, they're std-specific
-                            // But we need to check if this is actually a re-export at the module level
-                            // For now, we'll mark them as std and manually verify later
-                            if !mapping.contains_key(name) => {
-                                mapping.insert(name.clone(), "std".to_string());
-                            }
-                        _ => {}
                     }
                 }
+                ItemEnum::Module(_) => {
+                    mapping
+                        .entry(name.clone())
+                        .or_insert_with(|| String::from("std"));
+                }
+                _ => {}
             }
         }
     }
 
-    // Now manually check some known patterns
-    // Some modules might be re-exported as entire modules, not just use statements
-    let known_core_modules = vec![
-        "any",
-        "array",
-        "ascii",
-        "cell",
-        "char",
-        "clone",
-        "cmp",
-        "convert",
-        "default",
-        "error",
-        "f32",
-        "f64",
-        "ffi",
-        "fmt",
-        "future",
-        "hash",
-        "hint",
-        "i8",
-        "i16",
-        "i32",
-        "i64",
-        "i128",
-        "isize",
-        "iter",
-        "marker",
-        "mem",
-        "num",
-        "ops",
-        "option",
-        "panic",
-        "pin",
-        "primitive",
-        "ptr",
-        "result",
-        "slice",
-        "str",
-        "task",
-        "time",
-        "u8",
-        "u16",
-        "u32",
-        "u64",
-        "u128",
-        "usize",
-    ];
-
-    let known_alloc_modules = vec![
-        "alloc",
-        "borrow",
-        "boxed",
-        "collections",
-        "rc",
-        "string",
-        "vec",
-    ];
-
-    // Update mappings based on known patterns
-    for module in known_core_modules {
-        if mapping.get(module).is_none_or(|v| v == "std") {
-            mapping.insert(module.to_string(), "core".to_string());
-        }
-    }
-
-    for module in known_alloc_modules {
-        // Only update if not already mapped to core
-        if mapping.get(module).is_none_or(|v| v == "std") {
-            mapping.insert(module.to_string(), "alloc".to_string());
-        }
-    }
-
-    // Some special cases where std has its own version
-    let std_specific = vec![
-        "env",
-        "fs",
-        "io",
-        "net",
-        "os",
-        "path",
-        "process",
-        "thread",
-        "backtrace",
-    ];
-
-    // sync exists in both alloc and std, but we want to map to alloc
-    // since that's where the basic sync types (Arc) come from
-    mapping.insert("sync".to_string(), "alloc".to_string());
-
-    for module in std_specific {
-        mapping.insert(module.to_string(), "std".to_string());
+    for &(module, crate_name) in STD_MODULE_OVERRIDES {
+        mapping.insert(String::from(module), String::from(crate_name));
     }
 
     Ok(mapping)
 }
 
-/// Render the module mapping into Rust source code.
-fn generate_rust_code(mapping: &HashMap<String, String>) -> String {
-    let mut output = String::new();
-
-    output.push_str("/// Mapping of std library modules to their actual crate location.\n");
-    output.push_str("/// This provides a single source of truth for:\n");
-    output.push_str("/// 1. Which modules should not be resolved as standalone crates\n");
-    output.push_str("/// 2. Where std re-exports actually come from (core/alloc/std)\n");
-    output.push_str("///\n");
-    output.push_str("/// Generated by `cargo xtask gen-std-mapping`\n");
-    output.push_str("/// To regenerate: `cargo xtask gen-std-mapping --write`\n");
-    output.push_str("///\n");
-    output.push_str("/// Based on the Rust standard library structure where:\n");
-    output.push_str("/// - `core`: fundamental types and traits, no heap allocation\n");
-    output.push_str("/// - `alloc`: heap allocation support (Vec, String, etc.)\n");
-    output.push_str("/// - `std`: OS abstractions and re-exports from core/alloc\n");
-    output.push_str(
-        "static STD_MODULE_MAPPING: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {\n",
+/// Render a sorted standard-library mapping artifact.
+fn render_std_mapping(mapping: &BTreeMap<String, String>) -> String {
+    let mut output = String::from(
+        "// @generated by `cargo xtask gen-std-mapping --write`.\n\
+         // Check with `cargo xtask gen-std-mapping --check`.\n\n\
+         /// Sorted top-level module names and their rustdoc-owning crates.\n\
+         pub const STD_MODULE_MAPPING: &[(&str, &str)] = &[\n",
     );
-    output.push_str("    let mut map = HashMap::new();\n");
-    output.push('\n');
 
-    // Group by crate for better organization
-    let mut by_crate: HashMap<&str, Vec<(&str, &str)>> = HashMap::new();
     for (module, crate_name) in mapping {
-        by_crate
-            .entry(crate_name.as_str())
-            .or_default()
-            .push((module.as_str(), crate_name.as_str()));
+        output.push_str(&format!("    (\"{module}\", \"{crate_name}\"),\n"));
     }
-
-    // Sort each group
-    for (crate_name, modules) in &mut by_crate {
-        modules.sort_by_key(|&(module, _)| module);
-
-        output.push_str(&format!("    // Modules from {}\n", crate_name));
-        for (module, _) in modules {
-            output.push_str(&format!(
-                "    map.insert(\"{}\", \"{}\");\n",
-                module, crate_name
-            ));
-        }
-        output.push('\n');
-    }
-
-    output.push_str("    map\n");
-    output.push_str("});\n");
-
+    output.push_str("];\n");
     output
 }
 
-/// Build the std module mapping and optionally write it to the repository.
-fn generate_std_mapping(write: bool) -> Result<(), Box<dyn Error>> {
+/// Return the repository path for the generated mapping artifact.
+fn mapping_path() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("xtask must be inside the repository")
+        .join("crates/libruskel/src/stdlib_mapping.rs")
+}
+
+/// Atomically replace a generated artifact.
+fn write_atomic(path: &Path, contents: &[u8]) -> Result<(), Box<dyn Error>> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("generated path '{}' has no parent", path.display()))?;
+    let mut temporary = NamedTempFile::new_in(parent)?;
+    temporary.write_all(contents)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path)?;
+    Ok(())
+}
+
+/// Generate the mapping once, then print, write, or verify the same bytes.
+fn generate_std_mapping(mode: OutputMode) -> Result<(), Box<dyn Error>> {
     eprintln!("Analyzing standard library structure...");
-
     let mapping = find_std_reexports()?;
-
+    let generated = render_std_mapping(&mapping);
+    let target = mapping_path();
     eprintln!("Found {} modules", mapping.len());
 
-    let rust_code = generate_rust_code(&mapping);
-
-    if write {
-        // Find the target file
-        let target_path = PathBuf::from("crates/libruskel/src/cargoutils.rs");
-        if !target_path.exists() {
-            return Err(format!("Target file not found: {:?}", target_path).into());
+    match mode {
+        OutputMode::Print => print!("{generated}"),
+        OutputMode::Write => {
+            write_atomic(&target, generated.as_bytes())?;
+            eprintln!("Updated {}", target.display());
         }
-
-        // Read the current file
-        let current_content = fs::read_to_string(&target_path)?;
-
-        // Find the start and end markers
-        let start_marker =
-            "static STD_MODULE_MAPPING: Lazy<HashMap<&'static str, &'static str>> = Lazy::new(|| {";
-        let end_marker = "});\n";
-
-        let start_pos = current_content
-            .find(start_marker)
-            .ok_or("Could not find STD_MODULE_MAPPING start marker")?;
-
-        // Find the end position after the start
-        let search_from = start_pos + start_marker.len();
-        let relative_end = current_content[search_from..]
-            .find(end_marker)
-            .ok_or("Could not find STD_MODULE_MAPPING end marker")?;
-        let end_pos = search_from + relative_end + end_marker.len();
-
-        // Find the documentation comment start
-        let doc_start = current_content[..start_pos]
-            .rfind("/// Mapping of std library modules")
-            .ok_or("Could not find documentation comment")?;
-
-        // Replace the content
-        let new_content = format!(
-            "{}{}{}",
-            &current_content[..doc_start],
-            rust_code,
-            &current_content[end_pos..]
-        );
-
-        fs::write(&target_path, new_content)?;
-        eprintln!("Updated {}", target_path.display());
-    } else {
-        println!("{}", rust_code);
+        OutputMode::Check => {
+            let checked_in = fs::read(&target)?;
+            if checked_in != generated.as_bytes() {
+                return Err(format!(
+                    "{} is stale; run `cargo xtask gen-std-mapping --write`",
+                    target.display()
+                )
+                .into());
+            }
+            eprintln!("{} is current", target.display());
+        }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renderer_is_sorted_and_repeatable() {
+        let mapping = BTreeMap::from([
+            (String::from("vec"), String::from("alloc")),
+            (String::from("any"), String::from("core")),
+        ]);
+
+        let first = render_std_mapping(&mapping);
+        let second = render_std_mapping(&mapping);
+
+        assert_eq!(first, second);
+        assert!(first.find("(\"any\"").unwrap() < first.find("(\"vec\"").unwrap());
+    }
 }

@@ -12,3 +12,4 @@ rustdoc-types = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
 libruskel = { workspace = true }
+tempfile = { workspace = true }

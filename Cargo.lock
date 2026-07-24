@@ -4781,6 +4781,7 @@ dependencies = [
  "libruskel",
  "rustdoc-types",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

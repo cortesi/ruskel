@@ -113,10 +113,10 @@ Each public operation receives one coherent crate request.
 
 Standard-library mapping generation is isolated, sorted, and checkable.
 
-- [ ] Implement D6 as specified.
-- [ ] Complete D6's required supporting and downstream work.
-- [ ] Run D6's proof.
-- [ ] Review the settled stage.
+- [x] Implement D6 as specified.
+- [x] Complete D6's required supporting and downstream work.
+- [x] Run D6's proof.
+- [x] Review the settled stage.
 
 ### Stage 7: D7 — Separate Target Resolution from Rustdoc Execution
 

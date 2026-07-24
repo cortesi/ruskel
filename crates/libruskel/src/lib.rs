@@ -36,6 +36,10 @@ mod search;
 mod selection;
 /// Shared signature formatting used by search and rendering.
 mod signature;
+/// Standard-library rustdoc loading and re-export mapping.
+mod stdlib;
+/// Generated standard-library module mapping.
+mod stdlib_mapping;
 /// Target parsing helpers for user-provided specifications.
 mod target;
 /// Shared nightly/rustup helpers.
