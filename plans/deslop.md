@@ -95,10 +95,10 @@ All current filter path forms and search results use one item-ID selection model
 
 All cache readers and collectors use one recognized-tree policy.
 
-- [ ] Implement D4 as specified.
-- [ ] Complete D4's required supporting and downstream work.
-- [ ] Run D4's proof.
-- [ ] Review the settled stage.
+- [x] Implement D4 as specified.
+- [x] Complete D4's required supporting and downstream work.
+- [x] Run D4's proof.
+- [x] Review the settled stage.
 
 ### Stage 5: D5 — Replace Positional Query Arguments with Request Options
 

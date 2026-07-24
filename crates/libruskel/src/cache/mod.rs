@@ -1,5 +1,6 @@
 //! Dedicated cache ownership, identity, reporting, and build leases.
 
+mod inventory;
 mod layout;
 mod maintenance;
 mod owner;

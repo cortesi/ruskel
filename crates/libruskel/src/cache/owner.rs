@@ -5,7 +5,6 @@ use std::{
     env, fs,
     fs::File,
     path::{Path, PathBuf},
-    result,
     sync::{Arc, Mutex, OnceLock, Weak},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -15,7 +14,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::{
-    layout::{self, CacheLayout, LAST_USE, is_identity, is_trash_name},
+    inventory::{CacheInventory, ToolchainInventory, WORKSPACE_METADATA},
+    layout::{self, CacheLayout, LAST_USE, is_identity},
     maintenance::MaintenanceWorker,
     report::{CacheIssue, CacheStatus, CleanReport, ToolchainCacheStatus, WorkspaceCacheStatus},
 };
@@ -23,9 +23,6 @@ use crate::error::{Result, RuskelError};
 
 /// Default maximum recognized cache usage before maintenance evicts entries.
 pub(super) const HIGH_WATER_BYTES: u64 = 20_000_000_000;
-/// Optional display metadata stored inside each workspace entry.
-const WORKSPACE_METADATA: &str = "ruskel.workspace.json";
-
 /// Weak registry that shares cache owners by canonical root.
 static OWNERS: Lazy<Mutex<HashMap<PathBuf, Weak<CacheOwner>>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -157,6 +154,7 @@ impl CacheOwner {
         let Some(_root) = self.layout.try_lock_root()? else {
             let usage_after = self.status()?.total_bytes;
             return Ok(CleanReport {
+                root: self.layout.canonical_root()?,
                 removed_entries: 0,
                 removed_bytes: 0,
                 root_busy: true,
@@ -167,6 +165,7 @@ impl CacheOwner {
         };
 
         let mut report = CleanReport {
+            root: self.layout.canonical_root()?,
             removed_entries: 0,
             removed_bytes: 0,
             root_busy: false,
@@ -174,11 +173,56 @@ impl CacheOwner {
             failures: Vec::new(),
             usage_after: 0,
         };
-        self.clean_trash_entries(&mut report)?;
-        self.clean_build_entries(&mut report)?;
+        let inventory = CacheInventory::collect(&self.layout)?;
+        report.skipped.extend(inventory.issues.clone());
+        for trash in inventory.trash {
+            if !trash.revalidate() {
+                report.skipped.push(CacheIssue::new(
+                    trash.path,
+                    "trash entry changed after inventory",
+                ));
+                continue;
+            }
+            let size = trash.size_bytes.unwrap_or(0);
+            match layout::remove_no_follow(&trash.path) {
+                Ok(()) => {
+                    report.removed_entries += 1;
+                    report.removed_bytes = report.removed_bytes.saturating_add(size);
+                }
+                Err(error) => report
+                    .failures
+                    .push(CacheIssue::new(trash.path, error.to_string())),
+            }
+        }
+        for toolchain in inventory.toolchains {
+            if !toolchain.revalidate() {
+                report.skipped.push(CacheIssue::new(
+                    toolchain.path,
+                    "toolchain entry changed after inventory",
+                ));
+                continue;
+            }
+            let label = format!("{}.{}", toolchain.identity, toolchain.identity);
+            match layout::move_to_trash(self.layout.root(), &toolchain.path, &label)
+                .and_then(|trash| layout::remove_no_follow(&trash))
+            {
+                Ok(()) => {
+                    report.removed_entries += 1;
+                    report.removed_bytes =
+                        report.removed_bytes.saturating_add(toolchain.size_bytes);
+                }
+                Err(error) => report
+                    .failures
+                    .push(CacheIssue::new(toolchain.path, error.to_string())),
+            }
+        }
         let status = self.status_unlocked()?;
         report.usage_after = status.total_bytes;
-        report.skipped.extend(status.skipped);
+        for issue in status.skipped {
+            if !report.skipped.contains(&issue) {
+                report.skipped.push(issue);
+            }
+        }
         Ok(report)
     }
 
@@ -245,28 +289,20 @@ impl CacheOwner {
 
     /// Collect status when the caller already holds the required root lease.
     fn status_unlocked(&self) -> Result<CacheStatus> {
-        let mut skipped = Vec::new();
+        let inventory = CacheInventory::collect(&self.layout)?;
+        let mut skipped = inventory.issues.clone();
         let mut toolchains = Vec::new();
-        let build_dir = self.layout.build_dir();
-
-        for entry in read_dir_sorted(&build_dir)? {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let path = entry.path();
-            if !is_owned_directory(&path) || !is_identity(&name) {
-                skipped.push(CacheIssue::new(path, "unrecognized toolchain cache entry"));
-                continue;
-            }
-            match self.toolchain_status(&name, &path, &mut skipped) {
+        for toolchain in &inventory.toolchains {
+            match self.toolchain_status(toolchain, &mut skipped) {
                 Ok(status) => toolchains.push(status),
-                Err(error) => skipped.push(CacheIssue::new(path, error.to_string())),
+                Err(error) => {
+                    skipped.push(CacheIssue::new(&toolchain.path, error.to_string()));
+                }
             }
         }
 
-        let trash_bytes = self.trash_status(&mut skipped)?;
-        let build_bytes = toolchains
-            .iter()
-            .fold(0_u64, |total, entry| total.saturating_add(entry.size_bytes));
-        let total_bytes = build_bytes.saturating_add(trash_bytes);
+        let trash_bytes = inventory.trash_usage();
+        let total_bytes = inventory.recognized_usage();
 
         Ok(CacheStatus {
             root: self.layout.canonical_root()?,
@@ -281,40 +317,25 @@ impl CacheOwner {
     /// Collect one recognized toolchain tree and its workspaces.
     fn toolchain_status(
         &self,
-        identity: &str,
-        path: &Path,
+        inventory: &ToolchainInventory,
         skipped: &mut Vec<CacheIssue>,
     ) -> Result<ToolchainCacheStatus> {
         let mut workspaces = Vec::new();
-        for entry in read_dir_sorted(path)? {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let entry_path = entry.path();
-            if name == LAST_USE {
+        for workspace in &inventory.workspaces {
+            let Some(size_bytes) = workspace.size_bytes else {
                 continue;
-            }
-            if !is_owned_directory(&entry_path) || !is_identity(&name) {
-                skipped.push(CacheIssue::new(
-                    entry_path,
-                    "unrecognized workspace cache entry",
-                ));
-                continue;
-            }
-            let size_bytes = match layout::path_size(&entry_path) {
-                Ok(size) => size,
-                Err(error) => {
-                    skipped.push(CacheIssue::new(&entry_path, error.to_string()));
-                    continue;
-                }
             };
-            let last_use = read_system_time(&entry_path.join(LAST_USE), skipped);
+            let last_use = system_time(workspace.last_use, &workspace.path.join(LAST_USE), skipped);
             let metadata = read_workspace_status_metadata(
-                &entry_path.join(WORKSPACE_METADATA),
-                &name,
+                &workspace.path.join(WORKSPACE_METADATA),
+                &workspace.identity,
                 skipped,
             );
-            let locked = self.layout.is_locked(&self.layout.workspace_lock(&name))?;
+            let locked = self
+                .layout
+                .is_locked(&self.layout.workspace_lock(&workspace.identity))?;
             workspaces.push(WorkspaceCacheStatus {
-                identity: name,
+                identity: workspace.identity.clone(),
                 workspace_root: metadata
                     .as_ref()
                     .map(|metadata| PathBuf::from(&metadata.workspace_root)),
@@ -332,89 +353,17 @@ impl CacheOwner {
                 locked,
             });
         }
-        let size_bytes = layout::path_size(path)?;
-        let last_use = read_system_time(&path.join(LAST_USE), skipped);
+        let last_use = system_time(inventory.last_use, &inventory.path.join(LAST_USE), skipped);
         let locked = self
             .layout
-            .is_locked(&self.layout.toolchain_lock(identity))?;
+            .is_locked(&self.layout.toolchain_lock(&inventory.identity))?;
         Ok(ToolchainCacheStatus {
-            identity: identity.to_string(),
-            size_bytes,
+            identity: inventory.identity.clone(),
+            size_bytes: inventory.size_bytes,
             last_use,
             locked,
             workspaces,
         })
-    }
-
-    /// Measure recognized trash entries and report foreign entries.
-    fn trash_status(&self, skipped: &mut Vec<CacheIssue>) -> Result<u64> {
-        let mut total = 0_u64;
-        for entry in read_dir_sorted(&self.layout.trash_dir())? {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let path = entry.path();
-            if !is_trash_name(&name) || !is_owned_directory(&path) {
-                skipped.push(CacheIssue::new(path, "unrecognized trash entry"));
-                continue;
-            }
-            match layout::path_size(&path) {
-                Ok(size) => total = total.saturating_add(size),
-                Err(error) => skipped.push(CacheIssue::new(path, error.to_string())),
-            }
-        }
-        Ok(total)
-    }
-
-    /// Move and remove recognized toolchain trees.
-    fn clean_build_entries(&self, report: &mut CleanReport) -> Result<()> {
-        for entry in read_dir_sorted(&self.layout.build_dir())? {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let path = entry.path();
-            if !is_identity(&name) || !is_owned_directory(&path) {
-                report
-                    .skipped
-                    .push(CacheIssue::new(path, "unrecognized toolchain cache entry"));
-                continue;
-            }
-            let size = layout::path_size(&path).unwrap_or(0);
-            let label = format!("{name}.{name}");
-            match layout::move_to_trash(self.layout.root(), &path, &label)
-                .and_then(|trash| layout::remove_no_follow(&trash))
-            {
-                Ok(()) => {
-                    report.removed_entries += 1;
-                    report.removed_bytes = report.removed_bytes.saturating_add(size);
-                }
-                Err(error) => report
-                    .failures
-                    .push(CacheIssue::new(path, error.to_string())),
-            }
-        }
-        Ok(())
-    }
-
-    /// Remove recognized entries that are already in trash.
-    fn clean_trash_entries(&self, report: &mut CleanReport) -> Result<()> {
-        for entry in read_dir_sorted(&self.layout.trash_dir())? {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let path = entry.path();
-            if !is_trash_name(&name) || !is_owned_directory(&path) {
-                report
-                    .skipped
-                    .push(CacheIssue::new(path, "unrecognized trash entry"));
-                continue;
-            }
-            let size = layout::path_size(&path).unwrap_or(0);
-            match layout::remove_no_follow(&path) {
-                Ok(()) => {
-                    report.removed_entries += 1;
-                    report.removed_bytes = report.removed_bytes.saturating_add(size);
-                }
-                Err(error) => report
-                    .failures
-                    .push(CacheIssue::new(path, error.to_string())),
-            }
-        }
-        Ok(())
     }
 }
 
@@ -586,9 +535,13 @@ fn read_workspace_status_metadata(
 }
 
 /// Read one last-use timestamp and convert invalid metadata into a status issue.
-fn read_system_time(path: &Path, skipped: &mut Vec<CacheIssue>) -> Option<SystemTime> {
-    match layout::read_timestamp(path) {
-        Ok(Some(seconds)) => {
+fn system_time(
+    seconds: Option<u64>,
+    path: &Path,
+    skipped: &mut Vec<CacheIssue>,
+) -> Option<SystemTime> {
+    match seconds {
+        Some(seconds) => {
             let timestamp = UNIX_EPOCH + Duration::from_secs(seconds);
             if timestamp > SystemTime::now() {
                 skipped.push(CacheIssue::new(path, "last-use metadata is in the future"));
@@ -597,39 +550,8 @@ fn read_system_time(path: &Path, skipped: &mut Vec<CacheIssue>) -> Option<System
                 Some(timestamp)
             }
         }
-        Ok(None) => {
-            skipped.push(CacheIssue::new(path, "last-use metadata is missing"));
-            None
-        }
-        Err(error) => {
-            skipped.push(CacheIssue::new(path, error.to_string()));
-            None
-        }
+        None => None,
     }
-}
-
-/// Read a directory in deterministic file-name order.
-pub(super) fn read_dir_sorted(path: &Path) -> Result<Vec<fs::DirEntry>> {
-    let mut entries = fs::read_dir(path)
-        .map_err(|source| RuskelError::CacheIo {
-            action: "read cache directory",
-            path: path.to_path_buf(),
-            source,
-        })?
-        .collect::<result::Result<Vec<_>, _>>()
-        .map_err(|source| RuskelError::CacheIo {
-            action: "read cache directory",
-            path: path.to_path_buf(),
-            source,
-        })?;
-    entries.sort_by_key(fs::DirEntry::file_name);
-    Ok(entries)
-}
-
-/// Return whether a path is a real directory and not a symbolic link.
-pub(super) fn is_owned_directory(path: &Path) -> bool {
-    fs::symlink_metadata(path)
-        .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
 }
 
 #[cfg(unix)]
@@ -933,7 +855,8 @@ mod tests {
         assert!(!report.is_complete());
         assert_eq!(report.failures().len(), 1);
 
-        for entry in read_dir_sorted(&owner.layout.trash_dir())? {
+        for entry in fs::read_dir(owner.layout.trash_dir())? {
+            let entry = entry?;
             let protected = entry.path().join(&workspace_identity);
             if protected.exists() {
                 fs::set_permissions(protected, fs::Permissions::from_mode(0o700))?;

@@ -177,6 +177,8 @@ impl CacheStatus {
 /// Result of one explicit cache-clean operation.
 #[derive(Clone, Debug)]
 pub struct CleanReport {
+    /// Canonical cache root operated on by this clean.
+    pub(super) root: PathBuf,
     /// Number of removed top-level owned entries.
     pub(super) removed_entries: u64,
     /// Recognized bytes removed.
@@ -192,6 +194,11 @@ pub struct CleanReport {
 }
 
 impl CleanReport {
+    /// Return the canonical cache root.
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     /// Return the number of removed toolchain and trash entries.
     pub fn removed_entries(&self) -> u64 {
         self.removed_entries

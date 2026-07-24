@@ -430,9 +430,8 @@ fn run(cli: &Cli) -> Result<bool, Box<dyn Error>> {
         return Ok(true);
     }
     if cli.clean_cache {
-        let root = ruskel.cache_status()?.root().to_path_buf();
         let report = ruskel.clean_cache()?;
-        print_clean_report(&root, &report);
+        print_clean_report(&report);
         return Ok(report.is_complete());
     }
     if cli.mcp {
@@ -479,7 +478,7 @@ fn print_cache_status(status: &CacheStatus) {
 }
 
 /// Print a deterministic cache-clean report.
-fn print_clean_report(root: &Path, report: &CleanReport) {
+fn print_clean_report(report: &CleanReport) {
     let outcome = if report.root_busy() {
         "busy"
     } else if report.failures().is_empty() {
@@ -487,7 +486,7 @@ fn print_clean_report(root: &Path, report: &CleanReport) {
     } else {
         "partial"
     };
-    println!("Cache root: {}", root.display());
+    println!("Cache root: {}", report.root().display());
     println!("Clean result: {outcome}");
     println!("Removed entries: {}", report.removed_entries());
     println!("Removed bytes: {}", format_size(report.removed_bytes()));

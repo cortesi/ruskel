@@ -2,7 +2,7 @@
 
 use std::{
     fmt, io,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         Arc, Barrier, Mutex,
         atomic::{AtomicU8, Ordering},
@@ -13,8 +13,9 @@ use std::{
 };
 
 use super::{
-    layout::{self, CacheLayout, LAST_USE, is_identity, is_trash_name},
-    owner::{HIGH_WATER_BYTES, is_owned_directory, read_dir_sorted},
+    inventory::{CacheInventory, WorkspaceInventory},
+    layout::{self, CacheLayout, LAST_USE},
+    owner::HIGH_WATER_BYTES,
     report::CacheIssue,
 };
 use crate::error::{Result, RuskelError};
@@ -233,21 +234,6 @@ enum PassMode {
     Synchronous,
 }
 
-/// Candidate workspace for age or budget eviction.
-#[derive(Debug)]
-struct WorkspaceCandidate {
-    /// Full toolchain identity.
-    toolchain: String,
-    /// Full workspace identity.
-    workspace: String,
-    /// Owned workspace directory.
-    path: PathBuf,
-    /// Last-use time in Unix seconds.
-    last_use: u64,
-    /// Recognized size.
-    size_bytes: u64,
-}
-
 /// Drain wake messages and execute coalesced passes.
 fn worker_loop(
     layout: &CacheLayout,
@@ -339,16 +325,16 @@ fn routine_due(layout: &CacheLayout, now: u64, interval: Duration) -> bool {
 
 /// Remove recognized trash left by interrupted deletion.
 fn cleanup_trash(layout: &CacheLayout, result: &mut MaintenanceResult) -> Result<()> {
-    for entry in read_dir_sorted(&layout.trash_dir())? {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let path = entry.path();
-        if !is_trash_name(&name) || !is_owned_directory(&path) {
-            result
-                .issues
-                .push(CacheIssue::new(path, "unrecognized trash entry"));
+    let inventory = collect_inventory(layout, result)?;
+    for trash in inventory.trash {
+        if !trash.revalidate() {
+            push_issue(
+                result,
+                CacheIssue::new(trash.path, "trash entry changed after inventory"),
+            );
             continue;
         }
-        remove_candidate(&path, result);
+        remove_candidate(&trash.path, result);
     }
     Ok(())
 }
@@ -361,29 +347,38 @@ fn collect_old_toolchains(
     now: u64,
     result: &mut MaintenanceResult,
 ) -> Result<()> {
-    for entry in read_dir_sorted(&layout.build_dir())? {
-        let identity = entry.file_name().to_string_lossy().into_owned();
-        let path = entry.path();
-        if !is_identity(&identity) || !is_owned_directory(&path) {
+    let inventory = collect_inventory(layout, result)?;
+    for toolchain in inventory.toolchains {
+        if current_toolchain == Some(toolchain.identity.as_str()) {
             continue;
         }
-        if current_toolchain == Some(identity.as_str()) {
-            continue;
-        }
-        let Some(last_use) = valid_past_timestamp(&path.join(LAST_USE), now, result) else {
+        let Some(last_use) = valid_past_timestamp(
+            toolchain.last_use,
+            &toolchain.path.join(LAST_USE),
+            now,
+            result,
+        ) else {
             continue;
         };
         if now.saturating_sub(last_use) < hooks.toolchain_retention.as_secs() {
             continue;
         }
-        let lock_path = layout.toolchain_lock(&identity);
+        let lock_path = layout.toolchain_lock(&toolchain.identity);
         let Some(lease) = layout.try_lock_exclusive(&lock_path)? else {
             continue;
         };
-        let label = format!("{identity}.{identity}");
-        match layout::move_to_trash(layout.root(), &path, &label) {
+        if !toolchain.revalidate() {
+            push_issue(
+                result,
+                CacheIssue::new(toolchain.path, "toolchain entry changed after inventory"),
+            );
+            drop(lease);
+            continue;
+        }
+        let label = format!("{}.{}", toolchain.identity, toolchain.identity);
+        match layout::move_to_trash(layout.root(), &toolchain.path, &label) {
             Ok(trash) => remove_candidate(&trash, result),
-            Err(error) => result.issues.push(CacheIssue::new(path, error.to_string())),
+            Err(error) => push_issue(result, CacheIssue::new(toolchain.path, error.to_string())),
         }
         drop(lease);
     }
@@ -397,32 +392,38 @@ fn collect_old_workspaces(
     now: u64,
     result: &mut MaintenanceResult,
 ) -> Result<()> {
-    for toolchain_entry in read_dir_sorted(&layout.build_dir())? {
-        let toolchain = toolchain_entry.file_name().to_string_lossy().into_owned();
-        let toolchain_path = toolchain_entry.path();
-        if !is_identity(&toolchain) || !is_owned_directory(&toolchain_path) {
-            continue;
-        }
-        for entry in read_dir_sorted(&toolchain_path)? {
-            let workspace = entry.file_name().to_string_lossy().into_owned();
-            let path = entry.path();
-            if workspace == LAST_USE || !is_identity(&workspace) || !is_owned_directory(&path) {
-                continue;
-            }
-            let Some(last_use) = valid_past_timestamp(&path.join(LAST_USE), now, result) else {
+    let inventory = collect_inventory(layout, result)?;
+    for toolchain in inventory.toolchains {
+        for workspace in toolchain.workspaces {
+            let Some(last_use) = valid_past_timestamp(
+                workspace.last_use,
+                &workspace.path.join(LAST_USE),
+                now,
+                result,
+            ) else {
                 continue;
             };
             if now.saturating_sub(last_use) < hooks.workspace_retention.as_secs() {
                 continue;
             }
-            let lock_path = layout.workspace_lock(&workspace);
+            let lock_path = layout.workspace_lock(&workspace.identity);
             let Some(lease) = layout.try_lock_exclusive(&lock_path)? else {
                 continue;
             };
-            let label = format!("{toolchain}.{workspace}");
-            match layout::move_to_trash(layout.root(), &path, &label) {
+            if !workspace.revalidate() {
+                push_issue(
+                    result,
+                    CacheIssue::new(workspace.path, "workspace entry changed after inventory"),
+                );
+                drop(lease);
+                continue;
+            }
+            let label = format!("{}.{}", workspace.toolchain, workspace.identity);
+            match layout::move_to_trash(layout.root(), &workspace.path, &label) {
                 Ok(trash) => remove_candidate(&trash, result),
-                Err(error) => result.issues.push(CacheIssue::new(path, error.to_string())),
+                Err(error) => {
+                    push_issue(result, CacheIssue::new(workspace.path, error.to_string()))
+                }
             }
             drop(lease);
         }
@@ -437,111 +438,96 @@ fn enforce_budget(
     now: u64,
     result: &mut MaintenanceResult,
 ) -> Result<()> {
-    let mut candidates = workspace_candidates(layout, now, result)?;
-    let mut usage = recognized_usage(layout, result)?;
+    let inventory = collect_inventory(layout, result)?;
+    let mut candidates: Vec<(WorkspaceInventory, u64)> = inventory
+        .toolchains
+        .iter()
+        .flat_map(|toolchain| toolchain.workspaces.iter())
+        .filter_map(|workspace| {
+            let last_use = valid_past_timestamp(
+                workspace.last_use,
+                &workspace.path.join(LAST_USE),
+                now,
+                result,
+            )?;
+            workspace.size_bytes.map(|_| (workspace.clone(), last_use))
+        })
+        .collect();
+    let mut usage = inventory.recognized_usage();
     if usage <= hooks.high_water_bytes || candidates.len() <= 1 {
         return Ok(());
     }
-    candidates.sort_by_key(|candidate| candidate.last_use);
+    candidates.sort_by_key(|(_, last_use)| *last_use);
     let newest = candidates
         .iter()
-        .max_by_key(|candidate| candidate.last_use)
-        .map(|candidate| candidate.path.clone());
+        .max_by_key(|(_, last_use)| *last_use)
+        .map(|(candidate, _)| candidate.path.clone());
 
-    for candidate in candidates {
+    for (candidate, _) in candidates {
         if usage <= hooks.eviction_target_bytes || newest.as_ref() == Some(&candidate.path) {
             continue;
         }
-        let lock_path = layout.workspace_lock(&candidate.workspace);
+        let lock_path = layout.workspace_lock(&candidate.identity);
         let Some(lease) = layout.try_lock_exclusive(&lock_path)? else {
             continue;
         };
-        let label = format!("{}.{}", candidate.toolchain, candidate.workspace);
+        if !candidate.revalidate() {
+            push_issue(
+                result,
+                CacheIssue::new(candidate.path, "workspace entry changed after inventory"),
+            );
+            drop(lease);
+            continue;
+        }
+        let label = format!("{}.{}", candidate.toolchain, candidate.identity);
         match layout::move_to_trash(layout.root(), &candidate.path, &label) {
             Ok(trash) => {
                 remove_candidate(&trash, result);
-                usage = usage.saturating_sub(candidate.size_bytes);
+                usage = usage.saturating_sub(candidate.size_bytes.unwrap_or(0));
             }
-            Err(error) => result
-                .issues
-                .push(CacheIssue::new(candidate.path, error.to_string())),
+            Err(error) => push_issue(result, CacheIssue::new(candidate.path, error.to_string())),
         }
         drop(lease);
     }
     Ok(())
 }
 
-/// Gather valid workspace entries for budget ordering.
-fn workspace_candidates(
-    layout: &CacheLayout,
+/// Read an eligible timestamp that is not in the future.
+fn valid_past_timestamp(
+    value: Option<u64>,
+    path: &Path,
     now: u64,
     result: &mut MaintenanceResult,
-) -> Result<Vec<WorkspaceCandidate>> {
-    let mut candidates = Vec::new();
-    for toolchain_entry in read_dir_sorted(&layout.build_dir())? {
-        let toolchain = toolchain_entry.file_name().to_string_lossy().into_owned();
-        let toolchain_path = toolchain_entry.path();
-        if !is_identity(&toolchain) || !is_owned_directory(&toolchain_path) {
-            continue;
+) -> Option<u64> {
+    match value {
+        Some(value) if value <= now => Some(value),
+        Some(_) => {
+            push_issue(
+                result,
+                CacheIssue::new(path, "last-use metadata is in the future"),
+            );
+            None
         }
-        for entry in read_dir_sorted(&toolchain_path)? {
-            let workspace = entry.file_name().to_string_lossy().into_owned();
-            let path = entry.path();
-            if workspace == LAST_USE || !is_identity(&workspace) || !is_owned_directory(&path) {
-                continue;
-            }
-            let Some(last_use) = valid_past_timestamp(&path.join(LAST_USE), now, result) else {
-                continue;
-            };
-            match layout::path_size(&path) {
-                Ok(size_bytes) => candidates.push(WorkspaceCandidate {
-                    toolchain: toolchain.clone(),
-                    workspace,
-                    path,
-                    last_use,
-                    size_bytes,
-                }),
-                Err(error) => result.issues.push(CacheIssue::new(path, error.to_string())),
-            }
-        }
+        None => None,
     }
-    Ok(candidates)
 }
 
-/// Measure all recognized build and trash data.
-fn recognized_usage(layout: &CacheLayout, result: &mut MaintenanceResult) -> Result<u64> {
-    let mut total = 0_u64;
-    for directory in [layout.build_dir(), layout.trash_dir()] {
-        match layout::path_size(&directory) {
-            Ok(size) => total = total.saturating_add(size),
-            Err(error) => result
-                .issues
-                .push(CacheIssue::new(directory, error.to_string())),
-        }
+/// Collect one inventory and merge its issues without duplicates.
+fn collect_inventory(
+    layout: &CacheLayout,
+    result: &mut MaintenanceResult,
+) -> Result<CacheInventory> {
+    let inventory = CacheInventory::collect(layout)?;
+    for issue in &inventory.issues {
+        push_issue(result, issue.clone());
     }
-    Ok(total)
+    Ok(inventory)
 }
 
-/// Read an eligible timestamp that is not in the future.
-fn valid_past_timestamp(path: &Path, now: u64, result: &mut MaintenanceResult) -> Option<u64> {
-    match layout::read_timestamp(path) {
-        Ok(Some(value)) if value <= now => Some(value),
-        Ok(Some(_)) => {
-            result
-                .issues
-                .push(CacheIssue::new(path, "last-use metadata is in the future"));
-            None
-        }
-        Ok(None) => {
-            result
-                .issues
-                .push(CacheIssue::new(path, "last-use metadata is missing"));
-            None
-        }
-        Err(error) => {
-            result.issues.push(CacheIssue::new(path, error.to_string()));
-            None
-        }
+/// Append one issue only once per maintenance pass.
+fn push_issue(result: &mut MaintenanceResult, issue: CacheIssue) {
+    if !result.issues.contains(&issue) {
+        result.issues.push(issue);
     }
 }
 
