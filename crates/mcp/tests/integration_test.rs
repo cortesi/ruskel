@@ -2,18 +2,21 @@
 //!
 //! These tests verify the MCP server protocol implementation using the tmcp client.
 
-use std::{env, io, sync::OnceLock, time::Duration};
+use std::{io, result::Result as StdResult, sync::OnceLock, time::Duration};
 
-use libruskel::Ruskel;
+use libruskel::{Ruskel, toolchain::ensure_nightly_with_docs};
 use ruskel_mcp::{RuskelServer, RuskelServerDefaults};
-use tmcp::{Arguments, Client, Result, Server, schema::InitializeResult};
+use tmcp::{
+    Arguments, Client, Result, Server,
+    schema::{CallToolResult, InitializeResult},
+};
 use tokio::{
     io::{duplex, split},
     task::JoinHandle,
     time::timeout,
 };
 
-static TEST_MODE_ENV: OnceLock<()> = OnceLock::new();
+static STD_DOCS_PREREQUISITE: OnceLock<()> = OnceLock::new();
 type ServerTask = JoinHandle<()>;
 
 /// Helper to create a test MCP client connected to an in-process server.
@@ -25,10 +28,6 @@ async fn create_test_client() -> Result<(Client, ServerTask)> {
 async fn create_test_client_with_defaults(
     defaults: RuskelServerDefaults,
 ) -> Result<(Client, ServerTask)> {
-    TEST_MODE_ENV.get_or_init(|| unsafe {
-        env::set_var("RUSKEL_MCP_TEST_MODE", "1");
-    });
-
     let ruskel = Ruskel::new().with_silent(true);
     let server = Server::new(move || RuskelServer::with_defaults(ruskel.clone(), defaults));
 
@@ -48,6 +47,35 @@ async fn create_test_client_with_defaults(
         .await?;
 
     Ok((client, server_task))
+}
+
+/// Create a client for a request that needs installed standard-library JSON.
+async fn create_rustdoc_test_client() -> Result<(Client, ServerTask)> {
+    create_rustdoc_test_client_with_defaults(RuskelServerDefaults::default()).await
+}
+
+/// Create a standard-library client with explicit server defaults.
+async fn create_rustdoc_test_client_with_defaults(
+    defaults: RuskelServerDefaults,
+) -> Result<(Client, ServerTask)> {
+    STD_DOCS_PREREQUISITE.get_or_init(|| {
+        let available =
+            ensure_nightly_with_docs().expect("nightly toolchain prerequisite check failed");
+        require_rustdoc_json(available).expect(
+            "rust-docs-json is required for MCP integration tests; install it with: \
+             rustup component add --toolchain nightly rust-docs-json",
+        );
+    });
+    create_test_client_with_defaults(defaults).await
+}
+
+/// Validate the standard-library JSON prerequisite.
+fn require_rustdoc_json(available: bool) -> StdResult<(), &'static str> {
+    if available {
+        Ok(())
+    } else {
+        Err("missing nightly rust-docs-json component")
+    }
 }
 
 /// Initialize the client connection
@@ -71,6 +99,26 @@ mod tests {
     use tmcp::schema::{ContentBlock, LATEST_PROTOCOL_VERSION};
 
     use super::*;
+
+    fn response_text(result: &CallToolResult) -> &str {
+        result
+            .content
+            .iter()
+            .find_map(|content| match content {
+                ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .expect("tool response should contain text")
+    }
+
+    #[test]
+    fn rustdoc_json_prerequisite_rejects_missing_component() {
+        assert_eq!(
+            require_rustdoc_json(false),
+            Err("missing nightly rust-docs-json component")
+        );
+        assert_eq!(require_rustdoc_json(true), Ok(()));
+    }
 
     #[tokio::test]
     async fn test_mcp_server_initialize() {
@@ -122,7 +170,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mcp_server_call_tool() {
-        let (mut client, mut child) = create_test_client()
+        let (mut client, mut child) = create_rustdoc_test_client()
             .await
             .expect("Failed to create test client");
 
@@ -130,9 +178,8 @@ mod tests {
             .await
             .expect("Failed to initialize");
 
-        // Call tool with a crate that should exist
         let arguments = json!({
-            "target": "serde",
+            "target": "std::option::Option",
             "private": false
         });
 
@@ -142,8 +189,11 @@ mod tests {
             .expect("Timeout during tool call")
             .expect("Failed to call tool");
 
-        // Verify response
-        assert!(!result.content.is_empty());
+        assert_ne!(result.is_error, Some(true));
+        let text = response_text(&result);
+        assert!(text.contains("pub enum Option<T>"));
+        assert!(text.contains("None"));
+        assert!(text.contains("Some(T)"));
 
         // Clean up
         terminate_child(&mut child)
@@ -152,12 +202,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_mcp_server_applies_startup_defaults() {
+    async fn test_mcp_server_applies_frontmatter_startup_default() {
         let defaults = RuskelServerDefaults {
             private: true,
             frontmatter: false,
         };
-        let (mut client, mut child) = create_test_client_with_defaults(defaults)
+        let (mut client, mut child) = create_rustdoc_test_client_with_defaults(defaults)
             .await
             .expect("Failed to create test client");
 
@@ -166,7 +216,7 @@ mod tests {
             .expect("Failed to initialize");
 
         let arguments = json!({
-            "target": "serde"
+            "target": "std::option::Option"
         });
 
         let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
@@ -175,17 +225,9 @@ mod tests {
             .expect("Timeout during tool call")
             .expect("Failed to call tool");
 
-        let text = result
-            .content
-            .iter()
-            .find_map(|content| match content {
-                ContentBlock::Text(text) => Some(text.text.as_str()),
-                _ => None,
-            })
-            .expect("tool response should contain text");
-
-        assert!(text.contains("private: true"));
-        assert!(text.contains("frontmatter: false"));
+        let text = response_text(&result);
+        assert!(text.contains("pub enum Option<T>"));
+        assert!(!text.contains("Ruskel skeleton"));
 
         terminate_child(&mut child)
             .await
@@ -262,7 +304,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mcp_server_multiple_requests() {
-        let (mut client, mut child) = create_test_client()
+        let (mut client, mut child) = create_rustdoc_test_client()
             .await
             .expect("Failed to create test client");
 
@@ -271,9 +313,13 @@ mod tests {
             .expect("Failed to initialize");
 
         // Test multiple sequential requests
-        let test_targets = ["serde", "tokio", "async-trait"];
+        let test_targets = [
+            ("std::option::Option", "pub enum Option<T>"),
+            ("std::result::Result", "pub enum Result<T, E>"),
+            ("std::vec::Vec", "pub struct Vec<"),
+        ];
 
-        for target in &test_targets {
+        for (target, anchor) in test_targets {
             // List tools request
             let _list_result = timeout(Duration::from_secs(10), client.list_tools(None))
                 .await
@@ -289,11 +335,10 @@ mod tests {
             let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
             let result = timeout(Duration::from_secs(30), client.call_tool("ruskel", args))
                 .await
-                .unwrap_or_else(|_| panic!("Timeout for target {target}"));
-
-            if let Ok(call_result) = result {
-                assert!(!call_result.content.is_empty());
-            }
+                .unwrap_or_else(|_| panic!("Timeout for target {target}"))
+                .expect("tool request failed");
+            assert_ne!(result.is_error, Some(true));
+            assert!(response_text(&result).contains(anchor));
         }
 
         // Clean up
@@ -304,7 +349,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_mcp_server_error_recovery() {
-        let (mut client, mut child) = create_test_client()
+        let (mut client, mut child) = create_rustdoc_test_client()
             .await
             .expect("Failed to create test client");
 
@@ -360,7 +405,7 @@ mod tests {
 
         // 5. Valid request after another error
         let final_args = json!({
-            "target": "serde",
+            "target": "std::option::Option",
             "private": false
         });
 
@@ -369,9 +414,8 @@ mod tests {
             .await
             .expect("Timeout during final request");
 
-        if let Ok(call_result) = result {
-            assert!(!call_result.content.is_empty());
-        }
+        let call_result = result.expect("valid request after errors");
+        assert!(response_text(&call_result).contains("pub enum Option<T>"));
 
         // Clean up
         terminate_child(&mut child)
@@ -409,6 +453,67 @@ mod tests {
                 false
             }
         }));
+
+        terminate_child(&mut child)
+            .await
+            .expect("Failed to stop MCP server");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_server_searches_real_std_json() {
+        let (mut client, mut child) = create_rustdoc_test_client()
+            .await
+            .expect("Failed to create test client");
+        initialize_client(&mut client)
+            .await
+            .expect("Failed to initialize");
+
+        let arguments = json!({
+            "target": "std::option::Option",
+            "search": "std::option::Option::Some",
+            "search_spec": ["path"],
+            "frontmatter": false
+        });
+        let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
+        let result = timeout(Duration::from_secs(30), client.call_tool("ruskel", args))
+            .await
+            .expect("Timeout during search")
+            .expect("Failed to search");
+
+        assert_ne!(result.is_error, Some(true));
+        let text = response_text(&result);
+        assert!(text.contains("matches for \"std::option::Option::Some\""));
+        assert!(text.contains("std::option::Option::Some [path]"));
+        assert!(text.contains("Some(T)"));
+
+        terminate_child(&mut child)
+            .await
+            .expect("Failed to stop MCP server");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_server_reports_real_render_error() {
+        let (mut client, mut child) = create_rustdoc_test_client()
+            .await
+            .expect("Failed to create test client");
+        initialize_client(&mut client)
+            .await
+            .expect("Failed to initialize");
+
+        let arguments = json!({
+            "target": "std::definitely_not_a_module",
+            "frontmatter": false
+        });
+        let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
+        let result = timeout(Duration::from_secs(30), client.call_tool("ruskel", args))
+            .await
+            .expect("Timeout during failing render")
+            .expect("Failed to call tool");
+
+        assert_eq!(result.is_error, Some(true));
+        let text = response_text(&result);
+        assert!(text.contains("Failed to generate skeleton"));
+        assert!(text.contains("std::definitely_not_a_module"));
 
         terminate_child(&mut child)
             .await

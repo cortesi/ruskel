@@ -1,4 +1,4 @@
-use std::{env, io::stdout, result::Result as StdResult};
+use std::{io::stdout, result::Result as StdResult};
 
 use libruskel::{Ruskel, SearchDomain, SearchOptions, describe_domains, parse_domain_token};
 use serde::{Deserialize, Serialize};
@@ -180,10 +180,6 @@ impl RuskelServer {
             }
         };
 
-        if env::var_os("RUSKEL_MCP_TEST_MODE").is_some() {
-            return Ok(run_test_mode(&params));
-        }
-
         let ruskel = self
             .ruskel
             .clone()
@@ -313,30 +309,6 @@ fn resolve_search_domains(search_spec: Option<&[String]>) -> StdResult<SearchDom
     }
 }
 
-/// Lightweight stubbed response used when the MCP server is started in test mode.
-///
-/// This bypasses expensive rustdoc generation, allowing integration tests to run quickly
-/// while still exercising the MCP protocol surface.
-fn run_test_mode(params: &ResolvedRuskelSkeletonTool) -> CallToolResult {
-    let mut summary = String::new();
-    summary.push_str("ruskel test-mode output\n");
-    summary.push_str(&format!("target: {}\n", params.target));
-    summary.push_str(&format!("private: {}\n", params.private));
-    summary.push_str(&format!("frontmatter: {}\n", params.frontmatter));
-
-    if let Some(search) = &params.search {
-        summary.push_str(&format!("search: {}\n", search));
-    }
-
-    if let Some(spec) = &params.search_spec
-        && !spec.is_empty()
-    {
-        summary.push_str(&format!("search_spec: {}\n", spec.join(",")));
-    }
-
-    CallToolResult::new().with_text_content(summary)
-}
-
 /// Serve the ruskel MCP API over TCP or stdio depending on configuration.
 ///
 /// When `addr` is provided a TCP listener is started; otherwise the server exposes
@@ -376,7 +348,7 @@ pub async fn run_mcp_server(
 mod tests {
     use libruskel::SearchDomain;
 
-    use super::resolve_search_domains;
+    use super::{RuskelServerDefaults, RuskelSkeletonTool, resolve_search_domains};
 
     #[test]
     fn resolve_search_domains_defaults_when_missing() {
@@ -395,5 +367,29 @@ mod tests {
             error,
             "invalid search domain 'bogus'. Expected one of: name, doc, path, signature."
         );
+    }
+
+    #[test]
+    fn request_resolution_applies_server_defaults() {
+        let resolved = RuskelSkeletonTool {
+            target: String::from("std::option::Option"),
+            private: None,
+            search: None,
+            bin: None,
+            search_spec: None,
+            frontmatter: None,
+            search_case_sensitive: false,
+            direct_match_only: false,
+            no_default_features: false,
+            all_features: false,
+            features: Vec::new(),
+        }
+        .resolve(RuskelServerDefaults {
+            private: true,
+            frontmatter: false,
+        });
+
+        assert!(resolved.private);
+        assert!(!resolved.frontmatter);
     }
 }

@@ -77,10 +77,10 @@ Renderer integration targets reuse isolated rustdoc fixtures under the default h
 
 MCP tests and production use the same handler with explicit nightly prerequisites and stable assertions.
 
-- [ ] Implement D2 as specified.
-- [ ] Complete D2's required supporting and downstream work.
-- [ ] Run D2's proof.
-- [ ] Review the settled stage.
+- [x] Implement D2 as specified.
+- [x] Complete D2's required supporting and downstream work.
+- [x] Run D2's proof.
+- [x] Review the settled stage.
 
 ### Stage 3: D3 — Use One Item-Selection Engine
 
