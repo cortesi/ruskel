@@ -8,7 +8,7 @@ use rustdoc_types::{Crate, Id, Item, ItemEnum, Module, Struct, StructKind, Visib
 
 use crate::{
     crateutils::{render_name, render_path, render_type},
-    render::RenderSelection,
+    selection::{RenderPathRecord, render_paths},
     signature,
 };
 
@@ -271,7 +271,9 @@ impl SearchIndex {
     pub(crate) fn build(crate_data: &Crate, include_private: bool) -> Self {
         let mut builder = IndexBuilder::new(crate_data, include_private);
         builder.traverse();
-        builder.finish()
+        let mut index = builder.finish();
+        index.add_render_paths(crate_data, include_private);
+        index
     }
 
     /// Retrieve the immutable list of indexed entries.
@@ -330,6 +332,119 @@ impl SearchIndex {
         }
 
         results
+    }
+
+    /// Add alias and glob paths that only exist at renderer use sites.
+    fn add_render_paths(&mut self, crate_data: &Crate, include_private: bool) {
+        let root_name = crate_data
+            .index
+            .get(&crate_data.root)
+            .and_then(|root| root.name.clone())
+            .unwrap_or_else(|| "crate".to_string());
+        let mut known: HashSet<(Id, String)> = self
+            .entries
+            .iter()
+            .map(|entry| (entry.item_id, entry.path_string.clone()))
+            .collect();
+
+        for record in render_paths(crate_data, include_private) {
+            let Some(entry) = search_entry_for_render_path(crate_data, &root_name, record) else {
+                continue;
+            };
+            if known.insert((entry.item_id, entry.path_string.clone())) {
+                self.entries.push(entry);
+            }
+        }
+    }
+}
+
+/// Convert one render-visible path into a searchable entry.
+fn search_entry_for_render_path(
+    crate_data: &Crate,
+    root_name: &str,
+    record: RenderPathRecord,
+) -> Option<SearchEntry> {
+    let item = crate_data.index.get(&record.id)?;
+    if item.name.is_none() && !matches!(item.inner, ItemEnum::Use(_)) {
+        return None;
+    }
+
+    let parent = record
+        .chain
+        .iter()
+        .rev()
+        .skip(1)
+        .find_map(|edge| crate_data.index.get(&edge.1));
+    let kind = match (&item.inner, parent.map(|item| &item.inner)) {
+        (ItemEnum::Function(_), Some(ItemEnum::Impl(_))) => SearchItemKind::Method,
+        (ItemEnum::Function(_), Some(ItemEnum::Trait(_))) => SearchItemKind::TraitMethod,
+        _ => search_kind(item)?,
+    };
+
+    let mut names = Vec::with_capacity(record.path.len() + 1);
+    names.push(root_name.to_string());
+    names.extend(record.path);
+    let raw_name = names.last()?.clone();
+    let path_string = names.join("::");
+    let last = names.len().saturating_sub(1);
+    let path = names
+        .into_iter()
+        .enumerate()
+        .map(|(index, name)| SearchPathSegment {
+            display_name: name.clone(),
+            name,
+            kind: if index == 0 {
+                SearchItemKind::Crate
+            } else if index == last {
+                kind
+            } else {
+                SearchItemKind::Module
+            },
+            is_public: true,
+        })
+        .collect();
+    let ancestors = record
+        .chain
+        .iter()
+        .take(record.chain.len().saturating_sub(1))
+        .map(|edge| edge.1)
+        .collect();
+
+    Some(SearchEntry {
+        item_id: item.id,
+        kind,
+        path,
+        path_string,
+        raw_name: raw_name.clone(),
+        display_name: raw_name,
+        docs: item.docs.clone(),
+        signature: signature::item_signature(crate_data, item, kind),
+        ancestors,
+    })
+}
+
+/// Classify an ordinary rustdoc item for render-path search.
+fn search_kind(item: &Item) -> Option<SearchItemKind> {
+    match item.inner {
+        ItemEnum::Module(_) => Some(SearchItemKind::Module),
+        ItemEnum::Struct(_) => Some(SearchItemKind::Struct),
+        ItemEnum::Union(_) => Some(SearchItemKind::Union),
+        ItemEnum::Enum(_) => Some(SearchItemKind::Enum),
+        ItemEnum::Variant(_) => Some(SearchItemKind::EnumVariant),
+        ItemEnum::StructField(_) => Some(SearchItemKind::Field),
+        ItemEnum::Trait(_) => Some(SearchItemKind::Trait),
+        ItemEnum::TraitAlias(_) => Some(SearchItemKind::TraitAlias),
+        ItemEnum::Function(_) => Some(SearchItemKind::Function),
+        ItemEnum::AssocConst { .. } => Some(SearchItemKind::AssocConst),
+        ItemEnum::AssocType { .. } => Some(SearchItemKind::AssocType),
+        ItemEnum::Constant { .. } => Some(SearchItemKind::Constant),
+        ItemEnum::Static(_) => Some(SearchItemKind::Static),
+        ItemEnum::TypeAlias(_) => Some(SearchItemKind::TypeAlias),
+        ItemEnum::Use(_) => Some(SearchItemKind::Use),
+        ItemEnum::Macro(_) => Some(SearchItemKind::Macro),
+        ItemEnum::ProcMacro(_) => Some(SearchItemKind::ProcMacro),
+        ItemEnum::Primitive(_) => Some(SearchItemKind::Primitive),
+        ItemEnum::Impl(_) | ItemEnum::ExternCrate { .. } | ItemEnum::ExternType => None,
     }
 }
 
@@ -862,58 +977,6 @@ fn contains(haystack: &str, needle: &str, case_sensitive: bool) -> bool {
     } else {
         haystack.to_lowercase().contains(needle)
     }
-}
-
-/// Build a renderer selection set covering matches, their ancestors, and optionally their children.
-pub fn build_render_selection(
-    index: &SearchIndex,
-    results: &[SearchResult],
-    expand_containers: bool,
-) -> RenderSelection {
-    let mut matches = HashSet::new();
-    let mut context = HashSet::new();
-    let mut expanded = HashSet::new();
-    for result in results {
-        matches.insert(result.item_id);
-        context.insert(result.item_id);
-        context.extend(result.ancestors.iter().copied());
-    }
-    if expand_containers {
-        let containers: HashSet<Id> = results
-            .iter()
-            .filter(|result| {
-                matches!(
-                    result.kind,
-                    SearchItemKind::Crate
-                        | SearchItemKind::Module
-                        | SearchItemKind::Struct
-                        | SearchItemKind::Trait
-                )
-            })
-            .map(|result| result.item_id)
-            .collect();
-
-        if !containers.is_empty() {
-            expanded.extend(containers.iter().copied());
-            let mut descendant_containers = HashSet::new();
-            for entry in index.entries() {
-                if let Some(pos) = entry
-                    .ancestors
-                    .iter()
-                    .position(|ancestor| containers.contains(ancestor))
-                {
-                    context.insert(entry.item_id);
-                    for descendant in entry.ancestors.iter().skip(pos + 1) {
-                        context.insert(*descendant);
-                        descendant_containers.insert(*descendant);
-                    }
-                }
-            }
-            expanded.extend(descendant_containers);
-        }
-    }
-
-    RenderSelection::new(matches, context, expanded)
 }
 
 /// Format the set of matched domains into human-friendly labels.

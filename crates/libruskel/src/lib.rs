@@ -32,6 +32,8 @@ mod render;
 mod ruskel;
 /// Search and indexing utilities used by the CLI.
 mod search;
+/// Item-ID selections shared by filtering and search rendering.
+mod selection;
 /// Shared signature formatting used by search and rendering.
 mod signature;
 /// Target parsing helpers for user-provided specifications.

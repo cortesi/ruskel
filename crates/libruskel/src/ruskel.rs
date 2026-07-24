@@ -8,10 +8,8 @@ use super::{
     error::*,
     frontmatter::{FrontmatterBinaryTarget, FrontmatterConfig, FrontmatterHit, FrontmatterSearch},
     render::*,
-    search::{
-        ListItem, SearchIndex, SearchItemKind, SearchOptions, SearchResponse,
-        build_render_selection,
-    },
+    search::{ListItem, SearchIndex, SearchItemKind, SearchOptions, SearchResponse},
+    selection::build_render_selection,
 };
 
 /// Ruskel generates a skeletonized version of a Rust crate in a single page.

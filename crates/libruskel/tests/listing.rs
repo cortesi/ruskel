@@ -118,3 +118,32 @@ fn list_applies_search_filters() {
         )]
     );
 }
+
+#[test]
+fn path_search_includes_named_and_glob_reexports() {
+    let source = r#"
+        mod hidden {
+            pub struct Original;
+            pub struct Globbed;
+        }
+
+        pub use hidden::Original as Alias;
+        pub use hidden::*;
+    "#;
+    let (_temp_dir, target) = create_test_crate(source, false);
+    let (_cache, ruskel) = isolated_ruskel();
+
+    for path in ["dummy_crate::Alias", "dummy_crate::Globbed"] {
+        let options = SearchOptions::configured(path, SearchDomain::PATHS, true, false, false);
+        let items = ruskel
+            .list(&target, false, false, Vec::new(), false, Some(&options))
+            .unwrap();
+
+        assert!(
+            items
+                .iter()
+                .any(|item| item.kind == SearchItemKind::Struct && item.path == path),
+            "missing render-visible path {path}"
+        );
+    }
+}

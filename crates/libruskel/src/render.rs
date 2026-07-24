@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -15,30 +15,9 @@ use crate::{
     frontmatter::FrontmatterConfig,
     keywords::is_reserved_word,
     search::SearchItemKind,
+    selection::{RenderSelection, derive_trait_name, should_render_impl},
     signature,
 };
-
-/// Traits that we render via `#[derive(...)]` annotations instead of explicit impl blocks.
-const DERIVE_TRAITS: &[&str] = &[
-    "Clone",
-    "Copy",
-    "Debug",
-    "Default",
-    "Display",
-    "Eq",
-    "Error",
-    "FromStr",
-    "Hash",
-    "Ord",
-    "PartialEq",
-    "PartialOrd",
-    "Send",
-    "StructuralPartialEq",
-    "Sync",
-    // These are not built-in but are "well known" enough to treat specially
-    "Serialize",
-    "Deserialize",
-];
 
 /// Reusable pattern for removing placeholder bodies from macro output.
 /// rustdoc currently emits `{ ... }` placeholder blocks for `macro` (decl-macro) items in JSON
@@ -80,43 +59,6 @@ fn escape_path(path: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("::")
-}
-
-/// Classification describing how a filter string matches a path.
-///
-/// Examples (filter → item path):
-/// - `Hit`: "foo::bar" matches "crate::foo::bar" exactly.
-/// - `Prefix`: "foo::bar::baz" while visiting "crate::foo" — still need to descend.
-/// - `Suffix`: "foo" while visiting "crate::foo::bar" — item is under the match.
-/// - `Miss`: unrelated paths like "other" vs "crate::foo::bar".
-#[derive(Debug, PartialEq)]
-enum FilterMatch {
-    /// The filter exactly matches the path.
-    Hit,
-    /// The filter matches a prefix of the path.
-    Prefix,
-    /// The filter matches a suffix of the path.
-    Suffix,
-    /// The filter does not match the path.
-    Miss,
-}
-
-/// Selection of item identifiers used when rendering subsets of a crate.
-#[derive(Debug, Clone, Default)]
-pub struct RenderSelection {
-    /// Selection metadata keyed by item identifier.
-    entries: HashMap<Id, SelectionFlags>,
-}
-
-/// Flags describing how a specific item participates in a render selection.
-#[derive(Debug, Clone, Copy, Default)]
-struct SelectionFlags {
-    /// The item is an explicit match from the search results.
-    matched: bool,
-    /// The item is retained to preserve module hierarchy context.
-    in_context: bool,
-    /// The item should expand to include all of its children.
-    expanded: bool,
 }
 
 /// Key for grouping impl blocks that share a compatible header.
@@ -188,7 +130,7 @@ impl ImplSignature {
     }
 
     /// Render the impl header for this signature.
-    fn render_header(&self) -> String {
+    fn render_header(&self, target_rename: Option<(&str, &str)>) -> String {
         let mut output = String::new();
         if self.is_unsafe {
             output.push_str("unsafe ");
@@ -200,7 +142,11 @@ impl ImplSignature {
             output.push_str(trait_path);
             output.push_str(" for ");
         }
-        output.push_str(&self.for_type);
+        if let Some((original, alias)) = target_rename {
+            output.push_str(&self.for_type.replacen(original, alias, 1));
+        } else {
+            output.push_str(&self.for_type);
+        }
         if !self.where_clause.is_empty() {
             output.push('\n');
             output.push_str(&self.where_clause);
@@ -516,57 +462,6 @@ fn impl_return_type_key(decl: &FunctionSignature) -> String {
     }
 }
 
-impl RenderSelection {
-    /// Create a selection from explicit match and context sets.
-    pub(crate) fn new(
-        matches: HashSet<Id>,
-        mut context: HashSet<Id>,
-        expanded: HashSet<Id>,
-    ) -> Self {
-        for id in &matches {
-            context.insert(*id);
-        }
-
-        let mut entries: HashMap<Id, SelectionFlags> = HashMap::new();
-
-        for id in context {
-            entries.entry(id).or_default().in_context = true;
-        }
-        for id in matches {
-            entries.entry(id).or_default().matched = true;
-        }
-        for id in expanded {
-            entries.entry(id).or_default().expanded = true;
-        }
-
-        Self { entries }
-    }
-
-    /// Is the item an explicit match?
-    pub(crate) fn is_match(&self, id: &Id) -> bool {
-        self.entries
-            .get(id)
-            .map(|flags| flags.matched)
-            .unwrap_or(false)
-    }
-
-    /// Is the item retained to preserve hierarchy context?
-    pub(crate) fn in_context(&self, id: &Id) -> bool {
-        self.entries
-            .get(id)
-            .map(|flags| flags.in_context)
-            .unwrap_or(false)
-    }
-
-    /// Should the item's children be fully expanded?
-    pub(crate) fn is_expanded(&self, id: &Id) -> bool {
-        self.entries
-            .get(id)
-            .map(|flags| flags.expanded)
-            .unwrap_or(false)
-    }
-}
-
 /// Configurable renderer that turns rustdoc data into skeleton Rust source.
 pub struct Renderer {
     /// Formatter used to produce tidy Rust output.
@@ -591,10 +486,8 @@ struct RenderState<'a, 'b> {
     config: &'a Renderer,
     /// Crate metadata produced by rustdoc.
     crate_data: &'b Crate,
-    /// Tracks whether any item matched the configured filter.
-    filter_matched: bool,
-    /// Pre-split filter path components to avoid reallocating per item check.
-    filter_components: Vec<&'a str>,
+    /// Effective item selection after composing search and target filtering.
+    selection: Option<RenderSelection>,
 }
 
 impl Default for Renderer {
@@ -656,17 +549,40 @@ impl Renderer {
 
     /// Render a crate into formatted Rust source text.
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
+        let selection = self.resolve_selection(crate_data)?;
         let mut state = RenderState {
             config: self,
-            filter_matched: false,
             crate_data,
-            filter_components: if self.filter.is_empty() {
-                Vec::new()
-            } else {
-                self.filter.split("::").collect()
-            },
+            selection,
         };
         state.render()
+    }
+
+    /// Compose an explicit search selection with the target path filter.
+    fn resolve_selection(&self, crate_data: &Crate) -> Result<Option<RenderSelection>> {
+        let filter_selection = if self.filter.is_empty() {
+            None
+        } else {
+            Some(RenderSelection::for_filter(
+                crate_data,
+                &self.filter,
+                self.render_private_items,
+                self.render_auto_impls,
+                self.render_blanket_impls,
+            )?)
+        };
+        Ok(match (&self.selection, filter_selection) {
+            (Some(selection), Some(filter_selection)) => {
+                let combined = selection.clone().restrict_to(&filter_selection);
+                if !combined.retains_match_from(&filter_selection) {
+                    return Err(RuskelError::FilterNotMatched(self.filter.clone()));
+                }
+                Some(combined)
+            }
+            (Some(selection), None) => Some(selection.clone()),
+            (None, Some(filter_selection)) => Some(filter_selection),
+            (None, None) => None,
+        })
     }
 }
 
@@ -675,11 +591,7 @@ impl RenderState<'_, '_> {
     pub fn render(&mut self) -> Result<String> {
         // The root item is always a module
         let root_item = must_get(self.crate_data, &self.crate_data.root)?;
-        let output = self.render_item("", root_item, false)?;
-
-        if !self.config.filter.is_empty() && !self.filter_matched {
-            return Err(RuskelError::FilterNotMatched(self.config.filter.clone()));
-        }
+        let output = self.render_item("", root_item, None, false)?;
 
         let mut composed = String::new();
         if let Some(frontmatter) = &self.config.frontmatter
@@ -698,13 +610,21 @@ impl RenderState<'_, '_> {
 
     /// Return the active render selection, if any.
     fn selection(&self) -> Option<&RenderSelection> {
-        self.config.selection.as_ref()
+        self.selection.as_ref()
     }
 
     /// Determine whether the selection context includes a particular item.
     fn selection_context_contains(&self, id: &Id) -> bool {
         match self.selection() {
             Some(selection) => selection.in_context(id),
+            None => true,
+        }
+    }
+
+    /// Determine whether the selection includes one concrete item occurrence.
+    fn selection_allows_item(&self, parent: Option<Id>, id: &Id) -> bool {
+        match self.selection() {
+            Some(selection) => selection.allows_item(parent, id),
             None => true,
         }
     }
@@ -740,74 +660,17 @@ impl RenderState<'_, '_> {
 
     /// Determine whether an impl block should be rendered in the output.
     fn should_render_impl(&self, impl_: &Impl) -> bool {
-        if impl_.is_synthetic && !self.config.render_auto_impls {
-            return false;
-        }
-
-        if DERIVE_TRAITS.contains(&impl_.trait_.as_ref().map_or("", |t| t.path.as_str())) {
-            return false;
-        }
-
-        let is_blanket = impl_.blanket_impl.is_some();
-        if is_blanket && !self.config.render_blanket_impls {
-            return false;
-        }
-
-        true
-    }
-
-    /// Determine whether an item is filtered out by the configured path filter.
-    fn should_filter(&mut self, path_prefix: &str, item: &Item) -> bool {
-        // We never filter the root module - filters operate under the root.
-        if item.id == self.crate_data.root {
-            return false;
-        }
-
-        if self.config.filter.is_empty() {
-            return false;
-        }
-        match self.filter_match(path_prefix, item) {
-            FilterMatch::Hit => {
-                self.filter_matched = true;
-                false
-            }
-            FilterMatch::Prefix | FilterMatch::Suffix => false,
-            FilterMatch::Miss => true,
-        }
-    }
-
-    /// Does this item match the active filter?
-    /// Evaluates how the filter path relates to a candidate item path within the crate.
-    fn filter_match(&self, path_prefix: &str, item: &Item) -> FilterMatch {
-        let item_path = if let Some(name) = &item.name {
-            ppush(path_prefix, name)
-        } else {
-            return FilterMatch::Prefix;
-        };
-
-        let item_components: Vec<&str> = item_path.split("::").skip(1).collect();
-        let filter_components = self.filter_components.as_slice();
-
-        if filter_components == item_components {
-            FilterMatch::Hit
-        } else if filter_components.starts_with(&item_components) {
-            FilterMatch::Prefix
-        } else if item_components.starts_with(filter_components) {
-            FilterMatch::Suffix
-        } else {
-            FilterMatch::Miss
-        }
+        should_render_impl(
+            impl_,
+            self.config.render_auto_impls,
+            self.config.render_blanket_impls,
+        )
     }
 
     /// Determine whether a module should emit a `//!` doc comment header.
-    fn should_module_doc(&self, path_prefix: &str, item: &Item) -> bool {
-        if self.config.filter.is_empty() {
-            return true;
-        }
-        matches!(
-            self.filter_match(path_prefix, item),
-            FilterMatch::Hit | FilterMatch::Suffix
-        )
+    fn should_module_doc(&self, parent: Option<Id>, item: &Item) -> bool {
+        self.selection()
+            .is_none_or(|selection| selection.renders_module_docs(parent, &item.id))
     }
 
     /// Render an item into Rust source text.
@@ -815,20 +678,17 @@ impl RenderState<'_, '_> {
         &mut self,
         path_prefix: &str,
         item: &Item,
+        parent: Option<Id>,
         force_private: bool,
     ) -> Result<String> {
-        if !self.selection_context_contains(&item.id) {
-            return Ok(String::new());
-        }
-
-        if self.should_filter(path_prefix, item) {
+        if !self.selection_allows_item(parent, &item.id) {
             return Ok(String::new());
         }
 
         let output = match &item.inner {
-            ItemEnum::Module(_) => self.render_module(path_prefix, item)?,
-            ItemEnum::Struct(_) => self.render_struct(path_prefix, item)?,
-            ItemEnum::Enum(_) => self.render_enum(path_prefix, item)?,
+            ItemEnum::Module(_) => self.render_module(path_prefix, item, parent)?,
+            ItemEnum::Struct(_) => self.render_struct(item)?,
+            ItemEnum::Enum(_) => self.render_enum(item)?,
             ItemEnum::Trait(_) => self.render_trait(item)?,
             ItemEnum::Use(_) => self.render_use(path_prefix, item)?,
             ItemEnum::Function(_) => self.render_function(item, false)?,
@@ -951,6 +811,7 @@ impl RenderState<'_, '_> {
 
     /// Render a `use` statement, applying filter rules for private modules.
     fn render_use(&mut self, path_prefix: &str, item: &Item) -> Result<String> {
+        let use_id = item.id;
         let import = try_extract_item!(item, ItemEnum::Use)?;
 
         if import.is_glob {
@@ -962,7 +823,12 @@ impl RenderState<'_, '_> {
                 for item_id in &module.items {
                     let item = must_get(self.crate_data, item_id)?;
                     if self.is_visible(item) {
-                        output.push_str(&self.render_item(path_prefix, item, true)?);
+                        output.push_str(&self.render_item(
+                            path_prefix,
+                            item,
+                            Some(use_id),
+                            true,
+                        )?);
                     }
                 }
                 return Ok(output);
@@ -974,7 +840,12 @@ impl RenderState<'_, '_> {
         if let Some(imported_id) = import.id.as_ref()
             && let Ok(imported_item) = must_get(self.crate_data, imported_id)
         {
-            return self.render_item(path_prefix, imported_item, true);
+            if imported_item.name.as_deref() == Some(import.name.as_str()) {
+                return self.render_item(path_prefix, imported_item, Some(use_id), true);
+            }
+            let mut aliased_item = imported_item.clone();
+            aliased_item.name = Some(import.name.clone());
+            return self.render_item(path_prefix, &aliased_item, Some(use_id), true);
         }
 
         let mut output = docs(item);
@@ -1037,10 +908,7 @@ impl RenderState<'_, '_> {
                 continue;
             }
 
-            if let Some(trait_) = &impl_.trait_
-                && let Some(name) = trait_.path.split("::").last()
-                && DERIVE_TRAITS.contains(&name)
-            {
+            if let Some(name) = derive_trait_name(impl_) {
                 inline_traits.push(name.to_string());
             }
         }
@@ -1056,14 +924,18 @@ impl RenderState<'_, '_> {
     }
 
     /// Render a combined impl block for a group of compatible impl items.
-    fn render_impl_group(&mut self, path_prefix: &str, group: &ImplGroup) -> Result<String> {
+    fn render_impl_group(
+        &self,
+        group: &ImplGroup,
+        target_rename: Option<(&str, &str)>,
+    ) -> Result<String> {
         let mut docs_output = String::new();
         let mut bodies = Vec::new();
 
         for impl_id in &group.impl_ids {
             let impl_item = must_get(self.crate_data, impl_id)?;
             let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
-            if let Some(rendered) = self.render_impl_body(path_prefix, impl_item, impl_)? {
+            if let Some(rendered) = self.render_impl_body(impl_item, impl_)? {
                 docs_output.push_str(&rendered.docs);
                 bodies.push(rendered.body);
             }
@@ -1075,7 +947,7 @@ impl RenderState<'_, '_> {
 
         let mut output = String::new();
         output.push_str(&docs_output);
-        output.push_str(&group.signature.render_header());
+        output.push_str(&group.signature.render_header(target_rename));
         for body in bodies {
             output.push_str(&body);
         }
@@ -1085,12 +957,7 @@ impl RenderState<'_, '_> {
     }
 
     /// Render the contents for a single impl block, without its header.
-    fn render_impl_body(
-        &mut self,
-        path_prefix: &str,
-        item: &Item,
-        impl_: &Impl,
-    ) -> Result<Option<RenderedImplBody>> {
+    fn render_impl_body(&self, item: &Item, impl_: &Impl) -> Result<Option<RenderedImplBody>> {
         if !self.selection_context_contains(&item.id) {
             return Ok(None);
         }
@@ -1110,7 +977,6 @@ impl RenderState<'_, '_> {
             return Ok(None);
         }
 
-        let path_prefix = ppush(path_prefix, &render_type(&impl_.for_));
         let mut body = String::new();
         let mut has_content = false;
         for item_id in &impl_.items {
@@ -1121,7 +987,7 @@ impl RenderState<'_, '_> {
                     || self.selection_context_contains(item_id))
                     && (is_trait_impl || self.is_visible(item))
                 {
-                    let rendered = self.render_impl_item(&path_prefix, item, expand_children)?;
+                    let rendered = self.render_impl_item(item, expand_children)?;
                     if !rendered.is_empty() {
                         body.push_str(&rendered);
                         has_content = true;
@@ -1141,17 +1007,8 @@ impl RenderState<'_, '_> {
     }
 
     /// Render the item inside an impl block.
-    fn render_impl_item(
-        &mut self,
-        path_prefix: &str,
-        item: &Item,
-        include_all: bool,
-    ) -> Result<String> {
+    fn render_impl_item(&self, item: &Item, include_all: bool) -> Result<String> {
         if !include_all && !self.selection_context_contains(&item.id) {
-            return Ok(String::new());
-        }
-
-        if self.should_filter(path_prefix, item) {
             return Ok(String::new());
         }
 
@@ -1167,7 +1024,7 @@ impl RenderState<'_, '_> {
     }
 
     /// Render an enum definition, including variants.
-    fn render_enum(&mut self, path_prefix: &str, item: &Item) -> Result<String> {
+    fn render_enum(&self, item: &Item) -> Result<String> {
         let mut output = docs(item);
 
         let enum_ = try_extract_item!(item, ItemEnum::Enum)?;
@@ -1210,8 +1067,16 @@ impl RenderState<'_, '_> {
         output.push_str("}\n\n");
 
         // Render impl blocks
+        let target_rename = self.item_rename(item)?;
         for group in self.collect_impl_groups(&item.id, &enum_.impls)? {
-            output.push_str(&self.render_impl_group(path_prefix, &group)?);
+            output.push_str(
+                &self.render_impl_group(
+                    &group,
+                    target_rename
+                        .as_ref()
+                        .map(|(original, alias)| (original.as_str(), alias.as_str())),
+                )?,
+            );
         }
 
         Ok(output)
@@ -1360,7 +1225,7 @@ impl RenderState<'_, '_> {
     }
 
     /// Render a struct declaration and its fields.
-    fn render_struct(&mut self, path_prefix: &str, item: &Item) -> Result<String> {
+    fn render_struct(&self, item: &Item) -> Result<String> {
         let mut output = docs(item);
 
         let struct_ = try_extract_item!(item, ItemEnum::Struct)?;
@@ -1432,8 +1297,16 @@ impl RenderState<'_, '_> {
         }
 
         // Render impl blocks
+        let target_rename = self.item_rename(item)?;
         for group in self.collect_impl_groups(&item.id, &struct_.impls)? {
-            output.push_str(&self.render_impl_group(path_prefix, &group)?);
+            output.push_str(
+                &self.render_impl_group(
+                    &group,
+                    target_rename
+                        .as_ref()
+                        .map(|(original, alias)| (original.as_str(), alias.as_str())),
+                )?,
+            );
         }
 
         Ok(output)
@@ -1463,6 +1336,17 @@ impl RenderState<'_, '_> {
         Ok(out)
     }
 
+    /// Return a use-site rename for an inlined item, if one is active.
+    fn item_rename(&self, item: &Item) -> Result<Option<(String, String)>> {
+        let original = must_get(self.crate_data, &item.id)?;
+        Ok(original
+            .name
+            .as_deref()
+            .zip(item.name.as_deref())
+            .filter(|(original, alias)| original != alias)
+            .map(|(original, alias)| (original.to_string(), alias.to_string())))
+    }
+
     /// Render a constant definition.
     fn render_constant(&self, item: &Item) -> Result<String> {
         let mut output = docs(item);
@@ -1484,11 +1368,16 @@ impl RenderState<'_, '_> {
     }
 
     /// Render a module and its children.
-    fn render_module(&mut self, path_prefix: &str, item: &Item) -> Result<String> {
+    fn render_module(
+        &mut self,
+        path_prefix: &str,
+        item: &Item,
+        parent: Option<Id>,
+    ) -> Result<String> {
         let path_prefix = ppush(path_prefix, &render_name(item));
         let mut output = format!("{}mod {} {{\n", render_vis(item), render_name(item));
         // Add module doc comment if present
-        if self.should_module_doc(&path_prefix, item)
+        if self.should_module_doc(parent, item)
             && let Some(docs) = &item.docs
         {
             for line in docs.lines() {
@@ -1498,10 +1387,11 @@ impl RenderState<'_, '_> {
         }
 
         let module = try_extract_item!(item, ItemEnum::Module)?;
+        let module_id = item.id;
 
         for item_id in &module.items {
             let item = must_get(self.crate_data, item_id)?;
-            output.push_str(&self.render_item(&path_prefix, item, false)?);
+            output.push_str(&self.render_item(&path_prefix, item, Some(module_id), false)?);
         }
 
         output.push_str("}\n\n");
@@ -1550,7 +1440,8 @@ mod tests {
     use super::*;
     use crate::{
         frontmatter::{FrontmatterConfig, FrontmatterHit, FrontmatterSearch},
-        search::{SearchDomain, SearchIndex, SearchOptions, SearchResult, build_render_selection},
+        search::{SearchDomain, SearchIndex, SearchOptions, SearchResult},
+        selection::build_render_selection,
     };
 
     fn empty_generics() -> Generics {
@@ -1611,8 +1502,7 @@ mod tests {
         let state = super::RenderState {
             config: &renderer,
             crate_data: &crate_data,
-            filter_matched: false,
-            filter_components: Vec::new(),
+            selection: None,
         };
 
         let item = crate_data
@@ -2141,12 +2031,7 @@ path = "src/lib.rs"
                 let mut state = super::RenderState {
                     config: &renderer,
                     crate_data,
-                    filter_matched: false,
-                    filter_components: if renderer.filter.is_empty() {
-                        Vec::new()
-                    } else {
-                        renderer.filter.split("::").collect()
-                    },
+                    selection: renderer.resolve_selection(crate_data)?,
                 };
                 let mut composed = String::new();
                 if let Some(frontmatter) = &renderer.frontmatter
@@ -2159,7 +2044,7 @@ path = "src/lib.rs"
                     composed.push_str(&prefix);
                 }
                 let root = super::must_get(crate_data, &crate_data.root)?;
-                composed.push_str(&state.render_item("", root, false)?);
+                composed.push_str(&state.render_item("", root, None, false)?);
                 Ok(composed)
             }
             Err(err) => Err(err),
@@ -2174,15 +2059,10 @@ path = "src/lib.rs"
                 let mut state = super::RenderState {
                     config: &renderer,
                     crate_data,
-                    filter_matched: false,
-                    filter_components: if renderer.filter.is_empty() {
-                        Vec::new()
-                    } else {
-                        renderer.filter.split("::").collect()
-                    },
+                    selection: renderer.resolve_selection(crate_data)?,
                 };
                 let root = super::must_get(crate_data, &crate_data.root)?;
-                state.render_item("", root, false)
+                state.render_item("", root, None, false)
             }
             Err(err) => Err(err),
         }
@@ -2196,6 +2076,31 @@ path = "src/lib.rs"
             .into_iter()
             .find(|r| r.path_string.ends_with(suffix))
             .ok_or_else(|| RuskelError::FilterNotMatched(suffix.to_string()))
+    }
+
+    #[test]
+    fn exact_filter_and_path_search_select_the_same_impl_member() -> Result<()> {
+        let crate_data = fixture_crate();
+        let filter =
+            RenderSelection::for_filter(&crate_data, "Widget::render", false, false, false)?;
+        let index = SearchIndex::build(&crate_data, false);
+        let options = SearchOptions::configured(
+            "fixture::Widget::render",
+            SearchDomain::PATHS,
+            true,
+            false,
+            false,
+        );
+        let result = index
+            .search(&options)
+            .into_iter()
+            .find(|result| result.path_string == "fixture::Widget::render")
+            .ok_or_else(|| RuskelError::FilterNotMatched(options.query.clone()))?;
+        let search = build_render_selection(&index, slice::from_ref(&result), false);
+
+        assert!(filter.is_match(&result.item_id));
+        assert!(search.is_match(&result.item_id));
+        Ok(())
     }
 
     #[test]

@@ -86,10 +86,10 @@ MCP tests and production use the same handler with explicit nightly prerequisite
 
 All current filter path forms and search results use one item-ID selection model.
 
-- [ ] Implement D3 as specified.
-- [ ] Complete D3's required supporting and downstream work.
-- [ ] Run D3's proof.
-- [ ] Review the settled stage.
+- [x] Implement D3 as specified.
+- [x] Complete D3's required supporting and downstream work.
+- [x] Run D3's proof.
+- [x] Review the settled stage.
 
 ### Stage 4: D4 — Build One Typed Cache Inventory
 

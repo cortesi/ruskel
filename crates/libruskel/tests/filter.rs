@@ -260,6 +260,76 @@ gen_tests! {
             }
         }
         rt_custom {
+            filter_named_reexport: {
+                renderer: Renderer::default().with_filter("Alias"),
+                input: r#"
+                    mod hidden {
+                        /// Original docs
+                        pub struct Original;
+
+                        impl Original {
+                            pub fn new() -> Self {
+                                Self
+                            }
+                        }
+                    }
+
+                    pub use hidden::Original as Alias;
+                    pub struct Other;
+                "#,
+                output: r#"
+                    /// Original docs
+                    pub struct Alias;
+
+                    impl Alias {
+                        pub fn new() -> Self {}
+                    }
+                "#
+            }
+        }
+        rt_custom {
+            filter_glob_reexport: {
+                renderer: Renderer::default().with_filter("Globbed"),
+                input: r#"
+                    mod hidden {
+                        /// Globbed docs
+                        pub struct Globbed;
+                        pub struct Other;
+                    }
+
+                    pub use hidden::*;
+                "#,
+                output: r#"
+                    /// Globbed docs
+                    pub struct Globbed;
+                "#
+            }
+        }
+        rt_custom {
+            filter_private_module_descent: {
+                renderer: Renderer::default()
+                    .with_filter("hidden::deep::Selected")
+                    .with_private_items(true),
+                input: r#"
+                    mod hidden {
+                        //! Hidden docs
+                        pub mod deep {
+                            //! Deep docs
+                            pub struct Selected;
+                            pub struct Other;
+                        }
+                    }
+                "#,
+                output: r#"
+                    mod hidden {
+                        pub mod deep {
+                            pub struct Selected;
+                        }
+                    }
+                "#
+            }
+        }
+        rt_custom {
             no_filter: {
                 // Test with no filter
                 // All module docs should be rendered
