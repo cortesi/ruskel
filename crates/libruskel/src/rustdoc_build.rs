@@ -11,7 +11,7 @@ use rustdoc_types::Crate;
 
 use super::{
     stdlib,
-    target_resolution::{ResolvedTarget, create_quiet_cargo_config},
+    target_resolution::{ResolvedSource, ResolvedTarget, create_quiet_cargo_config},
 };
 use crate::{
     cache::{BuildLease, CacheHandle},
@@ -21,21 +21,16 @@ use crate::{
 
 /// Build rustdoc JSON for one resolved target.
 pub fn build(resolved: &ResolvedTarget, options: &CrateReadOptions) -> Result<CrateRead> {
-    let package_path = &resolved.package_path;
-    // Handle standard library crates specially
-    if let Some((actual_crate, display_crate)) = package_path.std_names() {
-        let display_name = if actual_crate != display_crate {
-            Some(display_crate)
-        } else {
-            None
-        };
-        return Ok(CrateRead {
-            crate_data: stdlib::load_json(actual_crate, display_name)?,
-            bin_target: None,
-        });
-    }
-
-    let manifest_path = package_path.manifest_path()?;
+    let manifest_path = match &resolved.source {
+        ResolvedSource::Package { manifest_path } => manifest_path,
+        ResolvedSource::StdLibrary { actual, display } => {
+            let display_name = (actual != display).then_some(display.as_str());
+            return Ok(CrateRead {
+                crate_data: stdlib::load_json(actual, display_name)?,
+                bin_target: None,
+            });
+        }
+    };
     let PackageTargetSelection {
         package_target,
         bin_target,
@@ -43,7 +38,7 @@ pub fn build(resolved: &ResolvedTarget, options: &CrateReadOptions) -> Result<Cr
         package_name,
         package_version,
     } = select_package_target(
-        &manifest_path,
+        manifest_path,
         options.offline,
         options.bin_override.as_deref(),
     )?;
