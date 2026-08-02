@@ -109,6 +109,7 @@ fn is_path_entrypoint(entrypoint: &str) -> bool {
 /// Parse a non-path entrypoint, including optional `@version` suffixes.
 fn parse_name_entrypoint(entrypoint: &str) -> Result<Entrypoint> {
     let Some((name, version)) = entrypoint.split_once('@') else {
+        validate_package_name(entrypoint)?;
         return Ok(Entrypoint::Name {
             name: entrypoint.to_string(),
             version: None,
@@ -121,6 +122,7 @@ fn parse_name_entrypoint(entrypoint: &str) -> Result<Entrypoint> {
         )));
     }
 
+    validate_package_name(name)?;
     let version = Version::parse(version)
         .map_err(|error| invalid_target(format!("Invalid version: {error}")))?;
 
@@ -128,6 +130,30 @@ fn parse_name_entrypoint(entrypoint: &str) -> Result<Entrypoint> {
         name: name.to_string(),
         version: Some(version),
     })
+}
+
+/// Validate the package-name grammar used by Cargo manifest parsing.
+fn validate_package_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        return Err(invalid_target("Invalid package name: empty name"));
+    };
+
+    if !(unicode_ident::is_xid_start(first) || first == '_') {
+        return Err(invalid_target(format!(
+            "Invalid package name: first character {first:?} must be a Unicode XID start character or '_'"
+        )));
+    }
+
+    if let Some(invalid) =
+        chars.find(|character| !(unicode_ident::is_xid_continue(*character) || *character == '-'))
+    {
+        return Err(invalid_target(format!(
+            "Invalid package name: character {invalid:?} must be a Unicode XID continue character or '-'"
+        )));
+    }
+
+    Ok(())
 }
 
 /// Construct a target-parsing error with the standard variant used by this module.
@@ -230,6 +256,46 @@ mod tests {
         let target = Target::parse("tracing-test")?;
         assert_eq!(target, name_target("tracing-test", None, &[]));
         Ok(())
+    }
+
+    #[test]
+    fn accepts_cargo_package_name_characters() -> Result<()> {
+        for name in [
+            "_",
+            "_crate",
+            "crate-name",
+            "crate_9",
+            "éclair",
+            "e\u{301}clair",
+        ] {
+            assert_eq!(Target::parse(name)?, name_target(name, None, &[]));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_invalid_cargo_package_name_characters() {
+        for name in [
+            "0crate",
+            "-crate",
+            "crate name",
+            "crate\tname",
+            "crate\nname",
+            "crate\0name",
+            "crate\"name",
+            "crate=name",
+            "crate[name",
+            "crate]name",
+            "crate:name",
+            "crate;name",
+            "crate,name",
+        ] {
+            let error = Target::parse(name).expect_err("package name should be rejected");
+            assert!(
+                matches!(error, RuskelError::InvalidTarget(_)),
+                "unexpected error for {name:?}: {error}"
+            );
+        }
     }
 
     #[test]

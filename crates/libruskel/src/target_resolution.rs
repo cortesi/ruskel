@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env, fs,
     io::Write,
     path::{Component, Path, PathBuf, absolute},
@@ -6,6 +7,7 @@ use std::{
 
 use cargo::{core::Workspace, ops, util::context::GlobalContext};
 use semver::Version;
+use serde::Serialize;
 use tempfile::TempDir;
 
 use super::{
@@ -281,33 +283,60 @@ pub fn create_quiet_cargo_config(offline: bool) -> Result<GlobalContext> {
     Ok(config)
 }
 
-/// Construct a minimal manifest string for a temporary crate that depends on `dependency`.
+/// Package metadata for the temporary dependency resolver.
+#[derive(Serialize)]
+struct DummyPackage {
+    /// Package name.
+    name: &'static str,
+    /// Package version.
+    version: &'static str,
+}
+
+/// One dependency in the temporary resolver manifest.
+#[derive(Serialize)]
+struct DummyDependency {
+    /// Requested dependency version.
+    version: String,
+    /// Requested Cargo features.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    features: Vec<String>,
+}
+
+/// Complete temporary resolver manifest.
+#[derive(Serialize)]
+struct DummyManifest {
+    /// Temporary package metadata.
+    package: DummyPackage,
+    /// The one dependency that Cargo must resolve.
+    dependencies: BTreeMap<String, DummyDependency>,
+}
+
+/// Construct a minimal manifest for a temporary crate that depends on `dependency`.
 fn generate_dummy_manifest(
     dependency: &str,
     version: Option<String>,
     features: Option<&[&str]>,
-) -> String {
-    // Convert underscores to hyphens for Cargo package names
+) -> Result<String> {
     let cargo_dependency = dependency.replace('_', "-");
-
-    let version_str = version.map_or("*".to_string(), |v| v);
-    let features_str = features.map_or(String::new(), |f| {
-        let feature_list = f
+    let dependency = DummyDependency {
+        version: version.unwrap_or_else(|| "*".to_string()),
+        features: features
+            .unwrap_or_default()
             .iter()
-            .map(|feat| format!("\"{feat}\""))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(", features = [{feature_list}]")
-    });
-    format!(
-        r#"[package]
-name = "dummy-crate"
-version = "0.1.0"
+            .map(|feature| (*feature).to_string())
+            .collect(),
+    };
+    let manifest = DummyManifest {
+        package: DummyPackage {
+            name: "dummy-crate",
+            version: "0.1.0",
+        },
+        dependencies: BTreeMap::from([(cargo_dependency, dependency)]),
+    };
 
-[dependencies]
-{cargo_dependency} = {{ version = "{version_str}"{features_str} }}
-"#
-    )
+    toml::to_string(&manifest).map_err(|error| {
+        RuskelError::Generate(format!("Failed to serialize dummy manifest: {error}"))
+    })
 }
 
 /// Materialize a temporary crate on disk to fetch metadata for a dependency.
@@ -327,7 +356,7 @@ fn create_dummy_crate(
     let mut file = fs::File::create(lib_rs)?;
     writeln!(file, "// Dummy crate")?;
 
-    let manifest = generate_dummy_manifest(dependency, version, features);
+    let manifest = generate_dummy_manifest(dependency, version, features)?;
     fs::write(manifest_path, manifest)?;
 
     Ok(CargoPath::from_temp_dir(temp_dir))
@@ -702,44 +731,57 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_dummy_manifest() {
-        // Test without features
-        let manifest = generate_dummy_manifest("serde", None, None);
-        assert!(manifest.contains("serde = { version = \"*\" }"));
-        assert!(!manifest.contains("features"));
+    fn test_generate_dummy_manifest() -> Result<()> {
+        let manifest = generate_dummy_manifest(
+            "tokio",
+            Some("1.0".to_string()),
+            Some(&["rt", "macros", "test-util"]),
+        )?;
+        let document: toml::Value = toml::from_str(&manifest).expect("valid manifest TOML");
 
-        // Test with single feature
-        let manifest = generate_dummy_manifest("tokio", Some("1.0".to_string()), Some(&["rt"]));
-        assert!(manifest.contains("tokio = { version = \"1.0\", features = [\"rt\"] }"));
-
-        // Test with multiple features
-        let manifest = generate_dummy_manifest("tokio", None, Some(&["rt", "macros", "test-util"]));
-        assert!(manifest.contains(
-            "tokio = { version = \"*\", features = [\"rt\", \"macros\", \"test-util\"] }"
-        ));
-
-        // Validate TOML syntax by parsing
-        let manifest = generate_dummy_manifest("serde", None, Some(&["derive", "std"]));
-        // Just verify the manifest contains the expected strings, since we don't have toml crate in tests
-        assert!(manifest.contains("[dependencies]"));
-        assert!(manifest.contains("serde = { version = \"*\", features = [\"derive\", \"std\"] }"));
+        assert_eq!(document["package"]["name"].as_str(), Some("dummy-crate"));
+        assert_eq!(document["package"]["version"].as_str(), Some("0.1.0"));
+        let dependencies = document["dependencies"]
+            .as_table()
+            .expect("dependencies table");
+        assert_eq!(dependencies.len(), 1);
+        let dependency = &dependencies["tokio"];
+        assert_eq!(dependency["version"].as_str(), Some("1.0"));
+        assert_eq!(
+            dependency["features"]
+                .as_array()
+                .expect("features array")
+                .iter()
+                .map(|feature| feature.as_str().expect("string feature"))
+                .collect::<Vec<_>>(),
+            ["rt", "macros", "test-util"]
+        );
+        assert!(document.get("workspace").is_none());
+        Ok(())
     }
 
     #[test]
-    fn test_generate_dummy_manifest_with_underscores() {
-        // Test underscore to hyphen conversion
-        let manifest = generate_dummy_manifest("serde_json", None, None);
-        assert!(manifest.contains("serde-json = { version = \"*\" }"));
-        assert!(!manifest.contains("serde_json"));
-
-        // Test with already hyphenated names (should remain unchanged)
-        let manifest = generate_dummy_manifest("async-trait", None, None);
-        assert!(manifest.contains("async-trait = { version = \"*\" }"));
-
-        // Test complex name with multiple underscores
+    fn test_generate_dummy_manifest_with_underscores() -> Result<()> {
         let manifest =
-            generate_dummy_manifest("my_complex_crate_name", Some("0.1.0".to_string()), None);
-        assert!(manifest.contains("my-complex-crate-name = { version = \"0.1.0\" }"));
+            generate_dummy_manifest("my_complex_crate_name", Some("0.1.0".to_string()), None)?;
+        let document: toml::Value = toml::from_str(&manifest).expect("valid manifest TOML");
+        let dependencies = document["dependencies"]
+            .as_table()
+            .expect("dependencies table");
+
+        assert_eq!(dependencies.len(), 1);
+        assert!(dependencies.contains_key("my-complex-crate-name"));
+        assert!(!dependencies.contains_key("my_complex_crate_name"));
+        assert_eq!(
+            dependencies["my-complex-crate-name"]["version"].as_str(),
+            Some("0.1.0")
+        );
+        assert!(
+            dependencies["my-complex-crate-name"]
+                .get("features")
+                .is_none()
+        );
+        Ok(())
     }
 
     #[test]
@@ -751,7 +793,11 @@ mod tests {
 
         let manifest_content = fs::read_to_string(path.join("Cargo.toml"))?;
         assert!(manifest_content.contains("[dependencies]"));
-        assert!(manifest_content.contains("serde = { version = \"*\""));
+        let document: toml::Value = toml::from_str(&manifest_content).expect("valid manifest TOML");
+        assert_eq!(
+            document["dependencies"]["serde"]["version"].as_str(),
+            Some("*")
+        );
 
         Ok(())
     }
@@ -765,10 +811,14 @@ mod tests {
 
         let manifest_content = fs::read_to_string(path.join("Cargo.toml"))?;
 
-        // Validate that the manifest contains the expected content
-        assert!(manifest_content.contains("[dependencies]"));
-        assert!(
-            manifest_content.contains("serde = { version = \"1.0\", features = [\"derive\"] }")
+        let document: toml::Value = toml::from_str(&manifest_content).expect("valid manifest TOML");
+        assert_eq!(
+            document["dependencies"]["serde"]["version"].as_str(),
+            Some("1.0")
+        );
+        assert_eq!(
+            document["dependencies"]["serde"]["features"][0].as_str(),
+            Some("derive")
         );
 
         Ok(())

@@ -506,4 +506,13 @@ mod tests {
             assert_eq!(options.private_items, request.private_items);
         }
     }
+
+    #[test]
+    fn render_rejects_invalid_package_name_before_build() {
+        let error = Ruskel::new()
+            .render("crate\n[workspace]", &CrateRequest::default())
+            .expect_err("invalid package name should fail");
+
+        assert!(matches!(error, RuskelError::InvalidTarget(_)));
+    }
 }

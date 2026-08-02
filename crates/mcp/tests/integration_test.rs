@@ -303,6 +303,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_mcp_server_rejects_invalid_package_name() {
+        let (mut client, mut child) = create_test_client()
+            .await
+            .expect("Failed to create test client");
+        initialize_client(&mut client)
+            .await
+            .expect("Failed to initialize");
+
+        let arguments = json!({
+            "target": "crate\n[workspace]",
+            "frontmatter": false
+        });
+        let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
+        let result = client
+            .call_tool("ruskel", args)
+            .await
+            .expect("Failed to call tool");
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(response_text(&result).contains("Invalid package name"));
+
+        terminate_child(&mut child)
+            .await
+            .expect("Failed to stop MCP server");
+    }
+
+    #[tokio::test]
     async fn test_mcp_server_multiple_requests() {
         let (mut client, mut child) = create_rustdoc_test_client()
             .await

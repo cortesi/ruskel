@@ -71,8 +71,10 @@ shell-words = "1.1.1"
 syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "parsing", "regex-onig"] }
 tempfile = "3.27.0"
 thiserror = "2.0.19"
+toml = "1.0.1"
 timeago = { version = "0.6.1", default-features = false }
 tokio = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+unicode-ident = "1"
 which = "8.0"
