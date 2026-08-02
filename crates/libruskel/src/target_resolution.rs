@@ -792,7 +792,6 @@ mod tests {
         assert!(path.join("Cargo.toml").exists());
 
         let manifest_content = fs::read_to_string(path.join("Cargo.toml"))?;
-        assert!(manifest_content.contains("[dependencies]"));
         let document: toml::Value = toml::from_str(&manifest_content).expect("valid manifest TOML");
         assert_eq!(
             document["dependencies"]["serde"]["version"].as_str(),
