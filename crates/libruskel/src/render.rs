@@ -139,6 +139,9 @@ impl ImplSignature {
         output.push_str(&self.generics);
         output.push(' ');
         if let Some(trait_path) = &self.trait_path {
+            if self.is_negative {
+                output.push('!');
+            }
             output.push_str(trait_path);
             output.push_str(" for ");
         }
@@ -876,6 +879,11 @@ impl RenderState<'_, '_> {
         for impl_id in impl_ids {
             let impl_item = must_get(self.crate_data, impl_id)?;
             let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
+            if impl_.is_negative && impl_.trait_.is_none() {
+                return Err(RuskelError::Generate(format!(
+                    "negative impl item {impl_id:?} is missing a trait"
+                )));
+            }
             if !self.should_render_impl(impl_) || !self.selection_allows_child(parent_id, impl_id) {
                 continue;
             }
@@ -996,7 +1004,7 @@ impl RenderState<'_, '_> {
             }
         }
 
-        if !has_content {
+        if !has_content && !impl_.is_negative {
             return Ok(None);
         }
 
@@ -1433,7 +1441,8 @@ mod tests {
 
     use rustdoc_types::{
         Abi, Crate, Function, FunctionHeader, FunctionSignature, Generics, Id, Impl, Item,
-        ItemEnum, Module, Path, Struct, StructKind, Target, Type, Variant, VariantKind, Visibility,
+        ItemEnum, Module, Path, Struct, StructKind, Target, Trait, Type, Variant, VariantKind,
+        Visibility,
     };
     use tempfile::tempdir;
 
@@ -2023,6 +2032,139 @@ path = "src/lib.rs"
         }
     }
 
+    /// Create an item with common fixture metadata.
+    fn fixture_item(id: Id, name: Option<&str>, inner: ItemEnum) -> Item {
+        Item {
+            id,
+            crate_id: 0,
+            name: name.map(str::to_string),
+            span: None,
+            visibility: Visibility::Public,
+            docs: None,
+            links: HashMap::new(),
+            attrs: Vec::new(),
+            deprecation: None,
+            stability: None,
+            const_stability: None,
+            inner,
+        }
+    }
+
+    /// Build positive and negative impl metadata for one public struct.
+    fn impl_polarity_crate(invalid_negative: bool) -> Crate {
+        let root = Id(0);
+        let widget = Id(1);
+        let blocked_trait = Id(2);
+        let positive_impl = Id(3);
+        let negative_impl = Id(4);
+        let positive_method = Id(5);
+        let trait_path = Path {
+            path: "Blocked".into(),
+            id: blocked_trait,
+            args: None,
+        };
+        let widget_type = Type::ResolvedPath(Path {
+            path: "Widget".into(),
+            id: widget,
+            args: None,
+        });
+        let mut crate_data = empty_crate();
+        crate_data.index.insert(
+            root,
+            fixture_item(
+                root,
+                Some("polarity"),
+                ItemEnum::Module(Module {
+                    is_crate: true,
+                    items: vec![widget],
+                    is_stripped: false,
+                }),
+            ),
+        );
+        crate_data.index.insert(
+            widget,
+            fixture_item(
+                widget,
+                Some("Widget"),
+                ItemEnum::Struct(Struct {
+                    kind: StructKind::Unit,
+                    generics: empty_generics(),
+                    impls: vec![positive_impl, negative_impl],
+                }),
+            ),
+        );
+        crate_data.index.insert(
+            blocked_trait,
+            fixture_item(
+                blocked_trait,
+                Some("Blocked"),
+                ItemEnum::Trait(Trait {
+                    is_auto: false,
+                    is_unsafe: false,
+                    is_dyn_compatible: true,
+                    items: Vec::new(),
+                    generics: empty_generics(),
+                    bounds: Vec::new(),
+                    implementations: vec![positive_impl, negative_impl],
+                }),
+            ),
+        );
+        crate_data.index.insert(
+            positive_impl,
+            fixture_item(
+                positive_impl,
+                None,
+                ItemEnum::Impl(Impl {
+                    is_unsafe: false,
+                    generics: empty_generics(),
+                    provided_trait_methods: Vec::new(),
+                    trait_: Some(trait_path.clone()),
+                    for_: widget_type.clone(),
+                    items: vec![positive_method],
+                    is_negative: false,
+                    is_synthetic: false,
+                    blanket_impl: None,
+                }),
+            ),
+        );
+        let mut negative_item = fixture_item(
+            negative_impl,
+            None,
+            ItemEnum::Impl(Impl {
+                is_unsafe: false,
+                generics: empty_generics(),
+                provided_trait_methods: Vec::new(),
+                trait_: (!invalid_negative).then_some(trait_path),
+                for_: widget_type,
+                items: Vec::new(),
+                is_negative: true,
+                is_synthetic: false,
+                blanket_impl: None,
+            }),
+        );
+        negative_item.docs = Some("Block this implementation.".into());
+        crate_data.index.insert(negative_impl, negative_item);
+        crate_data.index.insert(
+            positive_method,
+            fixture_item(
+                positive_method,
+                Some("allow"),
+                ItemEnum::Function(Function {
+                    sig: FunctionSignature {
+                        inputs: Vec::new(),
+                        output: None,
+                        is_c_variadic: false,
+                    },
+                    generics: empty_generics(),
+                    header: default_header(),
+                    has_body: true,
+                    default_unstable: None,
+                }),
+            ),
+        );
+        crate_data
+    }
+
     #[allow(clippy::needless_pass_by_value)]
     fn render_allowing_format_errors(renderer: Renderer, crate_data: &Crate) -> Result<String> {
         match renderer.render(crate_data) {
@@ -2224,6 +2366,53 @@ path = "src/lib.rs"
         assert!(!rendered.contains("fn instrument"));
 
         Ok(())
+    }
+
+    #[test]
+    fn renderer_preserves_bodyless_negative_impl_polarity() -> Result<()> {
+        let crate_data = impl_polarity_crate(false);
+        let positive_item = must_get(&crate_data, &Id(3))?;
+        let positive = try_extract_item!(positive_item, ItemEnum::Impl)?;
+        let negative_item = must_get(&crate_data, &Id(4))?;
+        let negative = try_extract_item!(negative_item, ItemEnum::Impl)?;
+
+        assert_ne!(
+            ImplGroupKey::from_impl(positive),
+            ImplGroupKey::from_impl(negative)
+        );
+        assert_eq!(
+            ImplSignature::from_impl(positive).render_header(None),
+            "impl Blocked for Widget {\n"
+        );
+        assert_eq!(
+            ImplSignature::from_impl(negative).render_header(None),
+            "impl !Blocked for Widget {\n"
+        );
+
+        let output = render_allowing_format_errors(Renderer::new(), &crate_data)?;
+        assert!(output.contains("impl Blocked for Widget {"));
+        assert!(output.contains("fn allow"));
+        assert!(output.contains("Block this implementation."));
+        assert!(
+            output.contains("impl !Blocked for Widget {}")
+                || output.contains("impl !Blocked for Widget {\n}\n"),
+            "bodyless negative impl was not rendered:\n{output}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn renderer_rejects_negative_inherent_metadata() {
+        let crate_data = impl_polarity_crate(true);
+        let error = Renderer::new()
+            .render(&crate_data)
+            .expect_err("negative inherent metadata should fail");
+
+        assert!(matches!(error, RuskelError::Generate(_)));
+        assert_eq!(
+            error.to_string(),
+            "negative impl item Id(4) is missing a trait"
+        );
     }
 
     #[test]

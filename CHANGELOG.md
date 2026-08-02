@@ -22,6 +22,7 @@
   retargeting them to a dependency with the same name.
 - [fix] Resolve named dependencies by direct `Cargo.toml` keys instead of
   matching transitive package names.
+- [fix] Render bodyless negative impls with their `!` polarity.
 - [bug] Include struct field docs in output
 - [feat] MCP server
 - Many improvements to parsing, language support and output

@@ -83,7 +83,7 @@ pub fn build(resolved: &ResolvedTarget, options: &CrateReadOptions) -> Result<Cr
             Err(error) => return Err(with_recovery_context(&mut storage_retry, error)),
         };
         let attempt_result = build_once(
-            &manifest_path,
+            manifest_path,
             package_target.clone(),
             bin_target.clone(),
             include_private,

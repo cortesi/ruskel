@@ -18,7 +18,7 @@ use crate::error::{Result, RuskelError, convert_cargo_error};
 
 /// Final source selected for rustdoc loading or generation.
 #[derive(Debug)]
-pub(super) enum ResolvedSource {
+pub enum ResolvedSource {
     /// Canonical manifest for a package.
     Package {
         /// Canonical `Cargo.toml` path.
@@ -174,7 +174,7 @@ impl ManifestContext {
 }
 
 /// Create a cargo configuration with minimal output suited for library usage.
-pub(super) fn create_quiet_cargo_config(offline: bool) -> Result<GlobalContext> {
+pub fn create_quiet_cargo_config(offline: bool) -> Result<GlobalContext> {
     let mut config = GlobalContext::default().map_err(|err| convert_cargo_error(&err))?;
     config
         .configure(
@@ -273,7 +273,7 @@ fn create_dummy_crate(
 
 /// A resolved Rust package or module target.
 #[derive(Debug)]
-pub(super) struct ResolvedTarget {
+pub struct ResolvedTarget {
     /// Package manifest or standard-library mapping.
     pub(super) source: ResolvedSource,
 
@@ -512,7 +512,7 @@ impl ResolvedTarget {
 }
 
 /// Parse a textual target specification into a `ResolvedTarget`.
-pub(super) fn resolve_target(target_str: &str, offline: bool) -> Result<ResolvedTarget> {
+pub fn resolve_target(target_str: &str, offline: bool) -> Result<ResolvedTarget> {
     let (resolved_target_str, original_crate) =
         if let Some(mapped) = stdlib::resolve_reexport(target_str) {
             let original = target_str.split("::").next().unwrap_or("std");
@@ -823,12 +823,12 @@ mod tests {
             members = ["member1", "member2"]
         "#;
         let manifest_path = &context.manifest_path;
-        fs::write(&manifest_path, manifest)?;
+        fs::write(manifest_path, manifest)?;
         assert!(context.is_workspace()?);
 
         // Create a regular Cargo.toml
         fs::write(
-            &manifest_path,
+            manifest_path,
             r#"
 [package]
 name = "test-crate"
