@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     io::Write,
     path::{Component, Path, PathBuf, absolute},
@@ -86,12 +86,12 @@ impl ManifestContext {
         Ok(manifest.workspace.is_some() && manifest.package.is_none())
     }
 
-    /// Find a dependency in Cargo's fetched package set.
+    /// Find one direct dependency from the current Cargo package.
     fn find_dependency(&self, dependency: &str, offline: bool) -> Result<Option<ResolvedSource>> {
         let config = create_quiet_cargo_config(offline)?;
         let workspace = Workspace::new(&self.manifest_path, &config)
             .map_err(|error| convert_cargo_error(&error))?;
-        let (_, packages) = ops::fetch(
+        let (resolve, packages) = ops::fetch(
             &workspace,
             &ops::FetchOptions {
                 gctx: &config,
@@ -99,15 +99,46 @@ impl ManifestContext {
             },
         )
         .map_err(|error| convert_cargo_error(&error))?;
-        let alternate = alternate_package_spelling(dependency);
-
-        for package in packages.packages() {
-            let package_name = package.name().as_str();
-            if package_name == dependency || package_name == alternate {
-                return ResolvedSource::package(package.manifest_path()).map(Some);
-            }
+        let Some(current_package) = workspace.current_opt() else {
+            return Ok(None);
+        };
+        let current_id = current_package.package_id();
+        let matching_ids = |name: &str| {
+            resolve
+                .deps(current_id)
+                .filter_map(|(package_id, dependencies)| {
+                    dependencies
+                        .iter()
+                        .any(|edge| edge.name_in_toml().as_str() == name)
+                        .then_some(package_id)
+                })
+                .collect::<BTreeSet<_>>()
+        };
+        let mut matches = matching_ids(dependency);
+        if matches.is_empty() {
+            matches = matching_ids(&alternate_package_spelling(dependency));
         }
-        Ok(None)
+
+        let Some(package_id) = matches.pop_first() else {
+            return Ok(None);
+        };
+        if !matches.is_empty() {
+            let mut package_ids = vec![package_id];
+            package_ids.extend(matches);
+            let choices = package_ids
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(RuskelError::InvalidTarget(format!(
+                "Dependency '{dependency}' resolves to multiple direct packages: {choices}"
+            )));
+        }
+
+        let package = packages
+            .get_one(package_id)
+            .map_err(|error| convert_cargo_error(&error))?;
+        ResolvedSource::package(package.manifest_path()).map(Some)
     }
 
     /// Walk upwards from `start_dir` to find the closest `Cargo.toml`.
@@ -606,11 +637,21 @@ mod tests {
 
     /// Create one minimal package with optional additional manifest sections.
     fn write_package(path: &Path, name: &str, manifest_tail: &str) -> Result<()> {
+        write_package_version(path, name, "0.1.0", manifest_tail)
+    }
+
+    /// Create one minimal package at an explicit version.
+    fn write_package_version(
+        path: &Path,
+        name: &str,
+        version: &str,
+        manifest_tail: &str,
+    ) -> Result<()> {
         fs::create_dir_all(path.join("src"))?;
         fs::write(
             path.join("Cargo.toml"),
             format!(
-                "[package]\nname = {name:?}\nversion = \"0.1.0\"\nedition = \"2024\"\n{manifest_tail}"
+                "[package]\nname = {name:?}\nversion = {version:?}\nedition = \"2024\"\n{manifest_tail}"
             ),
         )?;
         fs::write(path.join("src/lib.rs"), "")?;
@@ -657,6 +698,14 @@ mod tests {
             serde_json::to_vec(&checksum)?,
         )?;
         Ok(package)
+    }
+
+    /// Resolve one direct dependency and return its package directory.
+    fn direct_dependency_directory(context: &ManifestContext, name: &str) -> Result<PathBuf> {
+        let source = context
+            .find_dependency(name, true)?
+            .unwrap_or_else(|| panic!("direct dependency {name:?} should resolve"));
+        Ok(package_directory(&source).to_path_buf())
     }
 
     #[test]
@@ -857,6 +906,199 @@ version = "0.1.0"
     }
 
     #[test]
+    fn resolves_direct_dependency_keys_across_cargo_edge_kinds() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let host = temp_dir.path().join("host");
+        let dependencies = temp_dir.path().join("dependencies");
+        let cases = [
+            ("normal", "normal"),
+            ("renamed_alias", "renamed-package"),
+            ("hyphen_key", "hyphen-key"),
+            ("dev_only", "dev-package"),
+            ("build_only", "build-package"),
+            ("target_only", "target-package"),
+        ];
+        for (_, package_name) in cases {
+            write_package(&dependencies.join(package_name), package_name, "")?;
+        }
+        write_package(
+            &host,
+            "host",
+            r#"[dependencies]
+normal = { path = "../dependencies/normal" }
+renamed_alias = { package = "renamed-package", path = "../dependencies/renamed-package" }
+hyphen-key = { path = "../dependencies/hyphen-key" }
+
+[dev-dependencies]
+dev_only = { package = "dev-package", path = "../dependencies/dev-package" }
+
+[build-dependencies]
+build_only = { package = "build-package", path = "../dependencies/build-package" }
+
+[target.'cfg(target_os = "none")'.dependencies]
+target_only = { package = "target-package", path = "../dependencies/target-package" }
+"#,
+        )?;
+        let context = ManifestContext::from_directory(&host)?;
+
+        for (entrypoint, package_name) in cases {
+            assert_eq!(
+                direct_dependency_directory(&context, entrypoint)?,
+                fs::canonicalize(dependencies.join(package_name))?
+            );
+        }
+        let resolved = ResolvedTarget::from_manifest_root(
+            &context,
+            "renamed_alias",
+            None,
+            &["RenamedItem".to_string()],
+            true,
+        )?;
+        assert_eq!(
+            package_directory(&resolved.source),
+            fs::canonicalize(dependencies.join("renamed-package"))?
+        );
+        assert_eq!(resolved.filter, "RenamedItem");
+        Ok(())
+    }
+
+    #[test]
+    fn exact_dependency_key_precedes_alternate_spelling() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let host = temp_dir.path().join("host");
+        let exact = temp_dir.path().join("dependencies/exact-package");
+        let alternate = temp_dir.path().join("dependencies/alternate-package");
+        write_package(&exact, "exact-package", "")?;
+        write_package(&alternate, "alternate-package", "")?;
+        write_package(
+            &host,
+            "host",
+            r#"[dependencies]
+foo_bar = { package = "exact-package", path = "../dependencies/exact-package" }
+foo-bar = { package = "alternate-package", path = "../dependencies/alternate-package" }
+"#,
+        )?;
+        let context = ManifestContext::from_directory(&host)?;
+
+        assert_eq!(
+            direct_dependency_directory(&context, "foo_bar")?,
+            fs::canonicalize(exact)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn direct_alias_selects_one_package_version() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let host = temp_dir.path().join("host");
+        let version_one = temp_dir.path().join("dependencies/multi-v1");
+        let version_two = temp_dir.path().join("dependencies/multi-v2");
+        write_package_version(&version_one, "multi-package", "1.0.0", "")?;
+        write_package_version(&version_two, "multi-package", "2.0.0", "")?;
+        write_package(
+            &host,
+            "host",
+            r#"[dependencies]
+version_one = { package = "multi-package", path = "../dependencies/multi-v1" }
+version_two = { package = "multi-package", path = "../dependencies/multi-v2" }
+"#,
+        )?;
+        let context = ManifestContext::from_directory(&host)?;
+
+        assert_eq!(
+            direct_dependency_directory(&context, "version_two")?,
+            fs::canonicalize(version_two)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn transitive_dependency_is_not_an_entrypoint() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let host = temp_dir.path().join("host");
+        let middle = temp_dir.path().join("dependencies/middle");
+        let leaf = temp_dir.path().join("dependencies/leaf");
+        write_package(
+            &host,
+            "host",
+            "[dependencies]\nmiddle = { path = \"../dependencies/middle\" }\n",
+        )?;
+        write_package(
+            &middle,
+            "middle",
+            "[dependencies]\nleaf = { path = \"../leaf\" }\n",
+        )?;
+        write_package(&leaf, "leaf", "")?;
+        let context = ManifestContext::from_directory(&host)?;
+
+        assert!(context.find_dependency("leaf", true)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn virtual_workspace_has_no_direct_dependency_entrypoint() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let member = temp_dir.path().join("member");
+        let dependency = temp_dir.path().join("dependency");
+        fs::write(
+            temp_dir.path().join("Cargo.toml"),
+            "[workspace]\nmembers = [\"member\"]\nresolver = \"2\"\n",
+        )?;
+        write_package(
+            &member,
+            "member",
+            "[dependencies]\ndependency = { path = \"../dependency\" }\n",
+        )?;
+        write_package(&dependency, "dependency", "")?;
+        let context = ManifestContext::from_directory(temp_dir.path())?;
+
+        assert!(context.find_dependency("dependency", true)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn ambiguous_target_specific_edges_return_stable_error() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let host = temp_dir.path().join("host");
+        let cargo_home = temp_dir.path().join("cargo-home");
+        let source_root = temp_dir.path().join("registry-source");
+        fs::create_dir_all(&cargo_home)?;
+        write_directory_source_package(&source_root, "shared-package", "1.0.0")?;
+        write_directory_source_package(&source_root, "shared-package", "2.0.0")?;
+        fs::write(
+            cargo_home.join("config.toml"),
+            format!(
+                "[source.crates-io]\nreplace-with = \"fixture\"\n\n[source.fixture]\ndirectory = {:?}\n",
+                source_root.to_string_lossy()
+            ),
+        )?;
+        write_package(
+            &host,
+            "host",
+            r#"[target.'cfg(unix)'.dependencies]
+shared = { package = "shared-package", version = "=1.0.0" }
+
+[target.'cfg(windows)'.dependencies]
+shared = { package = "shared-package", version = "=2.0.0" }
+"#,
+        )?;
+        let _cargo_home_guard = EnvVarGuard::set_path("CARGO_HOME", &cargo_home);
+        let context = ManifestContext::from_directory(&host)?;
+
+        let error = context
+            .find_dependency("shared", true)
+            .expect_err("distinct direct package IDs should be ambiguous");
+        let message = error.to_string();
+        assert!(
+            matches!(error, RuskelError::InvalidTarget(_)),
+            "unexpected ambiguity error: {error:?}"
+        );
+        assert!(message.contains("shared-package v1.0.0"));
+        assert!(message.contains("shared-package v2.0.0"));
+        Ok(())
+    }
+
+    #[test]
     fn test_resolve_name_prefers_workspace_members() -> Result<()> {
         let temp_dir = tempdir()?;
         let workspace_root = temp_dir.path().join("workspace");
@@ -970,11 +1212,13 @@ version = "0.1.0"
     }
 
     #[test]
-    fn resolves_version_from_test_local_directory_source() -> Result<()> {
+    fn missing_direct_dependency_falls_back_to_local_registry_source() -> Result<()> {
         let temp_dir = tempdir()?;
         let cargo_home = temp_dir.path().join("cargo-home");
         let source_root = temp_dir.path().join("registry-source");
+        let host = temp_dir.path().join("host");
         fs::create_dir_all(&cargo_home)?;
+        write_package(&host, "host", "")?;
         let package =
             write_directory_source_package(&source_root, "local-registry-crate", "1.2.3")?;
         fs::write(
@@ -985,10 +1229,12 @@ version = "0.1.0"
             ),
         )?;
         let _cargo_home_guard = EnvVarGuard::set_path("CARGO_HOME", &cargo_home);
+        let context = ManifestContext::from_directory(&host)?;
 
-        let resolved = ResolvedTarget::from_dummy_crate(
+        let resolved = ResolvedTarget::from_manifest_root(
+            &context,
             "local_registry_crate",
-            Some(Version::parse("1.2.3").expect("valid version")),
+            None,
             &["RegistryFixture".to_string()],
             true,
         )?;

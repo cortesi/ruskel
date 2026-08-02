@@ -142,6 +142,10 @@ ruskel core                 # Core library (no_std compatible)
 ruskel alloc                # Allocation library
 ```
 
+For a named target, Ruskel first selects a workspace member. It then selects a direct dependency
+by its `Cargo.toml` key. If neither exists, Ruskel resolves the name through the configured Cargo
+registry. Text after the first `::` is always a path inside the selected crate.
+
 ## Build cache
 
 Ruskel writes non-standard-library rustdoc builds to a dedicated cache. This

@@ -20,6 +20,8 @@
 - [fix] Improve rustdoc/cargo diagnostics and target specification validation.
 - [fix] Keep paths after an entrypoint inside the selected crate instead of
   retargeting them to a dependency with the same name.
+- [fix] Resolve named dependencies by direct `Cargo.toml` keys instead of
+  matching transitive package names.
 - [bug] Include struct field docs in output
 - [feat] MCP server
 - Many improvements to parsing, language support and output

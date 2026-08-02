@@ -133,7 +133,9 @@ impl Ruskel {
     /// - A package name. In this case the name can also include a version number, separated by an
     ///   '@' symbol.
     ///
-    /// The path is a fully qualified path within the entrypoint.
+    /// Ruskel selects workspace members before direct dependencies. It matches a direct dependency
+    /// by its `Cargo.toml` key. If neither exists, it resolves the name through the configured
+    /// Cargo registry. The path after the first `::` stays inside the selected entrypoint.
     ///
     /// # Examples of valid targets:
     ///
