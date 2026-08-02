@@ -497,27 +497,6 @@ impl ResolvedTarget {
         Self::from_dummy_crate(name, version, target_path, offline)
     }
 
-    /// Retarget a resolved crate path when the first filter component names a dependency.
-    fn retarget_dependency(self, original_path: &[String], offline: bool) -> Result<Self> {
-        let Some(first_component) = self
-            .filter
-            .split("::")
-            .next()
-            .filter(|component| !component.is_empty())
-        else {
-            return Ok(self);
-        };
-
-        if let Some(package_path) = self
-            .package_path
-            .find_dependency(first_component, offline)?
-        {
-            return Ok(Self::new(package_path, original_path));
-        }
-
-        Ok(self)
-    }
-
     /// Resolve a module path starting from a specific Rust source file.
     fn from_rust_file(file_path: PathBuf, additional_path: &[String]) -> Result<Self> {
         let file_path = fs::canonicalize(file_path)?;
@@ -640,8 +619,7 @@ pub fn resolve_target(target_str: &str, offline: bool) -> Result<ResolvedTarget>
             }
             ResolvedTarget::reject_std_module_name(name)?;
 
-            ResolvedTarget::from_target(target.clone(), offline)?
-                .retarget_dependency(&target.path, offline)
+            ResolvedTarget::from_target(target, offline)
         }
     }
 }
@@ -669,13 +647,18 @@ mod tests {
 
     struct DirGuard {
         original: PathBuf,
+        _guard: MutexGuard<'static, ()>,
     }
 
     impl DirGuard {
         fn change_to(path: &Path) -> Result<Self> {
+            let guard = ENV_LOCK.lock().expect("environment mutex poisoned");
             let original = env::current_dir()?;
             env::set_current_dir(path)?;
-            Ok(Self { original })
+            Ok(Self {
+                original,
+                _guard: guard,
+            })
         }
     }
 
@@ -717,6 +700,19 @@ mod tests {
                 None => unsafe { env::remove_var(self.key) },
             }
         }
+    }
+
+    /// Create one minimal package with optional additional manifest sections.
+    fn write_package(path: &Path, name: &str, manifest_tail: &str) -> Result<()> {
+        fs::create_dir_all(path.join("src"))?;
+        fs::write(
+            path.join("Cargo.toml"),
+            format!(
+                "[package]\nname = {name:?}\nversion = \"0.1.0\"\nedition = \"2024\"\n{manifest_tail}"
+            ),
+        )?;
+        fs::write(path.join("src/lib.rs"), "")?;
+        Ok(())
     }
 
     #[test]
@@ -955,6 +951,66 @@ version = "0.1.0"
         assert_eq!(path, expected);
         assert!(filter.is_empty());
 
+        Ok(())
+    }
+
+    #[test]
+    fn intra_package_path_does_not_retarget_to_dependency() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let workspace = temp_dir.path().join("workspace");
+        let app = workspace.join("app");
+        let dependency = temp_dir.path().join("dependencies/shadow");
+
+        fs::create_dir_all(&workspace)?;
+        fs::write(
+            workspace.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\"]\nresolver = \"2\"\n",
+        )?;
+        write_package(
+            &app,
+            "app",
+            "[dependencies]\nshadow = { path = \"../../dependencies/shadow\" }\n",
+        )?;
+        write_package(&dependency, "shadow", "")?;
+
+        let _guard = DirGuard::change_to(&workspace)?;
+        let resolved = resolve_target("app::shadow", true)?;
+
+        assert_eq!(
+            resolved.package_path.canonical_path()?,
+            fs::canonicalize(app)?
+        );
+        assert_eq!(resolved.filter, "shadow");
+        Ok(())
+    }
+
+    #[test]
+    fn dependency_path_does_not_retarget_to_transitive_dependency() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let host = temp_dir.path().join("host");
+        let middle = temp_dir.path().join("dependencies/middle");
+        let leaf = temp_dir.path().join("dependencies/leaf");
+
+        write_package(
+            &host,
+            "host",
+            "[dependencies]\nmiddle = { path = \"../dependencies/middle\" }\n",
+        )?;
+        write_package(
+            &middle,
+            "middle",
+            "[dependencies]\nleaf = { path = \"../leaf\" }\n",
+        )?;
+        write_package(&leaf, "leaf", "")?;
+
+        let _guard = DirGuard::change_to(&host)?;
+        let resolved = resolve_target("middle::leaf", true)?;
+
+        assert_eq!(
+            resolved.package_path.canonical_path()?,
+            fs::canonicalize(middle)?
+        );
+        assert_eq!(resolved.filter, "leaf");
         Ok(())
     }
 
