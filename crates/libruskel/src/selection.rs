@@ -38,7 +38,8 @@ pub type RenderEdge = (Option<Id>, Id);
 pub struct RenderSelection {
     /// Selection metadata keyed by item identifier.
     entries: HashMap<Id, SelectionFlags>,
-    /// Optional occurrence-level restriction for aliased and directly defined items.
+    /// Optional occurrence-level restriction for aliased and directly defined
+    /// items.
     edges: Option<HashSet<RenderEdge>>,
     /// Optional occurrence-level module documentation decisions.
     module_docs: Option<HashSet<RenderEdge>>,
@@ -273,7 +274,8 @@ impl FilterIndex {
         }
     }
 
-    /// Select one exact path and all compatible ancestor and descendant occurrences.
+    /// Select one exact path and all compatible ancestor and descendant
+    /// occurrences.
     fn select(self, filter: &str) -> Result<RenderSelection> {
         let components: Vec<String> = filter.split("::").map(ToOwned::to_owned).collect();
         if components.is_empty() || !self.records.iter().any(|record| record.path == components) {

@@ -1,6 +1,7 @@
 //! Integration tests for the MCP server
 //!
-//! These tests verify the MCP server protocol implementation using the tmcp client.
+//! These tests verify the MCP server protocol implementation using the tmcp
+//! client.
 
 use std::{io, result::Result as StdResult, sync::OnceLock, time::Duration};
 
@@ -96,7 +97,7 @@ async fn terminate_child(child: &mut ServerTask) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use tmcp::schema::{ContentBlock, LATEST_PROTOCOL_VERSION};
+    use tmcp::schema::{ContentBlock, SupportedProtocolVersions};
 
     use super::*;
 
@@ -132,7 +133,10 @@ mod tests {
             .expect("Failed to initialize");
 
         // Verify response structure
-        assert_eq!(result.protocol_version, LATEST_PROTOCOL_VERSION);
+        assert_eq!(
+            &result.protocol_version,
+            SupportedProtocolVersions::default().preferred()
+        );
         assert_eq!(result.server_info.name, "ruskel_server");
 
         // Clean up

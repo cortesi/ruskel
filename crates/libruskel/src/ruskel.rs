@@ -16,13 +16,14 @@ use super::{
 /// Ruskel generates a skeletonized version of a Rust crate in a single page.
 /// It produces syntactically valid Rust code with all implementations omitted.
 ///
-/// The tool performs a 'cargo fetch' to ensure all referenced code is available locally,
-/// then uses 'cargo doc' with the nightly toolchain to generate JSON output. This JSON
-/// is parsed and used to render the skeletonized code. Users must have the nightly
-/// Rust toolchain installed and available.
+/// The tool performs a 'cargo fetch' to ensure all referenced code is available
+/// locally, then uses 'cargo doc' with the nightly toolchain to generate JSON
+/// output. This JSON is parsed and used to render the skeletonized code. Users
+/// must have the nightly Rust toolchain installed and available.
 #[derive(Debug, Clone)]
 pub struct Ruskel {
-    /// In offline mode Ruskel will not attempt to fetch dependencies from the network.
+    /// In offline mode Ruskel will not attempt to fetch dependencies from the
+    /// network.
     offline: bool,
 
     /// Whether to render auto-implemented traits.
@@ -95,7 +96,8 @@ impl VisibilityPolicy {
         }
     }
 
-    /// Render public output from a rustdoc document that still contains private items for filtering.
+    /// Render public output from a rustdoc document that still contains private
+    /// items for filtering.
     fn render_public() -> Self {
         Self {
             document_private_items: true,
@@ -103,7 +105,8 @@ impl VisibilityPolicy {
         }
     }
 
-    /// Compute the effective render visibility after accounting for bin-only targets.
+    /// Compute the effective render visibility after accounting for bin-only
+    /// targets.
     fn effective_render_private(self, bin_target: Option<&BinaryTarget>) -> bool {
         self.render_private_items || bin_target.is_some_and(|target| target.is_bin_only)
     }
@@ -120,8 +123,8 @@ impl Ruskel {
     ///
     /// # Target Format
     ///
-    /// A target specification is an entrypoint, followed by an optional path, with components
-    /// separated by '::'.
+    /// A target specification is an entrypoint, followed by an optional path,
+    /// with components separated by '::'.
     ///
     ///   entrypoint::path
     ///
@@ -130,12 +133,13 @@ impl Ruskel {
     /// - A path to a Rust file
     /// - A directory containing a Cargo.toml file
     /// - A module name
-    /// - A package name. In this case the name can also include a version number, separated by an
-    ///   '@' symbol.
+    /// - A package name. In this case the name can also include a version
+    ///   number, separated by an '@' symbol.
     ///
-    /// Ruskel selects workspace members before direct dependencies. It matches a direct dependency
-    /// by its `Cargo.toml` key. If neither exists, it resolves the name through the configured
-    /// Cargo registry. The path after the first `::` stays inside the selected entrypoint.
+    /// Ruskel selects workspace members before direct dependencies. It matches
+    /// a direct dependency by its `Cargo.toml` key. If neither exists, it
+    /// resolves the name through the configured Cargo registry. The path
+    /// after the first `::` stays inside the selected entrypoint.
     ///
     /// # Examples of valid targets:
     ///
@@ -158,8 +162,8 @@ impl Ruskel {
         }
     }
 
-    /// Enables or disables offline mode, which prevents Ruskel from fetching dependencies from the
-    /// network.
+    /// Enables or disables offline mode, which prevents Ruskel from fetching
+    /// dependencies from the network.
     pub fn with_offline(mut self, offline: bool) -> Self {
         self.offline = offline;
         self
@@ -171,7 +175,8 @@ impl Ruskel {
         self
     }
 
-    /// Enables or disables silent mode, which suppresses output during processing.
+    /// Enables or disables silent mode, which suppresses output during
+    /// processing.
     pub fn with_silent(mut self, silent: bool) -> Self {
         self.silent = silent;
         self
@@ -210,7 +215,8 @@ impl Ruskel {
     /// Returns the parsed representation of the crate's API.
     ///
     /// # Arguments
-    /// * `target` - The target specification (see new() documentation for format)
+    /// * `target` - The target specification (see new() documentation for
+    ///   format)
     /// * `request` - Cargo feature and visibility options
     pub fn inspect(&self, target: &str, request: &CrateRequest) -> Result<Crate> {
         Ok(self
@@ -222,10 +228,12 @@ impl Ruskel {
             .crate_data)
     }
 
-    /// Execute a search against the crate and return the matched items along with a rendered skeleton.
+    /// Execute a search against the crate and return the matched items along
+    /// with a rendered skeleton.
     ///
-    /// The search respects the same target resolution logic as [`Self::render`], but only the
-    /// matched items and their ancestors are emitted in the final skeleton.
+    /// The search respects the same target resolution logic as
+    /// [`Self::render`], but only the matched items and their ancestors are
+    /// emitted in the final skeleton.
     pub fn search(
         &self,
         target: &str,
@@ -268,7 +276,8 @@ impl Ruskel {
         Ok(SearchResponse { results, rendered })
     }
 
-    /// Produce a lightweight listing of crate items, optionally filtered by a search query.
+    /// Produce a lightweight listing of crate items, optionally filtered by a
+    /// search query.
     pub fn list(
         &self,
         target: &str,
@@ -332,7 +341,8 @@ impl Ruskel {
     /// Returns a pretty-printed version of the crate's JSON representation.
     ///
     /// # Arguments
-    /// * `target` - The target specification (see new() documentation for format)
+    /// * `target` - The target specification (see new() documentation for
+    ///   format)
     /// * `request` - Cargo feature and visibility options
     pub fn raw_json(&self, target: &str, request: &CrateRequest) -> Result<String> {
         Ok(serde_json::to_string_pretty(
@@ -340,7 +350,8 @@ impl Ruskel {
         )?)
     }
 
-    /// Load crate data and normalize the privacy policy derived from the selected target.
+    /// Load crate data and normalize the privacy policy derived from the
+    /// selected target.
     fn load_target(
         &self,
         target: &str,
@@ -363,7 +374,8 @@ impl Ruskel {
         })
     }
 
-    /// Combine request-scoped and process-scoped settings for one rustdoc build.
+    /// Combine request-scoped and process-scoped settings for one rustdoc
+    /// build.
     fn crate_read_options(
         &self,
         request: &CrateRequest,
@@ -381,7 +393,8 @@ impl Ruskel {
         }
     }
 
-    /// Create the renderer preconfigured with target filtering and visibility policy.
+    /// Create the renderer preconfigured with target filtering and visibility
+    /// policy.
     fn base_renderer(&self, loaded: &LoadedTarget) -> Renderer {
         Renderer::default()
             .with_filter(&loaded.resolved_target.filter)

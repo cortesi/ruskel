@@ -24,7 +24,8 @@ use tracing_subscriber::filter::LevelFilter;
 
 /// Message printed when a search flag is present but contains only whitespace.
 const EMPTY_SEARCH_MESSAGE: &str = "Search query is empty; nothing to do.";
-/// Error returned when `--mcp` is combined with flags that belong on individual requests.
+/// Error returned when `--mcp` is combined with flags that belong on individual
+/// requests.
 const MCP_REQUEST_SCOPED_FLAGS_ERROR: &str = "--mcp can only be used with --cache-dir, --auto-impls, --private, --no-frontmatter, --offline, --verbose, --addr, and --log";
 
 #[derive(Parser)]
@@ -54,7 +55,8 @@ struct Cli {
     #[arg(long, default_value_t = false)]
     raw: bool,
 
-    /// Search query used to filter the generated skeleton instead of rendering everything.
+    /// Search query used to filter the generated skeleton instead of rendering
+    /// everything.
     #[arg(long)]
     search: Option<String>,
 
@@ -62,7 +64,8 @@ struct Cli {
     #[arg(long, default_value_t = false, conflicts_with = "raw")]
     list: bool,
 
-    /// Comma-separated list of search domains (name, doc, signature, path). Defaults to name, doc, signature.
+    /// Comma-separated list of search domains (name, doc, signature, path).
+    /// Defaults to name, doc, signature.
     #[arg(
         long = "search-spec",
         value_delimiter = ',',
@@ -271,7 +274,8 @@ fn highlight_output(output: String, should_highlight: bool) -> Result<String, Bo
     }
 }
 
-/// Launch the MCP server variant of ruskel using the provided CLI configuration.
+/// Launch the MCP server variant of ruskel using the provided CLI
+/// configuration.
 fn run_mcp(cli: &Cli) -> Result<(), Box<dyn Error>> {
     let defaults = cli.mcp_defaults()?;
     let ruskel = ruskel_from_cli(cli);
@@ -500,7 +504,8 @@ fn format_size(bytes: u64) -> String {
     ByteSize::b(bytes).to_string()
 }
 
-/// Prefer recorded workspace context and retain the identity as a legacy fallback.
+/// Prefer recorded workspace context and retain the identity as a legacy
+/// fallback.
 fn format_workspace_label(workspace_root: Option<&Path>, identity: &str) -> String {
     workspace_root.map_or_else(
         || identity.to_string(),

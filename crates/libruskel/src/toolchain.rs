@@ -33,7 +33,8 @@ pub fn nightly_sysroot() -> Result<PathBuf> {
     parse_sysroot_path(&output.stdout)
 }
 
-/// Ensure the nightly toolchain exists and report whether the `rust-docs-json` component is installed.
+/// Ensure the nightly toolchain exists and report whether the `rust-docs-json`
+/// component is installed.
 pub fn ensure_nightly_with_docs() -> Result<bool> {
     let output = run_command(
         "rustup",
@@ -76,7 +77,8 @@ fn identity_from_stdout(stdout: &[u8]) -> String {
     format!("{:x}", Sha256::digest(stdout))
 }
 
-/// Execute a subprocess and convert spawn failures into `RuskelError::Generate`.
+/// Execute a subprocess and convert spawn failures into
+/// `RuskelError::Generate`.
 fn run_command(
     program: &str,
     args: &[&str],
@@ -111,7 +113,8 @@ fn parse_sysroot_path(stdout: &[u8]) -> Result<PathBuf> {
     Ok(PathBuf::from(sysroot.trim()))
 }
 
-/// Check whether `rustup component list` reports the named component as installed.
+/// Check whether `rustup component list` reports the named component as
+/// installed.
 fn has_installed_component(stdout: &[u8], component: &str) -> bool {
     String::from_utf8_lossy(stdout)
         .lines()

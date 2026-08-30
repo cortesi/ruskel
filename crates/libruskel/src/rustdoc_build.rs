@@ -468,7 +468,8 @@ fn build_once(
     })
 }
 
-/// Maximum number of characters from rustdoc stderr included in failure reports.
+/// Maximum number of characters from rustdoc stderr included in failure
+/// reports.
 const MAX_STDERR_CHARS: usize = 8_192;
 
 /// Translate a `rustdoc_json` build failure into a user-facing [`RuskelError`].
@@ -506,7 +507,8 @@ fn map_rustdoc_build_error(
     }
 }
 
-/// Format a detailed error for rustdoc build failures, optionally embedding diagnostics.
+/// Format a detailed error for rustdoc build failures, optionally embedding
+/// diagnostics.
 fn format_rustdoc_failure(captured_stderr: &[u8], silent: bool) -> RuskelError {
     let stderr_raw = String::from_utf8_lossy(captured_stderr).into_owned();
     let stderr_trimmed = stderr_raw.trim();
@@ -536,7 +538,8 @@ fn format_rustdoc_failure(captured_stderr: &[u8], silent: bool) -> RuskelError {
     RuskelError::Generate(format!("Failed to build rustdoc JSON: {summary}"))
 }
 
-/// Extract the first meaningful rustdoc diagnostic from the captured stderr stream.
+/// Extract the first meaningful rustdoc diagnostic from the captured stderr
+/// stream.
 fn extract_primary_diagnostic(stderr: &str) -> Option<String> {
     let mut lines = stderr.lines().peekable();
 
@@ -608,7 +611,8 @@ fn is_primary_error_line(line: &str) -> bool {
     false
 }
 
-/// Truncate collected diagnostics to a manageable size, returning whether truncation occurred.
+/// Truncate collected diagnostics to a manageable size, returning whether
+/// truncation occurred.
 fn truncate_diagnostics(stderr: &str) -> (String, bool) {
     let mut buffer = String::new();
     let mut truncated = false;

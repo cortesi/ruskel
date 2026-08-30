@@ -2,7 +2,8 @@ use std::fmt::Write;
 
 use crate::search::SearchDomain;
 
-/// Configuration describing optional frontmatter comments rendered ahead of skeleton output.
+/// Configuration describing optional frontmatter comments rendered ahead of
+/// skeleton output.
 #[derive(Debug, Clone, Default)]
 pub struct FrontmatterConfig {
     /// Whether the frontmatter should be rendered.
@@ -18,7 +19,8 @@ pub struct FrontmatterConfig {
 }
 
 impl FrontmatterConfig {
-    /// Create a configuration with frontmatter enabled for the provided target specification.
+    /// Create a configuration with frontmatter enabled for the provided target
+    /// specification.
     pub fn for_target(target: impl Into<String>) -> Self {
         Self {
             enabled: true,
@@ -55,7 +57,8 @@ impl FrontmatterConfig {
         self
     }
 
-    /// Render the configured frontmatter when enabled, returning the formatted comment block.
+    /// Render the configured frontmatter when enabled, returning the formatted
+    /// comment block.
     pub fn render(
         &self,
         include_private: bool,

@@ -60,6 +60,7 @@ pub const STD_MODULE_MAPPING: &[(&str, &str)] = &[
     ("random", "std"),
     ("rc", "alloc"),
     ("result", "core"),
+    ("rt", "std"),
     ("simd", "std"),
     ("slice", "core"),
     ("str", "core"),
@@ -75,4 +76,5 @@ pub const STD_MODULE_MAPPING: &[(&str, &str)] = &[
     ("u8", "core"),
     ("usize", "core"),
     ("vec", "alloc"),
+    ("view", "std"),
 ];

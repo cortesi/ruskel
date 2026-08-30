@@ -220,7 +220,8 @@ struct DummyManifest {
     dependencies: BTreeMap<String, DummyDependency>,
 }
 
-/// Construct a minimal manifest for a temporary crate that depends on `dependency`.
+/// Construct a minimal manifest for a temporary crate that depends on
+/// `dependency`.
 fn generate_dummy_manifest(
     dependency: &str,
     version: Option<String>,
@@ -278,8 +279,8 @@ pub struct ResolvedTarget {
     pub(super) source: ResolvedSource,
 
     /// Module path within the package, excluding the package name. E.g.,
-    /// "module::submodule::item". Empty string for package root. This might not necessarily match
-    /// the user's input.
+    /// "module::submodule::item". Empty string for package root. This might not
+    /// necessarily match the user's input.
     pub(super) filter: String,
 }
 
@@ -297,7 +298,8 @@ impl ResolvedTarget {
         Self { source, filter }
     }
 
-    /// Resolve a standard library crate name, optionally overriding the display name.
+    /// Resolve a standard library crate name, optionally overriding the display
+    /// name.
     fn resolve_std_crate(name: &str, display_name: Option<&str>, path: &[String]) -> Option<Self> {
         stdlib::is_crate(name).then(|| {
             let display = display_name.unwrap_or(name);
@@ -311,7 +313,8 @@ impl ResolvedTarget {
         })
     }
 
-    /// Reject bare standard library module names that require an explicit `std::` prefix.
+    /// Reject bare standard library module names that require an explicit
+    /// `std::` prefix.
     fn reject_std_module_name(name: &str) -> Result<()> {
         if stdlib::is_module(name) {
             return Err(RuskelError::InvalidTarget(format!(
@@ -378,7 +381,8 @@ impl ResolvedTarget {
         )))
     }
 
-    /// Resolve a named entrypoint against std, workspace, dependencies, or crates.io.
+    /// Resolve a named entrypoint against std, workspace, dependencies, or
+    /// crates.io.
     fn from_named_entry(
         name: &str,
         version: Option<Version>,
@@ -471,7 +475,8 @@ impl ResolvedTarget {
         ))
     }
 
-    /// Create a resolved target backed by a temporary crate for registry dependencies.
+    /// Create a resolved target backed by a temporary crate for registry
+    /// dependencies.
     fn from_dummy_crate(
         name: &str,
         version: Option<Version>,
@@ -615,7 +620,8 @@ mod tests {
         fn set_path(key: &'static str, value: &Path) -> Self {
             let guard = ENV_LOCK.lock().expect("env mutex poisoned");
             let original = env::var_os(key);
-            // SAFETY: the mutex ensures exclusive access while we mutate process environment.
+            // SAFETY: the mutex ensures exclusive access while we mutate process
+            // environment.
             unsafe { env::set_var(key, value) };
             Self {
                 key,
@@ -1431,7 +1437,8 @@ shared = { package = "shared-package", version = "=2.0.0" }
         assert_eq!(result.filter, expected_filter);
     }
 
-    /// Assert that resolving a bare module fails with the expected error message.
+    /// Assert that resolving a bare module fails with the expected error
+    /// message.
     fn assert_std_module_error(module: &str, suggestion: &str) {
         match resolve_target(module, true) {
             Err(err) => {

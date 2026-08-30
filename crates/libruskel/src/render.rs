@@ -20,10 +20,11 @@ use crate::{
 };
 
 /// Reusable pattern for removing placeholder bodies from macro output.
-/// rustdoc currently emits `{ ... }` placeholder blocks for `macro` (decl-macro) items in JSON
-/// output (observed on nightly 2025-11-27). When upstream fixes this, update
-/// `rustdoc_still_emits_placeholder_for_new_style_macros` and consider removing this workaround.
-/// (No tracked rust-lang/rust issue is known at the moment.)
+/// rustdoc currently emits `{ ... }` placeholder blocks for `macro`
+/// (decl-macro) items in JSON output (observed on nightly 2025-11-27). When
+/// upstream fixes this, update
+/// `rustdoc_still_emits_placeholder_for_new_style_macros` and consider removing
+/// this workaround. (No tracked rust-lang/rust issue is known at the moment.)
 static MACRO_PLACEHOLDER_REGEX: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\}\s*\{\s*\.\.\.\s*\}\s*$").expect("valid macro fallback pattern"));
 
@@ -44,7 +45,8 @@ fn ppush(path_prefix: &str, name: &str) -> String {
     }
 }
 
-/// Escape reserved keywords in a path by adding raw identifier prefixes when needed.
+/// Escape reserved keywords in a path by adding raw identifier prefixes when
+/// needed.
 fn escape_path(path: &str) -> String {
     path.split("::")
         .map(|segment| {
@@ -473,7 +475,8 @@ pub struct Renderer {
     render_auto_impls: bool,
     /// Whether private items should be rendered.
     render_private_items: bool,
-    /// Whether blanket implementations (with generics over `T`) should be rendered.
+    /// Whether blanket implementations (with generics over `T`) should be
+    /// rendered.
     render_blanket_impls: bool,
     /// Filter path relative to the crate root.
     filter: String,
@@ -514,7 +517,8 @@ impl Renderer {
         }
     }
 
-    /// Apply a filter to output. The filter is a path BELOW the outermost module.
+    /// Apply a filter to output. The filter is a path BELOW the outermost
+    /// module.
     pub fn with_filter(mut self, filter: &str) -> Self {
         self.filter = filter.to_string();
         self
@@ -640,7 +644,8 @@ impl RenderState<'_, '_> {
         }
     }
 
-    /// Determine whether a matched container should expand its children in the rendered output.
+    /// Determine whether a matched container should expand its children in the
+    /// rendered output.
     fn selection_expands(&self, id: &Id) -> bool {
         match self.selection() {
             Some(selection) => selection.is_expanded(id),
@@ -648,7 +653,8 @@ impl RenderState<'_, '_> {
         }
     }
 
-    /// Determine whether a child item should be rendered based on its parent and selection context.
+    /// Determine whether a child item should be rendered based on its parent
+    /// and selection context.
     fn selection_allows_child(&self, parent_id: &Id, child_id: &Id) -> bool {
         if self.selection().is_none() {
             return true;
@@ -656,7 +662,8 @@ impl RenderState<'_, '_> {
         self.selection_expands(parent_id) || self.selection_context_contains(child_id)
     }
 
-    /// Determine whether an item should be rendered based on visibility settings.
+    /// Determine whether an item should be rendered based on visibility
+    /// settings.
     fn is_visible(&self, item: &Item) -> bool {
         self.config.render_private_items || matches!(item.visibility, Visibility::Public)
     }
@@ -768,7 +775,8 @@ impl RenderState<'_, '_> {
         Ok(output)
     }
 
-    /// Render a new-style declarative macro while stripping rustdoc placeholders.
+    /// Render a new-style declarative macro while stripping rustdoc
+    /// placeholders.
     fn render_new_style_macro(&self, macro_src: &str) -> String {
         if MACRO_PLACEHOLDER_REGEX.is_match(macro_src) {
             MACRO_PLACEHOLDER_REGEX.replace(macro_src, "}").to_string()
@@ -871,7 +879,8 @@ impl RenderState<'_, '_> {
         Ok(output)
     }
 
-    /// Group impl blocks by compatible signatures, preserving their first-seen order.
+    /// Group impl blocks by compatible signatures, preserving their first-seen
+    /// order.
     fn collect_impl_groups(&self, parent_id: &Id, impl_ids: &[Id]) -> Result<Vec<ImplGroup>> {
         let mut groups: Vec<ImplGroup> = Vec::new();
         let mut group_indices: HashMap<ImplGroupKey, usize> = HashMap::new();
@@ -924,7 +933,8 @@ impl RenderState<'_, '_> {
         Ok(inline_traits)
     }
 
-    /// Append a derive attribute when one or more inline derive traits are present.
+    /// Append a derive attribute when one or more inline derive traits are
+    /// present.
     fn push_inline_derive_attribute(output: &mut String, inline_traits: &[String]) {
         if !inline_traits.is_empty() {
             output.push_str(&format!("#[derive({})]\n", inline_traits.join(", ")));

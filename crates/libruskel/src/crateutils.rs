@@ -6,7 +6,8 @@ use rustdoc_types::{
 
 use crate::keywords::is_reserved_word;
 
-/// Convenience macro to destructure `rustdoc_types::Item` variants during rendering.
+/// Convenience macro to destructure `rustdoc_types::Item` variants during
+/// rendering.
 macro_rules! extract_item {
     ($item:expr, $variant:path) => {
         match &$item.inner {
@@ -22,7 +23,8 @@ macro_rules! extract_item {
     };
 }
 
-/// Fallible variant of `extract_item!` that returns a `RuskelError` instead of panicking.
+/// Fallible variant of `extract_item!` that returns a `RuskelError` instead of
+/// panicking.
 macro_rules! try_extract_item {
     ($item:expr, $variant:path) => {
         match &$item.inner {
@@ -347,8 +349,9 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
         }
         Type::ImplTrait(bounds) => {
             let bounds_str = render_generic_bounds(bounds);
-            // If we're nested (e.g., inside a reference or function parameter) and have multiple bounds
-            // (indicated by presence of '+' in the bounds string), we need parentheses to avoid ambiguity
+            // If we're nested (e.g., inside a reference or function parameter) and have
+            // multiple bounds (indicated by presence of '+' in the bounds
+            // string), we need parentheses to avoid ambiguity
             if nested && bounds_str.contains(" + ") {
                 format!("(impl {bounds_str})")
             } else {

@@ -174,7 +174,8 @@ pub fn item_signature(crate_data: &Crate, item: &Item, kind: SearchItemKind) -> 
     }
 }
 
-/// Render a function-like signature shared by free functions, methods, and trait methods.
+/// Render a function-like signature shared by free functions, methods, and
+/// trait methods.
 fn function_signature(item: &Item, function: &rustdoc_types::Function) -> String {
     let mut parts: Vec<String> = Vec::new();
     let vis = render_vis(item);
@@ -227,7 +228,8 @@ fn field_signature(item: &Item, ty: &rustdoc_types::Type) -> String {
     signature
 }
 
-/// Render an enum variant signature, including inline field types when available.
+/// Render an enum variant signature, including inline field types when
+/// available.
 fn variant_signature(crate_data: &Crate, item: &Item, variant: &Variant) -> String {
     let mut signature = render_name(item);
     match &variant.kind {

@@ -65,7 +65,8 @@ pub enum RuskelError {
     #[error("Failed to parse Cargo.toml manifest: {0}")]
     ManifestParse(String),
 
-    /// Indicates that the Cargo.toml manifest file could not be found in the current directory or any parent directories.
+    /// Indicates that the Cargo.toml manifest file could not be found in the
+    /// current directory or any parent directories.
     #[error("Failed to find Cargo.toml in the current directory or any parent directories")]
     ManifestNotFound,
 

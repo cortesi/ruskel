@@ -90,7 +90,8 @@ impl SearchOptions {
         }
     }
 
-    /// Create fully-specified search options with transport-independent defaults.
+    /// Create fully-specified search options with transport-independent
+    /// defaults.
     pub fn configured(
         query: impl Into<String>,
         domains: SearchDomain,

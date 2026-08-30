@@ -62,7 +62,7 @@ pretty_assertions = "1.4.1"
 regex = "1.13.1"
 rust-format = "0.3.4"
 rustdoc-json = "0.9.10"
-rustdoc-types = "0.60.0"
+rustdoc-types = "0.61.0"
 semver = "1.0.28"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1.0.151"
@@ -78,3 +78,15 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 unicode-ident = "1"
 which = "8.0"
+
+[workspace.metadata.nanocode]
+schema-version = 1
+requires-nanocode = ">=0.1, <0.2"
+features = "all"
+tidy-hooks = [["cargo", "xtask", "gen-std-mapping", "--check"]]
+
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false

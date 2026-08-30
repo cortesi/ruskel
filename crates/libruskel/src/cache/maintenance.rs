@@ -230,7 +230,8 @@ impl MaintenanceWorker {
 enum PassMode {
     /// Do not wait for the GC lock and honor the routine interval.
     Routine,
-    /// Wait for active GC, otherwise perform one pass without the interval limit.
+    /// Wait for active GC, otherwise perform one pass without the interval
+    /// limit.
     Synchronous,
 }
 

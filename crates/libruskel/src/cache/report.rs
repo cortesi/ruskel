@@ -229,7 +229,8 @@ impl CleanReport {
         self.usage_after
     }
 
-    /// Return whether the clean removed all safe entries without contention or failure.
+    /// Return whether the clean removed all safe entries without contention or
+    /// failure.
     pub fn is_complete(&self) -> bool {
         !self.root_busy && self.failures.is_empty()
     }

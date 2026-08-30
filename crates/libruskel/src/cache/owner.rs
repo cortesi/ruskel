@@ -507,7 +507,8 @@ fn read_workspace_metadata(path: &Path) -> Result<Option<WorkspaceMetadata>> {
     })
 }
 
-/// Read status metadata, converting invalid or mismatched data into a skipped issue.
+/// Read status metadata, converting invalid or mismatched data into a skipped
+/// issue.
 fn read_workspace_status_metadata(
     path: &Path,
     identity: &str,
@@ -534,7 +535,8 @@ fn read_workspace_status_metadata(
     }
 }
 
-/// Read one last-use timestamp and convert invalid metadata into a status issue.
+/// Read one last-use timestamp and convert invalid metadata into a status
+/// issue.
 fn system_time(
     seconds: Option<u64>,
     path: &Path,

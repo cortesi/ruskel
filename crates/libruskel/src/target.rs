@@ -22,7 +22,8 @@ pub enum Entrypoint {
 
 /// A parsed target specification for the ruskel tool.
 ///
-/// A target specification consists of an entrypoint and an optional path, separated by `::`.
+/// A target specification consists of an entrypoint and an optional path,
+/// separated by `::`.
 ///
 /// # Format
 ///
@@ -31,7 +32,8 @@ pub enum Entrypoint {
 /// ```
 ///
 /// Where:
-/// - `entrypoint` can be a file path, directory path, module name, or package name.
+/// - `entrypoint` can be a file path, directory path, module name, or package
+///   name.
 /// - `path` is an optional fully qualified path within the entrypoint.
 ///
 /// Package names may include an `@version` suffix.
@@ -73,7 +75,8 @@ fn split_target_spec(spec: &str) -> Result<(&str, Vec<&str>)> {
     Ok((entrypoint, path))
 }
 
-/// Reject empty path segments so downstream resolution can assume valid components.
+/// Reject empty path segments so downstream resolution can assume valid
+/// components.
 fn validate_path_components(path: &[&str]) -> Result<()> {
     for (index, component) in path.iter().enumerate() {
         if component.is_empty() {
@@ -87,12 +90,14 @@ fn validate_path_components(path: &[&str]) -> Result<()> {
     Ok(())
 }
 
-/// Materialize borrowed path components into owned strings for the parsed target.
+/// Materialize borrowed path components into owned strings for the parsed
+/// target.
 fn collect_path_components(path: Vec<&str>) -> Vec<String> {
     path.into_iter().map(str::to_owned).collect()
 }
 
-/// Parse the first component of a target as either a path or a named crate/module.
+/// Parse the first component of a target as either a path or a named
+/// crate/module.
 fn parse_entrypoint(entrypoint: &str) -> Result<Entrypoint> {
     if is_path_entrypoint(entrypoint) {
         return Ok(Entrypoint::Path(PathBuf::from(entrypoint)));
@@ -101,7 +106,8 @@ fn parse_entrypoint(entrypoint: &str) -> Result<Entrypoint> {
     parse_name_entrypoint(entrypoint)
 }
 
-/// Determine whether the target entrypoint should be treated as a filesystem path.
+/// Determine whether the target entrypoint should be treated as a filesystem
+/// path.
 fn is_path_entrypoint(entrypoint: &str) -> bool {
     entrypoint.contains('/') || entrypoint.contains('\\') || matches!(entrypoint, "." | "..")
 }
@@ -156,7 +162,8 @@ fn validate_package_name(name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Construct a target-parsing error with the standard variant used by this module.
+/// Construct a target-parsing error with the standard variant used by this
+/// module.
 fn invalid_target(message: impl Into<String>) -> RuskelError {
     RuskelError::InvalidTarget(message.into())
 }

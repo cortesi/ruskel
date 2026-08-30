@@ -2,12 +2,13 @@ use std::{io::stdout, result::Result as StdResult};
 
 use libruskel::{CrateRequest, Ruskel, SearchDomain, SearchOptions};
 use serde::{Deserialize, Serialize};
-use tmcp::{Result, Server, ServerCtx, mcp_server, schema::CallToolResult, tool};
+use tmcp::{Result, Server, ServerCtx, mcp_server, schema::CallToolResult};
 use tokio::signal::ctrl_c;
 use tracing::error;
 use tracing_subscriber::filter::LevelFilter;
 
-/// Default request values applied by the MCP server when a tool call omits them.
+/// Default request values applied by the MCP server when a tool call omits
+/// them.
 #[derive(Debug, Clone, Copy)]
 pub struct RuskelServerDefaults {
     /// Whether omitted requests should include private items.
@@ -31,7 +32,8 @@ pub struct RuskelSkeletonTool {
     /// Target to skeletonize: crate, module, path, or crate@version.
     pub target: String,
 
-    /// Include private items. Defaults to the server's configured setting when omitted.
+    /// Include private items. Defaults to the server's configured setting when
+    /// omitted.
     #[serde(default)]
     pub private: Option<bool>,
 
@@ -43,11 +45,13 @@ pub struct RuskelSkeletonTool {
     #[serde(default)]
     pub bin: Option<String>,
 
-    /// Limit search to specific domains (name, doc, signature, path). Defaults to name, doc, signature.
+    /// Limit search to specific domains (name, doc, signature, path). Defaults
+    /// to name, doc, signature.
     #[serde(default)]
     pub search_spec: Option<Vec<String>>,
 
-    /// Include comment frontmatter. Defaults to the server's configured setting when omitted.
+    /// Include comment frontmatter. Defaults to the server's configured setting
+    /// when omitted.
     #[serde(default)]
     pub frontmatter: Option<bool>,
 
@@ -131,7 +135,8 @@ impl ResolvedRuskelSkeletonTool {
 }
 
 #[derive(Clone)]
-/// MCP server implementation that forwards requests to an underlying `Ruskel` instance.
+/// MCP server implementation that forwards requests to an underlying `Ruskel`
+/// instance.
 pub struct RuskelServer {
     /// Code skeleton renderer shared across tool invocations.
     ruskel: Ruskel,
@@ -152,8 +157,8 @@ impl RuskelServer {
     }
 
     #[tool]
-    /// **ruskel** returns a Rust API skeleton with implementation stripped. Useful for looking up
-    /// signatures, derives, APIs, and doc-comments.
+    /// **ruskel** returns a Rust API skeleton with implementation stripped.
+    /// Useful for looking up signatures, derives, APIs, and doc-comments.
     ///
     /// # When a model should call this tool
     /// 1. It needs to look up a function/trait/struct signature.
@@ -173,11 +178,13 @@ impl RuskelServer {
     /// Valid Rust code with implementation omitted.
     ///
     /// # Tips for LLMs
-    /// - Request deep module paths (e.g. `tokio::sync::mpsc`) to reduce output size.
-    /// - Pass `all_features=true` or `features=[…]` when a symbol is behind a feature gate.
-    /// - Pass `private=true` for private items in local codebases. **Caution:** Avoid using
-    ///   `private=true` on entire crates since output can be extremely large. Prefer targeting
-    ///   specific modules or items.
+    /// - Request deep module paths (e.g. `tokio::sync::mpsc`) to reduce output
+    ///   size.
+    /// - Pass `all_features=true` or `features=[…]` when a symbol is behind a
+    ///   feature gate.
+    /// - Pass `private=true` for private items in local codebases. **Caution:**
+    ///   Avoid using `private=true` on entire crates since output can be
+    ///   extremely large. Prefer targeting specific modules or items.
     /// - Pass `search="pattern"` to restrict output to matched items.
     /// - Pass `direct_match_only=true` to show only exact matches.
     /// - Pass `frontmatter=false` to omit the leading comment block.
@@ -210,7 +217,8 @@ impl RuskelServer {
         Ok(self.run_render_mode(&ruskel, &params))
     }
 
-    /// Build the MCP response for search invocations, including match summaries.
+    /// Build the MCP response for search invocations, including match
+    /// summaries.
     fn run_search_mode(
         &self,
         ruskel: &Ruskel,
@@ -288,7 +296,8 @@ impl RuskelServer {
     }
 }
 
-/// Resolve search domains from optional MCP parameters, rejecting invalid tokens.
+/// Resolve search domains from optional MCP parameters, rejecting invalid
+/// tokens.
 fn resolve_search_domains(search_spec: Option<&[String]>) -> StdResult<SearchDomain, String> {
     let Some(search_spec) = search_spec else {
         return Ok(SearchDomain::default());
@@ -310,8 +319,8 @@ fn resolve_search_domains(search_spec: Option<&[String]>) -> StdResult<SearchDom
 
 /// Serve the ruskel MCP API over TCP or stdio depending on configuration.
 ///
-/// When `addr` is provided a TCP listener is started; otherwise the server exposes
-/// stdio pipes suitable for process integration.
+/// When `addr` is provided a TCP listener is started; otherwise the server
+/// exposes stdio pipes suitable for process integration.
 pub async fn run_mcp_server(
     ruskel: Ruskel,
     addr: Option<String>,

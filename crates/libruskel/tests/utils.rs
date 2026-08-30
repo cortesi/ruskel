@@ -1,4 +1,5 @@
-//! Utility helpers shared across integration tests for exercising Ruskel rendering.
+//! Utility helpers shared across integration tests for exercising Ruskel
+//! rendering.
 // Dead code detection breaks here, because the integration test crates all use a disjoint set of
 // the pub items.
 #![allow(dead_code)]
@@ -11,7 +12,8 @@ use rust_format::{Formatter, RustFmt};
 use rustdoc_types::{Crate, ItemEnum};
 use tempfile::TempDir;
 
-/// Normalize indentation and remove blank lines for reliable string comparisons.
+/// Normalize indentation and remove blank lines for reliable string
+/// comparisons.
 fn normalize_whitespace(s: &str) -> String {
     let lines: Vec<&str> = s
         .lines()
@@ -116,7 +118,8 @@ pub fn inspect_crate(source: &str, private_items: bool, is_proc_macro: bool) -> 
         .unwrap()
 }
 
-/// Render compiled crate data and compare the formatted output with `expected_output`.
+/// Render compiled crate data and compare the formatted output with
+/// `expected_output`.
 pub fn render_crate(renderer: &Renderer, crate_data: &Crate, expected_output: &str) {
     let normalized_rendered = normalize_whitespace(&strip_module_declaration(
         &renderer.render(crate_data).unwrap(),
@@ -236,7 +239,8 @@ pub fn render_err(renderer: &Renderer, source: &str, expected_error: &str) {
     render_crate_err(renderer, &crate_data, expected_error);
 }
 
-/// Assert that rendering compiled crate data fails with a specific error message.
+/// Assert that rendering compiled crate data fails with a specific error
+/// message.
 pub fn render_crate_err(renderer: &Renderer, crate_data: &Crate, expected_error: &str) {
     let result = renderer.render(crate_data);
 

@@ -13,7 +13,8 @@ use libruskel::toolchain::nightly_sysroot;
 use rustdoc_types::{Crate, ItemEnum, Visibility};
 use tempfile::NamedTempFile;
 
-/// Corrections for modules whose ownership is not represented reliably by top-level rustdoc uses.
+/// Corrections for modules whose ownership is not represented reliably by
+/// top-level rustdoc uses.
 const STD_MODULE_OVERRIDES: &[(&str, &str)] = &[
     ("alloc", "alloc"),
     ("any", "core"),
