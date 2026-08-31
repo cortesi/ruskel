@@ -70,7 +70,8 @@ pub use crate::{
         SearchResult,
     },
     snapshot::{
-        ApiSnapshot, CrateSnapshot, SnapshotFeatures, SnapshotProfile, SnapshotProfileOptions,
-        SnapshotRequest,
+        ApiSnapshot, CrateSnapshot, SnapshotChange, SnapshotChangeKind, SnapshotFeatures,
+        SnapshotMode, SnapshotProfile, SnapshotProfileOptions, SnapshotReport, SnapshotRequest,
+        SnapshotStore,
     },
 };

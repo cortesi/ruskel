@@ -193,6 +193,37 @@ impl SnapshotProfile {
         }
     }
 
+    /// Build a profile from a validated format marker without inspecting the
+    /// local Rust installation.
+    pub(crate) fn from_marker(
+        format: u32,
+        toolchain: String,
+        target: String,
+        features: SnapshotFeatures,
+    ) -> Result<Self> {
+        if format != Self::FORMAT {
+            return Err(RuskelError::SnapshotProfile(format!(
+                "snapshot format {format} is not supported"
+            )));
+        }
+        if normalize_dated_nightly(&toolchain).as_deref() != Some(toolchain.as_str()) {
+            return Err(RuskelError::SnapshotProfile(format!(
+                "stored toolchain '{toolchain}' is not a portable dated nightly"
+            )));
+        }
+        if target.trim().is_empty() {
+            return Err(RuskelError::SnapshotProfile(
+                "stored target triple cannot be empty".to_string(),
+            ));
+        }
+        Ok(Self {
+            format,
+            toolchain,
+            target,
+            features,
+        })
+    }
+
     /// Validate all selected profile values after resolution is complete.
     fn validate(&self) -> Result<()> {
         if normalize_dated_nightly(&self.toolchain).as_deref() != Some(self.toolchain.as_str()) {
