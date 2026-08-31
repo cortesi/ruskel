@@ -10,6 +10,7 @@ use super::{
     rustdoc_build::{self, BinaryTarget, CrateRead, CrateReadOptions},
     search::{ListItem, SearchIndex, SearchItemKind, SearchOptions, SearchResponse},
     selection::build_render_selection,
+    snapshot::{ApiSnapshot, SnapshotRequest, capture},
     target_resolution::{ResolvedTarget, resolve_target},
 };
 
@@ -210,6 +211,14 @@ impl Ruskel {
     /// Remove cache-owned build data when no request is active.
     pub fn clean_cache(&self) -> Result<CleanReport> {
         self.cache.owner()?.clean()
+    }
+
+    /// Capture canonical public APIs for local Cargo inputs entirely in memory.
+    ///
+    /// Snapshot capture uses this instance's cache, offline, and silent
+    /// settings. Interactive rendering options do not affect the artifact.
+    pub fn capture_snapshot(&self, request: &SnapshotRequest) -> Result<ApiSnapshot> {
+        capture(request, self.offline, self.silent, &self.cache)
     }
 
     /// Returns the parsed representation of the crate's API.

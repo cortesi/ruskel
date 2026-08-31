@@ -155,7 +155,7 @@ fn parse_active_dated_nightly(stdout: &[u8]) -> Result<String> {
 }
 
 /// Accept a dated nightly with an optional rustup host suffix.
-fn normalize_dated_nightly(name: &str) -> Option<String> {
+pub(crate) fn normalize_dated_nightly(name: &str) -> Option<String> {
     let date = name.strip_prefix(DATED_NIGHTLY_PREFIX)?.get(..10)?;
     let bytes = date.as_bytes();
     if bytes.len() != 10

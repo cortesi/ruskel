@@ -511,6 +511,8 @@ pub struct Renderer {
     selection: Option<RenderSelection>,
     /// Optional frontmatter configuration rendered before crate content.
     frontmatter: Option<FrontmatterConfig>,
+    /// Optional generated prefix included in strict snapshot formatting.
+    snapshot_prefix: Option<String>,
 }
 
 /// Mutable rendering context shared across helper functions.
@@ -542,6 +544,7 @@ impl Renderer {
             filter: String::new(),
             selection: None,
             frontmatter: None,
+            snapshot_prefix: None,
         }
     }
 
@@ -560,6 +563,12 @@ impl Renderer {
         renderer.render_blanket_impls = false;
         renderer.frontmatter = None;
         renderer
+    }
+
+    /// Include a generated header in the strict snapshot rustfmt input.
+    pub(crate) fn with_snapshot_prefix(mut self, prefix: impl Into<String>) -> Self {
+        self.snapshot_prefix = Some(prefix.into());
+        self
     }
 
     /// Apply a filter to output. The filter is a path BELOW the outermost
@@ -668,6 +677,9 @@ impl RenderState<'_, '_> {
             )
         {
             composed.push_str(&prefix);
+        }
+        if let Some(prefix) = &self.config.snapshot_prefix {
+            composed.push_str(prefix);
         }
         composed.push_str(&output);
 

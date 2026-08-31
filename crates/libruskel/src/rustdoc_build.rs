@@ -34,20 +34,16 @@ pub fn build(resolved: &ResolvedTarget, options: &CrateReadOptions) -> Result<Cr
             });
         }
     };
-    let PackageTargetSelection {
-        package_target,
-        bin_target,
-        workspace_root,
-        package_name,
-        package_version,
-        target_name,
-    } = select_package_target(
+    let selection = select_package_target(
         manifest_path,
         options.offline,
         options.bin_override.as_deref(),
     )?;
-    let include_private =
-        options.private_items || bin_target.as_ref().is_some_and(|target| target.is_bin_only);
+    let include_private = options.private_items
+        || selection
+            .bin_target
+            .as_ref()
+            .is_some_and(|target| target.is_bin_only);
     let owner = options.cache.owner()?;
     let mut storage_retry: Option<(String, String)> = None;
     let mut retry_budget = RetryBudget::default();
@@ -57,23 +53,24 @@ pub fn build(resolved: &ResolvedTarget, options: &CrateReadOptions) -> Result<Cr
             .map_err(|error| with_recovery_context(&mut storage_retry, error))?;
         let lease = match owner.begin_build(
             &toolchain_before,
-            &workspace_root,
-            &package_name,
-            &package_version,
+            &selection.workspace_root,
+            &selection.package_name,
+            &selection.package_version,
         ) {
             Ok(lease) => lease,
             Err(error) if owner.is_entry_error(&error) && retry_budget.take_storage_retry() => {
                 let original = error.to_string();
-                let quarantine =
-                    match owner.quarantine_workspace(&toolchain_before, &workspace_root) {
-                        Ok(Some(path)) => {
-                            format!("moved the damaged cache entry to '{}'", path.display())
-                        }
-                        Ok(None) => "the damaged cache entry did not exist".to_string(),
-                        Err(quarantine_error) => {
-                            format!("could not move the damaged cache entry: {quarantine_error}")
-                        }
-                    };
+                let quarantine = match owner
+                    .quarantine_workspace(&toolchain_before, &selection.workspace_root)
+                {
+                    Ok(Some(path)) => {
+                        format!("moved the damaged cache entry to '{}'", path.display())
+                    }
+                    Ok(None) => "the damaged cache entry did not exist".to_string(),
+                    Err(quarantine_error) => {
+                        format!("could not move the damaged cache entry: {quarantine_error}")
+                    }
+                };
                 let maintenance = match owner.recover_storage(&toolchain_before) {
                     Ok(action) => action,
                     Err(maintenance_error) => {
@@ -86,15 +83,8 @@ pub fn build(resolved: &ResolvedTarget, options: &CrateReadOptions) -> Result<Cr
             }
             Err(error) => return Err(with_recovery_context(&mut storage_retry, error)),
         };
-        let attempt_result = build_once(
-            manifest_path,
-            &package_target,
-            bin_target.clone(),
-            &target_name,
-            include_private,
-            options,
-            &lease,
-        );
+        let attempt_result =
+            build_once(manifest_path, &selection, include_private, options, &lease);
         let attempt_result = match attempt_result {
             Ok(crate_read) => lease
                 .touch_success()
@@ -208,6 +198,7 @@ fn select_package_target(
                 package_name,
                 package_version,
                 target_name: bin_name.to_string(),
+                target_for_host: false,
             });
         }
 
@@ -223,12 +214,8 @@ fn select_package_target(
     }
 
     if has_lib {
-        let target_name = package
-            .targets()
-            .iter()
-            .find(|target| target.is_lib())
-            .map(|target| target.name().to_string())
-            .unwrap_or_else(|| package_name.clone());
+        let library = package.library().expect("package with library target");
+        let target_name = library.name().to_string();
         return Ok(PackageTargetSelection {
             package_target: PackageTarget::Lib,
             bin_target: None,
@@ -236,6 +223,7 @@ fn select_package_target(
             package_name,
             package_version,
             target_name,
+            target_for_host: library.proc_macro(),
         });
     }
 
@@ -258,6 +246,7 @@ fn select_package_target(
             package_name,
             package_version,
             target_name: default_run.to_string(),
+            target_for_host: false,
         });
     }
 
@@ -273,6 +262,7 @@ fn select_package_target(
             package_name,
             package_version,
             target_name: name.to_string(),
+            target_for_host: false,
         });
     }
 
@@ -344,6 +334,8 @@ struct PackageTargetSelection {
     package_version: String,
     /// Cargo target name used to locate the generated JSON file.
     target_name: String,
+    /// Whether Cargo emits rustdoc JSON in the host output directory.
+    target_for_host: bool,
 }
 
 /// Cargo target selected for one rustdoc invocation.
@@ -374,6 +366,7 @@ impl RustdocInvocation {
         manifest_path: &Path,
         package_target: &PackageTarget,
         target_name: &str,
+        target_for_host: bool,
         include_private: bool,
         options: &CrateReadOptions,
         build_dir: &Path,
@@ -437,7 +430,9 @@ impl RustdocInvocation {
         args.push(OsString::from("warn"));
 
         let mut json_path = build_dir.to_path_buf();
-        if let Some(target) = &options.target {
+        if let Some(target) = &options.target
+            && !target_for_host
+        {
             json_path.push(target);
         }
         json_path.push("doc");
@@ -545,9 +540,7 @@ impl BuildAttemptFailure {
 /// Run one rustdoc build and read its JSON from a leased cache entry.
 fn build_once(
     manifest_path: &Path,
-    package_target: &PackageTarget,
-    bin_target: Option<BinaryTarget>,
-    target_name: &str,
+    selection: &PackageTargetSelection,
     include_private: bool,
     options: &CrateReadOptions,
     lease: &BuildLease,
@@ -555,8 +548,9 @@ fn build_once(
     let build_dir = lease.build_dir();
     let invocation = RustdocInvocation::new(
         manifest_path,
-        package_target,
-        target_name,
+        &selection.package_target,
+        &selection.target_name,
+        selection.target_for_host,
         include_private,
         options,
         build_dir,
@@ -610,7 +604,7 @@ fn build_once(
 
     Ok(CrateRead {
         crate_data,
-        bin_target,
+        bin_target: selection.bin_target.clone(),
     })
 }
 
@@ -770,6 +764,7 @@ mod tests {
             Path::new("/work/Cargo.toml"),
             &PackageTarget::Lib,
             "renamed-library",
+            false,
             true,
             &options,
             Path::new("/cache/build"),
@@ -832,6 +827,7 @@ mod tests {
             &PackageTarget::Bin("named-bin".to_string()),
             "named-bin",
             false,
+            false,
             &options,
             Path::new("target/cache"),
         );
@@ -863,6 +859,30 @@ mod tests {
         assert_eq!(
             invocation.json_path,
             Path::new("target/cache/doc/named_bin.json")
+        );
+    }
+
+    #[test]
+    fn targeted_proc_macro_json_uses_host_output_directory() {
+        let options = command_options();
+        let invocation = RustdocInvocation::new(
+            Path::new("/work/Cargo.toml"),
+            &PackageTarget::Lib,
+            "macro-api",
+            true,
+            true,
+            &options,
+            Path::new("/cache/build"),
+        );
+        assert_eq!(
+            invocation.json_path,
+            Path::new("/cache/build/doc/macro_api.json")
+        );
+        assert!(
+            invocation
+                .args()
+                .map(OsStr::to_string_lossy)
+                .any(|argument| argument == "aarch64-apple-darwin")
         );
     }
 

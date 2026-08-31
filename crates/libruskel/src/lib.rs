@@ -13,6 +13,10 @@
 //!
 //! You must have the nightly Rust toolchain installed to use (but not to
 //! install) Ruskel.
+//!
+//! Canonical workspace snapshots are captured separately through
+//! [`Ruskel::capture_snapshot`]. Capture returns an in-memory [`ApiSnapshot`]
+//! and never writes a destination directory.
 
 /// Dedicated cache ownership and lifecycle controls.
 mod cache;
@@ -41,6 +45,8 @@ mod search;
 mod selection;
 /// Shared signature formatting used by search and rendering.
 mod signature;
+/// Canonical workspace API snapshot capture.
+mod snapshot;
 /// Standard-library rustdoc loading and re-export mapping.
 mod stdlib;
 /// Generated standard-library module mapping.
@@ -62,5 +68,9 @@ pub use crate::{
     search::{
         ListItem, SearchDomain, SearchItemKind, SearchOptions, SearchPathSegment, SearchResponse,
         SearchResult,
+    },
+    snapshot::{
+        ApiSnapshot, CrateSnapshot, SnapshotFeatures, SnapshotProfile, SnapshotProfileOptions,
+        SnapshotRequest,
     },
 };

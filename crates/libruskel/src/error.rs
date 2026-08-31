@@ -8,6 +8,46 @@ pub type Result<T> = result::Result<T, RuskelError>;
 /// Errors surfaced while generating rustdoc skeletons.
 #[derive(Error, Debug)]
 pub enum RuskelError {
+    /// Indicates that a snapshot profile is invalid or unavailable.
+    #[error("Invalid snapshot profile: {0}")]
+    SnapshotProfile(String),
+
+    /// Indicates that an input could not be discovered as a snapshot package.
+    #[error("Snapshot discovery failed for '{}': {message}", input.display())]
+    SnapshotDiscovery {
+        /// Input path associated with the failure.
+        input: PathBuf,
+        /// Actionable discovery failure.
+        message: String,
+    },
+
+    /// Indicates that rustdoc generation failed for a selected package.
+    #[error("Snapshot capture failed for package '{package}': {message}")]
+    SnapshotCapture {
+        /// Selected Cargo package.
+        package: String,
+        /// Underlying build failure.
+        message: String,
+    },
+
+    /// Indicates that strict snapshot rendering rejected a public surface.
+    #[error("Snapshot rendering failed for package '{package}': {message}")]
+    SnapshotRender {
+        /// Selected Cargo package.
+        package: String,
+        /// Underlying fidelity or formatting failure.
+        message: String,
+    },
+
+    /// Indicates that snapshot persistence failed for a destination path.
+    #[error("Snapshot store failed for '{}': {message}", path.display())]
+    SnapshotStore {
+        /// Destination path associated with the failure.
+        path: PathBuf,
+        /// Actionable persistence failure.
+        message: String,
+    },
+
     /// Indicates that a specified module could not be found.
     #[error("Module not found: {0}")]
     ModuleNotFound(String),
