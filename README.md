@@ -57,6 +57,7 @@ pub mod termsize {
 - Include private items and auto-implemented traits
 - Custom feature flags and version specification
 - Dedicated, bounded rustdoc build cache
+- Canonical workspace API snapshots for review with Git
 
 
 ---
@@ -78,6 +79,7 @@ cargo install ruskel
 ```
 
 Ruskel requires nightly to run but can be installed with any toolchain.
+The package installs both `ruskel` and `ruskel-snapshot`.
 
 ---
 
@@ -95,6 +97,17 @@ See the help output for all options:
 ```sh
 ruskel --help
 ```
+
+Capture the public APIs of workspace crates in a generated directory:
+
+```sh
+ruskel-snapshot --output ./api ./crates/*
+```
+
+The first capture needs an explicit dated nightly unless the active toolchain
+already has a `nightly-YYYY-MM-DD` name. See the
+[snapshot reference](docs/snapshots.md) for setup, profile migration, Git hooks,
+and CI checks.
 
 ```sh
 # Current project
@@ -187,6 +200,14 @@ directory. Ruskel does not remove these legacy artifacts automatically.
 Cargo still coordinates dependency resolution and downloads through its global
 package-cache lock. A Ruskel query can wait for another Cargo process that holds
 this lock.
+
+## Library snapshots
+
+`libruskel` separates capture from persistence. Build a `SnapshotRequest`, call
+`Ruskel::capture_snapshot`, and pass the returned `ApiSnapshot` to
+`SnapshotStore::sync`. This boundary lets applications inspect a complete
+in-memory capture before they update a destination. The public snapshot value
+types expose read-only accessors.
 
 
 ---

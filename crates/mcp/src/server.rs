@@ -2,7 +2,7 @@ use std::{io::stdout, result::Result as StdResult};
 
 use libruskel::{CrateRequest, Ruskel, SearchDomain, SearchOptions};
 use serde::{Deserialize, Serialize};
-use tmcp::{Result, Server, ServerCtx, mcp_server, schema::CallToolResult};
+use tmcp::{Result, Server, ServerCtx, mcp_server, schema::CallToolResult, tool};
 use tokio::signal::ctrl_c;
 use tracing::error;
 use tracing_subscriber::filter::LevelFilter;

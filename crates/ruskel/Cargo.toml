@@ -1,5 +1,6 @@
 [package]
 name = "ruskel"
+default-run = "ruskel"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
