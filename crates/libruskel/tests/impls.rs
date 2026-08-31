@@ -368,7 +368,7 @@ gen_tests! {
                     where
                         U: Into<T>,
                     {
-                        type Error = Infallible;
+                        type Error = never;
                         fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> {}
                     }
                     impl<T> Any for MyStruct

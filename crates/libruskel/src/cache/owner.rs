@@ -417,7 +417,7 @@ impl BuildLease {
 fn identity_for_path(path: &Path) -> String {
     let mut hasher = Sha256::new();
     hash_path_bytes(&mut hasher, path);
-    format!("{:x}", hasher.finalize())
+    hex::encode(hasher.finalize())
 }
 
 /// Resolve the configured cache root and make relative inputs absolute.

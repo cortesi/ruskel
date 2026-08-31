@@ -694,8 +694,8 @@ mod tests {
         fs::write(package.join("src/lib.rs"), source)?;
         let checksum = serde_json::json!({
             "files": {
-                "Cargo.toml": format!("{:x}", Sha256::digest(manifest.as_bytes())),
-                "src/lib.rs": format!("{:x}", Sha256::digest(source.as_bytes())),
+                "Cargo.toml": hex::encode(Sha256::digest(manifest.as_bytes())),
+                "src/lib.rs": hex::encode(Sha256::digest(source.as_bytes())),
             },
             "package": null,
         });

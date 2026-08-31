@@ -74,7 +74,7 @@ pub(crate) fn nightly_identity() -> Result<String> {
 
 /// Hash exact command output bytes into a stable full identity.
 fn identity_from_stdout(stdout: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(stdout))
+    hex::encode(Sha256::digest(stdout))
 }
 
 /// Execute a subprocess and convert spawn failures into

@@ -23,7 +23,7 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tmcp = { version = "0.5.0", path = "../../../tmcp/crates/tmcp" }
-schemars = "1.2.1"
+schemars = "1.2.2"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
