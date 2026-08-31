@@ -386,9 +386,13 @@ impl Ruskel {
             all_features: request.all_features,
             features: request.features.clone(),
             private_items: visibility.document_private_items,
+            hidden_items: false,
             silent: self.silent,
             offline: self.offline,
             bin_override: self.bin_target.clone(),
+            toolchain: "nightly".to_string(),
+            target: None,
+            locked: false,
             cache: self.cache.clone(),
         }
     }

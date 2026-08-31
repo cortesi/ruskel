@@ -26,6 +26,10 @@ pub mod highlight;
 /// Identifier helpers shared across rendering code.
 mod keywords;
 /// Rendering logic that turns rustdoc data into skeleton code.
+#[allow(
+    clippy::self_named_module_files,
+    reason = "preserve the established render.rs module while it owns bounded render support files"
+)]
 mod render;
 /// Public API surface for driving the renderer.
 mod ruskel;

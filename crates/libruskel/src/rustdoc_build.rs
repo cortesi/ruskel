@@ -1,12 +1,15 @@
+#[cfg(test)]
+use std::ffi::OsStr;
 use std::{
+    ffi::OsString,
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
+    process::{Command, Output},
     result,
 };
 
 use cargo::core::Workspace;
-use rustdoc_json::PackageTarget;
 use rustdoc_types::Crate;
 
 use super::{
@@ -16,7 +19,7 @@ use super::{
 use crate::{
     cache::{BuildLease, CacheHandle},
     error::{Result, RuskelError, convert_cargo_error},
-    toolchain::nightly_identity,
+    toolchain::{nightly_identity, toolchain_identity},
 };
 
 /// Build rustdoc JSON for one resolved target.
@@ -37,6 +40,7 @@ pub fn build(resolved: &ResolvedTarget, options: &CrateReadOptions) -> Result<Cr
         workspace_root,
         package_name,
         package_version,
+        target_name,
     } = select_package_target(
         manifest_path,
         options.offline,
@@ -49,8 +53,8 @@ pub fn build(resolved: &ResolvedTarget, options: &CrateReadOptions) -> Result<Cr
     let mut retry_budget = RetryBudget::default();
 
     while retry_budget.begin_attempt() {
-        let toolchain_before =
-            nightly_identity().map_err(|error| with_recovery_context(&mut storage_retry, error))?;
+        let toolchain_before = selected_toolchain_identity(&options.toolchain)
+            .map_err(|error| with_recovery_context(&mut storage_retry, error))?;
         let lease = match owner.begin_build(
             &toolchain_before,
             &workspace_root,
@@ -84,8 +88,9 @@ pub fn build(resolved: &ResolvedTarget, options: &CrateReadOptions) -> Result<Cr
         };
         let attempt_result = build_once(
             manifest_path,
-            package_target.clone(),
+            &package_target,
             bin_target.clone(),
+            &target_name,
             include_private,
             options,
             &lease,
@@ -108,7 +113,7 @@ pub fn build(resolved: &ResolvedTarget, options: &CrateReadOptions) -> Result<Cr
         match attempt_result {
             Ok(crate_read) => {
                 owner.signal_maintenance(&toolchain_before, low_space);
-                let toolchain_after = nightly_identity()
+                let toolchain_after = selected_toolchain_identity(&options.toolchain)
                     .map_err(|error| with_recovery_context(&mut storage_retry, error))?;
                 if toolchain_after != toolchain_before {
                     drop(lease);
@@ -153,6 +158,15 @@ pub fn build(resolved: &ResolvedTarget, options: &CrateReadOptions) -> Result<Cr
     ))
 }
 
+/// Preserve the ordinary nightly identity wrapper for default rendering.
+fn selected_toolchain_identity(toolchain: &str) -> Result<String> {
+    if toolchain == "nightly" {
+        nightly_identity()
+    } else {
+        toolchain_identity(toolchain)
+    }
+}
+
 /// Determine which Cargo target should be used for rustdoc JSON generation.
 fn select_package_target(
     manifest_path: &Path,
@@ -193,6 +207,7 @@ fn select_package_target(
                 workspace_root,
                 package_name,
                 package_version,
+                target_name: bin_name.to_string(),
             });
         }
 
@@ -208,12 +223,19 @@ fn select_package_target(
     }
 
     if has_lib {
+        let target_name = package
+            .targets()
+            .iter()
+            .find(|target| target.is_lib())
+            .map(|target| target.name().to_string())
+            .unwrap_or_else(|| package_name.clone());
         return Ok(PackageTargetSelection {
             package_target: PackageTarget::Lib,
             bin_target: None,
             workspace_root,
             package_name,
             package_version,
+            target_name,
         });
     }
 
@@ -235,6 +257,7 @@ fn select_package_target(
             workspace_root,
             package_name,
             package_version,
+            target_name: default_run.to_string(),
         });
     }
 
@@ -249,6 +272,7 @@ fn select_package_target(
             workspace_root,
             package_name,
             package_version,
+            target_name: name.to_string(),
         });
     }
 
@@ -287,12 +311,20 @@ pub struct CrateReadOptions {
     pub(crate) features: Vec<String>,
     /// Whether to include private items in rustdoc output.
     pub(crate) private_items: bool,
+    /// Whether to include items hidden from generated documentation.
+    pub(crate) hidden_items: bool,
     /// Whether to suppress cargo output during rustdoc generation.
     pub(crate) silent: bool,
     /// Whether to force offline mode for cargo operations.
     pub(crate) offline: bool,
     /// Optional override of the binary target name.
     pub(crate) bin_override: Option<String>,
+    /// Rustup toolchain used for Cargo and rustdoc.
+    pub(crate) toolchain: String,
+    /// Optional compilation target.
+    pub(crate) target: Option<String>,
+    /// Whether Cargo must use the existing lockfile without changes.
+    pub(crate) locked: bool,
     /// Dedicated cache handle for non-standard-library builds.
     pub(crate) cache: CacheHandle,
 }
@@ -310,6 +342,131 @@ struct PackageTargetSelection {
     package_name: String,
     /// Selected package version for cache display metadata.
     package_version: String,
+    /// Cargo target name used to locate the generated JSON file.
+    target_name: String,
+}
+
+/// Cargo target selected for one rustdoc invocation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum PackageTarget {
+    /// The selected package library target.
+    Lib,
+    /// One named binary target.
+    Bin(String),
+}
+
+/// Complete local command description for one rustdoc JSON build.
+#[derive(Debug)]
+struct RustdocInvocation {
+    /// Executable invoked for the command.
+    program: OsString,
+    /// Ordered arguments passed to the executable.
+    args: Vec<OsString>,
+    /// Environment values required by the dedicated cache.
+    envs: Vec<(OsString, OsString)>,
+    /// Expected rustdoc JSON output path.
+    json_path: PathBuf,
+}
+
+impl RustdocInvocation {
+    /// Construct one exact Cargo rustdoc command.
+    fn new(
+        manifest_path: &Path,
+        package_target: &PackageTarget,
+        target_name: &str,
+        include_private: bool,
+        options: &CrateReadOptions,
+        build_dir: &Path,
+    ) -> Self {
+        let mut args = vec![
+            OsString::from("run"),
+            OsString::from(&options.toolchain),
+            OsString::from("cargo"),
+            OsString::from("rustdoc"),
+        ];
+        match package_target {
+            PackageTarget::Lib => args.push(OsString::from("--lib")),
+            PackageTarget::Bin(name) => {
+                args.push(OsString::from("--bin"));
+                args.push(OsString::from(name));
+            }
+        }
+        args.push(OsString::from("--target-dir"));
+        args.push(build_dir.as_os_str().to_owned());
+        if options.silent {
+            args.push(OsString::from("--quiet"));
+        }
+        args.push(OsString::from("--color"));
+        args.push(OsString::from("auto"));
+        args.push(OsString::from("--manifest-path"));
+        args.push(manifest_path.as_os_str().to_owned());
+        if let Some(target) = &options.target {
+            args.push(OsString::from("--target"));
+            args.push(OsString::from(target));
+        }
+        if options.locked {
+            args.push(OsString::from("--locked"));
+        }
+        if options.offline {
+            args.push(OsString::from("--offline"));
+        }
+        if options.no_default_features {
+            args.push(OsString::from("--no-default-features"));
+        }
+        if options.all_features {
+            args.push(OsString::from("--all-features"));
+        }
+        for feature in &options.features {
+            args.push(OsString::from("--features"));
+            args.push(OsString::from(feature));
+        }
+        args.push(OsString::from("--"));
+        args.extend([
+            OsString::from("-Z"),
+            OsString::from("unstable-options"),
+            OsString::from("--output-format"),
+            OsString::from("json"),
+        ]);
+        if include_private {
+            args.push(OsString::from("--document-private-items"));
+        }
+        if options.hidden_items {
+            args.push(OsString::from("--document-hidden-items"));
+        }
+        args.push(OsString::from("--cap-lints"));
+        args.push(OsString::from("warn"));
+
+        let mut json_path = build_dir.to_path_buf();
+        if let Some(target) = &options.target {
+            json_path.push(target);
+        }
+        json_path.push("doc");
+        json_path.push(target_name.replace('-', "_"));
+        json_path.set_extension("json");
+
+        Self {
+            program: OsString::from("rustup"),
+            args,
+            envs: vec![(
+                OsString::from("CARGO_BUILD_BUILD_DIR"),
+                build_dir.as_os_str().to_owned(),
+            )],
+            json_path,
+        }
+    }
+
+    /// Execute the command and capture both output streams.
+    fn run(&self) -> io::Result<Output> {
+        let mut command = Command::new(&self.program);
+        command.args(&self.args).envs(self.envs.iter().cloned());
+        command.output()
+    }
+
+    /// Return command arguments for exact-order tests.
+    #[cfg(test)]
+    fn args(&self) -> impl Iterator<Item = &OsStr> {
+        self.args.iter().map(OsString::as_os_str)
+    }
 }
 
 /// Failure category retained until the build path makes its retry decision.
@@ -388,56 +545,45 @@ impl BuildAttemptFailure {
 /// Run one rustdoc build and read its JSON from a leased cache entry.
 fn build_once(
     manifest_path: &Path,
-    package_target: PackageTarget,
+    package_target: &PackageTarget,
     bin_target: Option<BinaryTarget>,
+    target_name: &str,
     include_private: bool,
     options: &CrateReadOptions,
     lease: &BuildLease,
 ) -> result::Result<CrateRead, BuildAttemptFailure> {
-    let mut captured_stdout = Vec::new();
-    let mut captured_stderr = Vec::new();
     let build_dir = lease.build_dir();
-
-    let build_result = rustdoc_json::Builder::default()
-        .toolchain("nightly")
-        .manifest_path(manifest_path)
-        .package_target(package_target)
-        .document_private_items(include_private)
-        .no_default_features(options.no_default_features)
-        .all_features(options.all_features)
-        .features(&options.features)
-        .target_dir(build_dir)
-        .env("CARGO_BUILD_BUILD_DIR", build_dir)
-        .quiet(options.silent)
-        .silent(false)
-        .build_with_captured_output(&mut captured_stdout, &mut captured_stderr);
+    let invocation = RustdocInvocation::new(
+        manifest_path,
+        package_target,
+        target_name,
+        include_private,
+        options,
+        build_dir,
+    );
+    let output = invocation.run().map_err(|source| {
+        BuildAttemptFailure::Final(RuskelError::Generate(format!(
+            "Failed to execute rustdoc for toolchain '{}': {source}",
+            options.toolchain
+        )))
+    })?;
 
     if !options.silent {
-        if !captured_stdout.is_empty() && io::stdout().write_all(&captured_stdout).is_err() {
+        if !output.stdout.is_empty() && io::stdout().write_all(&output.stdout).is_err() {
             // Output mirroring is best effort.
         }
-        if !captured_stderr.is_empty() && io::stderr().write_all(&captured_stderr).is_err() {
+        if !output.stderr.is_empty() && io::stderr().write_all(&output.stderr).is_err() {
             // Output mirroring is best effort.
         }
     }
 
-    let json_path = match build_result {
-        Ok(path) => path,
-        Err(rustdoc_json::BuildError::IoError(source)) => {
-            return Err(BuildAttemptFailure::Storage(RuskelError::CacheIo {
-                action: "generate rustdoc JSON",
-                path: build_dir.to_path_buf(),
-                source,
-            }));
-        }
-        Err(error) => {
-            let mapped = map_rustdoc_build_error(&error, &captured_stderr, options.silent);
-            if matches!(error, rustdoc_json::BuildError::BuildRustdocJsonError) {
-                return Err(BuildAttemptFailure::Diagnostic(mapped));
-            }
-            return Err(BuildAttemptFailure::Final(mapped));
-        }
-    };
+    if !output.status.success() {
+        return Err(BuildAttemptFailure::Diagnostic(format_rustdoc_failure(
+            &output.stderr,
+            options.silent,
+        )));
+    }
+    let json_path = invocation.json_path;
 
     let json_content = fs::read_to_string(&json_path).map_err(|source| {
         BuildAttemptFailure::Storage(RuskelError::CacheIo {
@@ -471,41 +617,6 @@ fn build_once(
 /// Maximum number of characters from rustdoc stderr included in failure
 /// reports.
 const MAX_STDERR_CHARS: usize = 8_192;
-
-/// Translate a `rustdoc_json` build failure into a user-facing [`RuskelError`].
-fn map_rustdoc_build_error(
-    err: &rustdoc_json::BuildError,
-    captured_stderr: &[u8],
-    silent: bool,
-) -> RuskelError {
-    match err {
-        rustdoc_json::BuildError::BuildRustdocJsonError => {
-            format_rustdoc_failure(captured_stderr, silent)
-        }
-        other => {
-            let err_msg = other.to_string();
-
-            if err_msg.contains("no library targets found in package") {
-                return RuskelError::Generate(
-                    "error: no library targets found in package".to_string(),
-                );
-            }
-
-            if err_msg.contains("toolchain") && err_msg.contains("is not installed") {
-                return RuskelError::Generate(
-                    "ruskel requires the nightly toolchain to be installed - run 'rustup toolchain install nightly'"
-                        .to_string(),
-                );
-            }
-
-            if err_msg.contains("Failed to build rustdoc JSON") {
-                return format_rustdoc_failure(captured_stderr, silent);
-            }
-
-            RuskelError::Generate(format!("Failed to build rustdoc JSON: {err_msg}"))
-        }
-    }
-}
 
 /// Format a detailed error for rustdoc build failures, optionally embedding
 /// diagnostics.
@@ -634,6 +745,127 @@ mod tests {
 
     use super::*;
 
+    /// Create build options for local command construction tests.
+    fn command_options() -> CrateReadOptions {
+        CrateReadOptions {
+            no_default_features: true,
+            all_features: false,
+            features: vec!["serde".to_string(), "tracing".to_string()],
+            private_items: true,
+            hidden_items: true,
+            silent: true,
+            offline: true,
+            bin_override: None,
+            toolchain: "nightly-2026-08-31".to_string(),
+            target: Some("aarch64-apple-darwin".to_string()),
+            locked: true,
+            cache: CacheHandle::new(None),
+        }
+    }
+
+    #[test]
+    fn rustdoc_invocation_orders_cargo_and_rustdoc_flags() {
+        let options = command_options();
+        let invocation = RustdocInvocation::new(
+            Path::new("/work/Cargo.toml"),
+            &PackageTarget::Lib,
+            "renamed-library",
+            true,
+            &options,
+            Path::new("/cache/build"),
+        );
+        let args: Vec<_> = invocation.args().map(OsStr::to_string_lossy).collect();
+        assert_eq!(
+            args,
+            [
+                "run",
+                "nightly-2026-08-31",
+                "cargo",
+                "rustdoc",
+                "--lib",
+                "--target-dir",
+                "/cache/build",
+                "--quiet",
+                "--color",
+                "auto",
+                "--manifest-path",
+                "/work/Cargo.toml",
+                "--target",
+                "aarch64-apple-darwin",
+                "--locked",
+                "--offline",
+                "--no-default-features",
+                "--features",
+                "serde",
+                "--features",
+                "tracing",
+                "--",
+                "-Z",
+                "unstable-options",
+                "--output-format",
+                "json",
+                "--document-private-items",
+                "--document-hidden-items",
+                "--cap-lints",
+                "warn",
+            ]
+        );
+        assert_eq!(
+            invocation.json_path,
+            Path::new("/cache/build/aarch64-apple-darwin/doc/renamed_library.json")
+        );
+    }
+
+    #[test]
+    fn rustdoc_invocation_preserves_ordinary_host_defaults() {
+        let mut options = command_options();
+        options.toolchain = "nightly".to_string();
+        options.target = None;
+        options.locked = false;
+        options.offline = false;
+        options.no_default_features = false;
+        options.features.clear();
+        options.silent = false;
+        options.hidden_items = false;
+        let invocation = RustdocInvocation::new(
+            Path::new("Cargo.toml"),
+            &PackageTarget::Bin("named-bin".to_string()),
+            "named-bin",
+            false,
+            &options,
+            Path::new("target/cache"),
+        );
+        let args: Vec<_> = invocation.args().map(OsStr::to_string_lossy).collect();
+        assert_eq!(
+            args,
+            [
+                "run",
+                "nightly",
+                "cargo",
+                "rustdoc",
+                "--bin",
+                "named-bin",
+                "--target-dir",
+                "target/cache",
+                "--color",
+                "auto",
+                "--manifest-path",
+                "Cargo.toml",
+                "--",
+                "-Z",
+                "unstable-options",
+                "--output-format",
+                "json",
+                "--cap-lints",
+                "warn",
+            ]
+        );
+        assert_eq!(
+            invocation.json_path,
+            Path::new("target/cache/doc/named_bin.json")
+        );
+    }
+
     #[test]
     fn retry_budget_keeps_reasons_independent_with_three_attempts_total() {
         let mut budget = RetryBudget::default();
@@ -715,6 +947,7 @@ path = "src/second.rs"
 
         let library = select_package_target(&manifest, true, None)?;
         assert!(matches!(library.package_target, PackageTarget::Lib));
+        assert_eq!(library.target_name, "selection_fixture");
         assert!(library.bin_target.is_none());
 
         let binary = select_package_target(&manifest, true, Some("second"))?;
@@ -723,6 +956,7 @@ path = "src/second.rs"
             PackageTarget::Bin(ref name) if name == "second"
         ));
         let metadata = binary.bin_target.expect("binary metadata");
+        assert_eq!(binary.target_name, "second");
         assert_eq!(metadata.name, "second");
         assert!(!metadata.is_bin_only);
 

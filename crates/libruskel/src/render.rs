@@ -1,4 +1,10 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    fs,
+    io::Write,
+    path::Path as FsPath,
+    process::{Command, Stdio},
+};
 
 use once_cell::sync::Lazy;
 use regex::Regex;
@@ -17,7 +23,26 @@ use crate::{
     search::SearchItemKind,
     selection::{RenderSelection, derive_trait_name, should_render_impl},
     signature,
+    toolchain::toolchain_binary,
 };
+
+/// Canonical snapshot rendering rules.
+mod canonical;
+
+/// Exact rustfmt configuration for snapshot format 1.
+const SNAPSHOT_RUSTFMT_V1: &[u8] = include_bytes!("render/snapshot-rustfmt-v1.toml");
+
+/// Rendering and formatting policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RenderProfile {
+    /// Existing interactive skeleton behavior.
+    Interactive,
+    /// Strict canonical snapshot format 1.
+    SnapshotV1 {
+        /// Dated nightly that owns the format 1 rustfmt binary.
+        toolchain: String,
+    },
+}
 
 /// Reusable pattern for removing placeholder bodies from macro output.
 /// rustdoc currently emits `{ ... }` placeholder blocks for `macro`
@@ -471,6 +496,8 @@ fn impl_return_type_key(decl: &FunctionSignature) -> String {
 pub struct Renderer {
     /// Formatter used to produce tidy Rust output.
     formatter: RustFmt,
+    /// Rendering and formatting policy.
+    profile: RenderProfile,
     /// Whether auto trait implementations should be included in the output.
     render_auto_impls: bool,
     /// Whether private items should be rendered.
@@ -508,6 +535,7 @@ impl Renderer {
         let config = Config::new_str().option("brace_style", "PreferSameLine");
         Self {
             formatter: RustFmt::from_config(config),
+            profile: RenderProfile::Interactive,
             render_auto_impls: false,
             render_private_items: false,
             render_blanket_impls: false,
@@ -515,6 +543,23 @@ impl Renderer {
             selection: None,
             frontmatter: None,
         }
+    }
+
+    /// Create the strict renderer for snapshot format 1.
+    #[allow(
+        dead_code,
+        reason = "snapshot capture uses this crate-private constructor in stage 2"
+    )]
+    pub(crate) fn snapshot_v1(toolchain: impl Into<String>) -> Self {
+        let mut renderer = Self::new();
+        renderer.profile = RenderProfile::SnapshotV1 {
+            toolchain: toolchain.into(),
+        };
+        renderer.render_auto_impls = false;
+        renderer.render_private_items = false;
+        renderer.render_blanket_impls = false;
+        renderer.frontmatter = None;
+        renderer
     }
 
     /// Apply a filter to output. The filter is a path BELOW the outermost
@@ -556,13 +601,23 @@ impl Renderer {
 
     /// Render a crate into formatted Rust source text.
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
+        if matches!(self.profile, RenderProfile::SnapshotV1 { .. }) {
+            canonical::validate_reachable(crate_data)?;
+        }
+        let canonical_data = matches!(self.profile, RenderProfile::SnapshotV1 { .. })
+            .then(|| canonical::canonicalized(crate_data));
+        let crate_data = canonical_data.as_ref().unwrap_or(crate_data);
         let selection = self.resolve_selection(crate_data)?;
         let mut state = RenderState {
             config: self,
             crate_data,
             selection,
         };
-        state.render()
+        let source = state.render_source()?;
+        match &self.profile {
+            RenderProfile::Interactive => Ok(self.formatter.format_str(&source)?),
+            RenderProfile::SnapshotV1 { toolchain } => format_snapshot_v1(toolchain, &source),
+        }
     }
 
     /// Compose an explicit search selection with the target path filter.
@@ -593,9 +648,13 @@ impl Renderer {
     }
 }
 
+#[cfg(test)]
+#[path = "render/snapshot_tests.rs"]
+mod snapshot_tests;
+
 impl RenderState<'_, '_> {
-    /// Render the crate, applying filters and formatting output.
-    pub fn render(&mut self) -> Result<String> {
+    /// Render the crate source before profile-specific formatting.
+    fn render_source(&mut self) -> Result<String> {
         // The root item is always a module
         let root_item = must_get(self.crate_data, &self.crate_data.root)?;
         let output = self.render_item("", root_item, None, false)?;
@@ -612,7 +671,22 @@ impl RenderState<'_, '_> {
         }
         composed.push_str(&output);
 
-        Ok(self.config.formatter.format_str(&composed)?)
+        Ok(composed)
+    }
+
+    /// Whether strict snapshot policies are active.
+    fn is_snapshot(&self) -> bool {
+        matches!(self.config.profile, RenderProfile::SnapshotV1 { .. })
+    }
+
+    /// Render documentation and retained snapshot attributes.
+    fn item_prefix(&self, item: &Item) -> Result<String> {
+        let mut output = String::new();
+        if self.is_snapshot() {
+            output.push_str(&canonical::retained_attributes(item)?);
+        }
+        output.push_str(&docs(item));
+        Ok(output)
     }
 
     /// Return the active render selection, if any.
@@ -670,6 +744,9 @@ impl RenderState<'_, '_> {
 
     /// Determine whether an impl block should be rendered in the output.
     fn should_render_impl(&self, impl_: &Impl) -> bool {
+        if self.is_snapshot() {
+            return !impl_.is_synthetic && impl_.blanket_impl.is_none();
+        }
         should_render_impl(
             impl_,
             self.config.render_auto_impls,
@@ -697,12 +774,15 @@ impl RenderState<'_, '_> {
 
         let output = match &item.inner {
             ItemEnum::Module(_) => self.render_module(path_prefix, item, parent)?,
+            ItemEnum::Union(_) => self.render_union(item)?,
             ItemEnum::Struct(_) => self.render_struct(item)?,
             ItemEnum::Enum(_) => self.render_enum(item)?,
             ItemEnum::Trait(_) => self.render_trait(item)?,
+            ItemEnum::TraitAlias(_) => self.render_trait_alias(item)?,
             ItemEnum::Use(_) => self.render_use(path_prefix, item)?,
             ItemEnum::Function(_) => self.render_function(item, false)?,
             ItemEnum::Constant { .. } => self.render_constant(item)?,
+            ItemEnum::Static(_) => self.render_static(item)?,
             ItemEnum::TypeAlias(_) => self.render_type_alias(item)?,
             ItemEnum::Macro(_) => self.render_macro(item)?,
             ItemEnum::ProcMacro(_) => self.render_proc_macro(item)?,
@@ -718,7 +798,7 @@ impl RenderState<'_, '_> {
 
     /// Render a procedural macro definition.
     fn render_proc_macro(&self, item: &Item) -> Result<String> {
-        let mut output = docs(item);
+        let mut output = self.item_prefix(item)?;
 
         let fn_name = render_name(item);
 
@@ -757,10 +837,17 @@ impl RenderState<'_, '_> {
 
     /// Render a macro_rules! or new-style `macro` definition.
     fn render_macro(&self, item: &Item) -> Result<String> {
-        let mut output = docs(item);
+        let mut output = self.item_prefix(item)?;
 
         let macro_def = try_extract_item!(item, ItemEnum::Macro)?;
-        output.push_str("#[macro_export]\n");
+        if !self.is_snapshot()
+            || !item
+                .attrs
+                .iter()
+                .any(|attribute| matches!(attribute, rustdoc_types::Attribute::MacroExport))
+        {
+            output.push_str("#[macro_export]\n");
+        }
 
         let macro_src = macro_def.to_string();
         let rendered = if macro_src.starts_with("macro ") && !macro_src.starts_with("macro_rules!")
@@ -807,7 +894,7 @@ impl RenderState<'_, '_> {
 
     /// Render a type alias with generics, bounds, and visibility.
     fn render_type_alias(&self, item: &Item) -> Result<String> {
-        let mut output = docs(item);
+        let mut output = self.item_prefix(item)?;
         let signature = signature::item_signature(self.crate_data, item, SearchItemKind::TypeAlias)
             .ok_or_else(|| {
                 RuskelError::Generate(format!(
@@ -830,19 +917,34 @@ impl RenderState<'_, '_> {
                 && let Ok(source_item) = must_get(self.crate_data, source_id)
             {
                 let module = try_extract_item!(source_item, ItemEnum::Module)?;
-                let mut output = String::new();
+                let mut fragments = Vec::new();
                 for item_id in &module.items {
                     let item = must_get(self.crate_data, item_id)?;
                     if self.is_visible(item) {
-                        output.push_str(&self.render_item(
-                            path_prefix,
-                            item,
-                            Some(use_id),
-                            true,
-                        )?);
+                        let fragment = self.render_item(path_prefix, item, Some(use_id), true)?;
+                        if !fragment.is_empty() {
+                            fragments.push(canonical::CanonicalItemKey::new(
+                                self.crate_data,
+                                item,
+                                fragment,
+                            ));
+                        }
                     }
                 }
+                if self.is_snapshot() {
+                    fragments.sort();
+                }
+                let output = fragments
+                    .into_iter()
+                    .map(canonical::CanonicalItemKey::into_fragment)
+                    .collect();
                 return Ok(output);
+            }
+            if self.is_snapshot() {
+                return Err(RuskelError::Generate(format!(
+                    "snapshot format 1 cannot resolve public glob export '{}'",
+                    import.source
+                )));
             }
             // If we can't resolve the glob import, fall back to rendering it as-is
             return Ok(format!("pub use {}::*;\n", escape_path(&import.source)));
@@ -851,15 +953,28 @@ impl RenderState<'_, '_> {
         if let Some(imported_id) = import.id.as_ref()
             && let Ok(imported_item) = must_get(self.crate_data, imported_id)
         {
-            if imported_item.name.as_deref() == Some(import.name.as_str()) {
-                return self.render_item(path_prefix, imported_item, Some(use_id), true);
-            }
             let mut aliased_item = imported_item.clone();
             aliased_item.name = Some(import.name.clone());
+            if self.is_snapshot() {
+                let mut occurrence_attributes = item.attrs.clone();
+                occurrence_attributes.extend(aliased_item.attrs);
+                aliased_item.attrs = occurrence_attributes;
+                aliased_item.docs = item.docs.clone().or(aliased_item.docs);
+                aliased_item.deprecation = item.deprecation.clone().or(aliased_item.deprecation);
+            } else if imported_item.name.as_deref() == Some(import.name.as_str()) {
+                return self.render_item(path_prefix, imported_item, Some(use_id), true);
+            }
             return self.render_item(path_prefix, &aliased_item, Some(use_id), true);
         }
 
-        let mut output = docs(item);
+        if self.is_snapshot() {
+            return Err(RuskelError::Generate(format!(
+                "snapshot format 1 cannot resolve public export '{}'",
+                import.source
+            )));
+        }
+
+        let mut output = self.item_prefix(item)?;
         if import.name != import.source.split("::").last().unwrap_or(&import.source) {
             // Check if the alias itself needs escaping
             let escaped_name = if is_reserved_word(import.name.as_str()) {
@@ -974,6 +1089,70 @@ impl RenderState<'_, '_> {
         Ok(output)
     }
 
+    /// Render implementation groups for one declaration.
+    fn render_impls(&self, item: &Item, impl_ids: &[Id]) -> Result<String> {
+        let target_rename = self.item_rename(item)?;
+        let mut fragments = Vec::new();
+        for group in self.collect_impl_groups(&item.id, impl_ids)? {
+            let fragment = self.render_impl_group(
+                &group,
+                target_rename
+                    .as_ref()
+                    .map(|(original, alias)| (original.as_str(), alias.as_str())),
+            )?;
+            if !fragment.is_empty() {
+                fragments.push(fragment);
+            }
+        }
+        if self.is_snapshot() {
+            fragments.sort();
+        }
+        Ok(fragments.concat())
+    }
+
+    /// Render implementation fragments owned by one module child.
+    fn render_item_impls(&self, item: &Item) -> Result<Vec<String>> {
+        if !self.is_visible(item) {
+            return Ok(Vec::new());
+        }
+        match &item.inner {
+            ItemEnum::Struct(struct_) => Ok(vec![self.render_impls(item, &struct_.impls)?]),
+            ItemEnum::Union(union_) => Ok(vec![self.render_impls(item, &union_.impls)?]),
+            ItemEnum::Enum(enum_) => Ok(vec![self.render_impls(item, &enum_.impls)?]),
+            ItemEnum::Use(import) => {
+                let Some(imported_id) = import.id else {
+                    return Ok(Vec::new());
+                };
+                let imported = must_get(self.crate_data, &imported_id)?;
+                if import.is_glob {
+                    let module = try_extract_item!(imported, ItemEnum::Module)?;
+                    let mut fragments = Vec::new();
+                    for child_id in &module.items {
+                        let child = must_get(self.crate_data, child_id)?;
+                        if self.is_visible(child) {
+                            fragments.extend(self.render_item_impls(child)?);
+                        }
+                    }
+                    Ok(fragments)
+                } else {
+                    let mut alias = imported.clone();
+                    alias.name = Some(import.name.clone());
+                    match &alias.inner {
+                        ItemEnum::Struct(struct_) => {
+                            Ok(vec![self.render_impls(&alias, &struct_.impls)?])
+                        }
+                        ItemEnum::Union(union_) => {
+                            Ok(vec![self.render_impls(&alias, &union_.impls)?])
+                        }
+                        ItemEnum::Enum(enum_) => Ok(vec![self.render_impls(&alias, &enum_.impls)?]),
+                        _ => Ok(Vec::new()),
+                    }
+                }
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
     /// Render the contents for a single impl block, without its header.
     fn render_impl_body(&self, item: &Item, impl_: &Impl) -> Result<Option<RenderedImplBody>> {
         if !self.selection_context_contains(&item.id) {
@@ -996,7 +1175,7 @@ impl RenderState<'_, '_> {
         }
 
         let mut body = String::new();
-        let mut has_content = false;
+        let mut body_fragments = Vec::new();
         for item_id in &impl_.items {
             if let Ok(item) = must_get(self.crate_data, item_id) {
                 let is_trait_impl = impl_.trait_.is_some();
@@ -1007,19 +1186,25 @@ impl RenderState<'_, '_> {
                 {
                     let rendered = self.render_impl_item(item, expand_children)?;
                     if !rendered.is_empty() {
-                        body.push_str(&rendered);
-                        has_content = true;
+                        body_fragments.push(rendered);
                     }
                 }
             }
         }
 
-        if !has_content && !impl_.is_negative {
+        if body_fragments.is_empty() && !impl_.is_negative {
             return Ok(None);
         }
 
+        if self.is_snapshot() {
+            body_fragments.sort();
+        }
+        for fragment in body_fragments {
+            body.push_str(&fragment);
+        }
+
         Ok(Some(RenderedImplBody {
-            docs: docs(item),
+            docs: self.item_prefix(item)?,
             body,
         }))
     }
@@ -1033,7 +1218,13 @@ impl RenderState<'_, '_> {
         let rendered = match &item.inner {
             ItemEnum::Function(_) => self.render_function(item, false)?,
             ItemEnum::Constant { .. } => self.render_constant(item)?,
-            ItemEnum::AssocType { .. } => render_associated_type(item),
+            ItemEnum::AssocType { .. } => {
+                format!(
+                    "{}{}",
+                    self.item_prefix(item)?,
+                    render_associated_type(item)
+                )
+            }
             ItemEnum::TypeAlias(_) => self.render_type_alias(item)?,
             _ => String::new(),
         };
@@ -1041,9 +1232,31 @@ impl RenderState<'_, '_> {
         Ok(rendered)
     }
 
+    /// Render a union declaration and its ordered fields.
+    fn render_union(&self, item: &Item) -> Result<String> {
+        let union_ = try_extract_item!(item, ItemEnum::Union)?;
+        let mut output = self.item_prefix(item)?;
+        let signature = signature::item_signature(self.crate_data, item, SearchItemKind::Union)
+            .ok_or_else(|| {
+                RuskelError::Generate(format!(
+                    "failed to build union signature for '{}'",
+                    render_name(item)
+                ))
+            })?;
+        output.push_str(&format!("{signature} {{\n"));
+        for field in &union_.fields {
+            output.push_str(&self.render_struct_field(field, false)?);
+        }
+        output.push_str("}\n\n");
+        if !self.is_snapshot() {
+            output.push_str(&self.render_impls(item, &union_.impls)?);
+        }
+        Ok(output)
+    }
+
     /// Render an enum definition, including variants.
     fn render_enum(&self, item: &Item) -> Result<String> {
-        let mut output = docs(item);
+        let mut output = self.item_prefix(item)?;
 
         let enum_ = try_extract_item!(item, ItemEnum::Enum)?;
 
@@ -1054,8 +1267,10 @@ impl RenderState<'_, '_> {
         let selection_active = self.selection().is_some();
         let include_all_variants = self.selection_expands(&item.id);
 
-        let inline_traits = self.collect_inline_derive_traits(&enum_.impls)?;
-        Self::push_inline_derive_attribute(&mut output, &inline_traits);
+        if !self.is_snapshot() {
+            let inline_traits = self.collect_inline_derive_traits(&enum_.impls)?;
+            Self::push_inline_derive_attribute(&mut output, &inline_traits);
+        }
 
         let signature = signature::item_signature(self.crate_data, item, SearchItemKind::Enum)
             .ok_or_else(|| {
@@ -1084,17 +1299,8 @@ impl RenderState<'_, '_> {
 
         output.push_str("}\n\n");
 
-        // Render impl blocks
-        let target_rename = self.item_rename(item)?;
-        for group in self.collect_impl_groups(&item.id, &enum_.impls)? {
-            output.push_str(
-                &self.render_impl_group(
-                    &group,
-                    target_rename
-                        .as_ref()
-                        .map(|(original, alias)| (original.as_str(), alias.as_str())),
-                )?,
-            );
+        if !self.is_snapshot() {
+            output.push_str(&self.render_impls(item, &enum_.impls)?);
         }
 
         Ok(output)
@@ -1108,7 +1314,7 @@ impl RenderState<'_, '_> {
             return Ok(String::new());
         }
 
-        let mut output = docs(item);
+        let mut output = self.item_prefix(item)?;
 
         let variant = try_extract_item!(item, ItemEnum::Variant)?;
 
@@ -1161,7 +1367,7 @@ impl RenderState<'_, '_> {
 
     /// Render a trait definition.
     fn render_trait(&self, item: &Item) -> Result<String> {
-        let mut output = docs(item);
+        let mut output = self.item_prefix(item)?;
 
         let trait_ = try_extract_item!(item, ItemEnum::Trait)?;
 
@@ -1181,15 +1387,54 @@ impl RenderState<'_, '_> {
             })?;
         output.push_str(&format!("{signature} {{\n"));
 
-        for item_id in &trait_.items {
-            if !selection_active || expand_children || self.selection_context_contains(item_id) {
-                let item = must_get(self.crate_data, item_id)?;
-                output.push_str(&self.render_trait_item(item, expand_children)?);
+        if self.is_snapshot() {
+            let mut members = Vec::new();
+            for item_id in &trait_.items {
+                if !selection_active || expand_children || self.selection_context_contains(item_id)
+                {
+                    let item = must_get(self.crate_data, item_id)?;
+                    let fragment = self.render_trait_item(item, expand_children)?;
+                    if !fragment.is_empty() {
+                        members.push(canonical::CanonicalItemKey::new(
+                            self.crate_data,
+                            item,
+                            fragment,
+                        ));
+                    }
+                }
+            }
+            members.sort();
+            for member in members {
+                output.push_str(&member.into_fragment());
+            }
+        } else {
+            for item_id in &trait_.items {
+                if !selection_active || expand_children || self.selection_context_contains(item_id)
+                {
+                    let item = must_get(self.crate_data, item_id)?;
+                    output.push_str(&self.render_trait_item(item, expand_children)?);
+                }
             }
         }
 
         output.push_str("}\n\n");
 
+        Ok(output)
+    }
+
+    /// Render a trait alias declaration.
+    fn render_trait_alias(&self, item: &Item) -> Result<String> {
+        let _alias = try_extract_item!(item, ItemEnum::TraitAlias)?;
+        let mut output = self.item_prefix(item)?;
+        let signature =
+            signature::item_signature(self.crate_data, item, SearchItemKind::TraitAlias)
+                .ok_or_else(|| {
+                    RuskelError::Generate(format!(
+                        "failed to build trait alias signature for '{}'",
+                        render_name(item)
+                    ))
+                })?;
+        output.push_str(&format!("{signature};\n\n"));
         Ok(output)
     }
 
@@ -1206,7 +1451,8 @@ impl RenderState<'_, '_> {
                     .map(|d| format!(" = {}", render_expression(d)))
                     .unwrap_or_default();
                 format!(
-                    "const {}: {}{};\n",
+                    "{}const {}: {}{};\n",
+                    self.item_prefix(item)?,
                     render_name(item),
                     render_type(type_),
                     default_str
@@ -1229,7 +1475,8 @@ impl RenderState<'_, '_> {
                     .map(|d| format!(" = {}", render_type(d)))
                     .unwrap_or_default();
                 format!(
-                    "type {}{}{}{};\n",
+                    "{}type {}{}{}{};\n",
+                    self.item_prefix(item)?,
                     render_name(item),
                     generics_str,
                     bounds_str,
@@ -1244,7 +1491,7 @@ impl RenderState<'_, '_> {
 
     /// Render a struct declaration and its fields.
     fn render_struct(&self, item: &Item) -> Result<String> {
-        let mut output = docs(item);
+        let mut output = self.item_prefix(item)?;
 
         let struct_ = try_extract_item!(item, ItemEnum::Struct)?;
 
@@ -1256,8 +1503,10 @@ impl RenderState<'_, '_> {
         let expand_children = selection_active && self.selection_expands(&item.id);
         let force_fields = selection_active && expand_children;
 
-        let inline_traits = self.collect_inline_derive_traits(&struct_.impls)?;
-        Self::push_inline_derive_attribute(&mut output, &inline_traits);
+        if !self.is_snapshot() {
+            let inline_traits = self.collect_inline_derive_traits(&struct_.impls)?;
+            Self::push_inline_derive_attribute(&mut output, &inline_traits);
+        }
 
         let signature = signature::item_signature(self.crate_data, item, SearchItemKind::Struct)
             .ok_or_else(|| {
@@ -1314,17 +1563,8 @@ impl RenderState<'_, '_> {
             }
         }
 
-        // Render impl blocks
-        let target_rename = self.item_rename(item)?;
-        for group in self.collect_impl_groups(&item.id, &struct_.impls)? {
-            output.push_str(
-                &self.render_impl_group(
-                    &group,
-                    target_rename
-                        .as_ref()
-                        .map(|(original, alias)| (original.as_str(), alias.as_str())),
-                )?,
-            );
+        if !self.is_snapshot() {
+            output.push_str(&self.render_impls(item, &struct_.impls)?);
         }
 
         Ok(output)
@@ -1344,7 +1584,7 @@ impl RenderState<'_, '_> {
 
         let ty = try_extract_item!(field_item, ItemEnum::StructField)?;
         let mut out = String::new();
-        out.push_str(&docs(field_item));
+        out.push_str(&self.item_prefix(field_item)?);
         out.push_str(&format!(
             "{}{}: {},\n",
             render_vis(field_item),
@@ -1367,7 +1607,7 @@ impl RenderState<'_, '_> {
 
     /// Render a constant definition.
     fn render_constant(&self, item: &Item) -> Result<String> {
-        let mut output = docs(item);
+        let mut output = self.item_prefix(item)?;
 
         let (_type_, const_) = try_extract_item!(item, ItemEnum::Constant { type_, const_ })?;
         let signature = signature::item_signature(self.crate_data, item, SearchItemKind::Constant)
@@ -1385,6 +1625,29 @@ impl RenderState<'_, '_> {
         Ok(output)
     }
 
+    /// Render a static declaration.
+    fn render_static(&self, item: &Item) -> Result<String> {
+        let static_ = try_extract_item!(item, ItemEnum::Static)?;
+        let mut output = self.item_prefix(item)?;
+        let mut signature =
+            signature::item_signature(self.crate_data, item, SearchItemKind::Static).ok_or_else(
+                || {
+                    RuskelError::Generate(format!(
+                        "failed to build static signature for '{}'",
+                        render_name(item)
+                    ))
+                },
+            )?;
+        if static_.is_mutable {
+            signature = signature.replacen("static ", "static mut ", 1);
+        }
+        output.push_str(&format!(
+            "{signature} = {};\n\n",
+            render_expression(&static_.expr)
+        ));
+        Ok(output)
+    }
+
     /// Render a module and its children.
     fn render_module(
         &mut self,
@@ -1393,7 +1656,16 @@ impl RenderState<'_, '_> {
         parent: Option<Id>,
     ) -> Result<String> {
         let path_prefix = ppush(path_prefix, &render_name(item));
-        let mut output = format!("{}mod {} {{\n", render_vis(item), render_name(item));
+        let mut output = if self.is_snapshot() {
+            canonical::retained_attributes(item)?
+        } else {
+            String::new()
+        };
+        output.push_str(&format!(
+            "{}mod {} {{\n",
+            render_vis(item),
+            render_name(item)
+        ));
         // Add module doc comment if present
         if self.should_module_doc(parent, item)
             && let Some(docs) = &item.docs
@@ -1407,9 +1679,34 @@ impl RenderState<'_, '_> {
         let module = try_extract_item!(item, ItemEnum::Module)?;
         let module_id = item.id;
 
-        for item_id in &module.items {
-            let item = must_get(self.crate_data, item_id)?;
-            output.push_str(&self.render_item(&path_prefix, item, Some(module_id), false)?);
+        if self.is_snapshot() {
+            let mut declarations = Vec::new();
+            let mut implementations = Vec::new();
+            for item_id in &module.items {
+                let item = must_get(self.crate_data, item_id)?;
+                let fragment = self.render_item(&path_prefix, item, Some(module_id), false)?;
+                if !fragment.is_empty() {
+                    declarations.push(canonical::CanonicalItemKey::new(
+                        self.crate_data,
+                        item,
+                        fragment,
+                    ));
+                }
+                implementations.extend(self.render_item_impls(item)?);
+            }
+            declarations.sort();
+            implementations.sort();
+            for declaration in declarations {
+                output.push_str(&declaration.into_fragment());
+            }
+            for implementation in implementations {
+                output.push_str(&implementation);
+            }
+        } else {
+            for item_id in &module.items {
+                let item = must_get(self.crate_data, item_id)?;
+                output.push_str(&self.render_item(&path_prefix, item, Some(module_id), false)?);
+            }
         }
 
         output.push_str("}\n\n");
@@ -1418,7 +1715,7 @@ impl RenderState<'_, '_> {
 
     /// Render a function or method signature.
     fn render_function(&self, item: &Item, is_trait_method: bool) -> Result<String> {
-        let mut output = docs(item);
+        let mut output = self.item_prefix(item)?;
         let function = try_extract_item!(item, ItemEnum::Function)?;
         let kind = if is_trait_method {
             SearchItemKind::TraitMethod
@@ -1445,9 +1742,71 @@ impl RenderState<'_, '_> {
     }
 }
 
+/// Format snapshot source with the exact format 1 rustfmt environment.
+fn format_snapshot_v1(toolchain: &str, source: &str) -> Result<String> {
+    let rustfmt = toolchain_binary(toolchain, "rustfmt")?;
+    let work_dir = tempfile::tempdir().map_err(|error| {
+        RuskelError::Format(format!(
+            "failed to create isolated rustfmt directory: {error}"
+        ))
+    })?;
+    let config_path = work_dir.path().join("snapshot-rustfmt-v1.toml");
+    fs::write(&config_path, SNAPSHOT_RUSTFMT_V1).map_err(|error| {
+        RuskelError::Format(format!(
+            "failed to write snapshot rustfmt configuration: {error}"
+        ))
+    })?;
+    let mut child = snapshot_rustfmt_command(&rustfmt, &config_path, work_dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            RuskelError::Format(format!(
+                "failed to execute '{}': {error}",
+                rustfmt.display()
+            ))
+        })?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| RuskelError::Format("rustfmt stdin was not available".to_string()))?
+        .write_all(source.as_bytes())
+        .map_err(|error| RuskelError::Format(format!("failed to write rustfmt input: {error}")))?;
+    let output = child.wait_with_output().map_err(|error| {
+        RuskelError::Format(format!("failed to collect rustfmt output: {error}"))
+    })?;
+    if !output.status.success() {
+        return Err(RuskelError::Format(format!(
+            "snapshot rustfmt failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    let mut formatted = String::from_utf8(output.stdout)
+        .map_err(|error| RuskelError::Format(format!("rustfmt returned invalid UTF-8: {error}")))?;
+    while formatted.ends_with("\n\n") {
+        formatted.pop();
+    }
+    if !formatted.ends_with('\n') {
+        formatted.push('\n');
+    }
+    Ok(formatted.replace("\r\n", "\n"))
+}
+
+/// Build the exact format 1 rustfmt command.
+fn snapshot_rustfmt_command(rustfmt: &FsPath, config_path: &FsPath, work_dir: &FsPath) -> Command {
+    let mut command = Command::new(rustfmt);
+    command
+        .args(["--edition", "2024", "--style-edition", "2024"])
+        .arg("--config-path")
+        .arg(config_path)
+        .current_dir(work_dir);
+    command
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, fs, slice};
+    use std::{collections::HashMap, fs, process::Command, slice};
 
     use rustdoc_types::{
         Abi, Crate, Function, FunctionHeader, FunctionSignature, Generics, Id, Impl, Item,
@@ -1565,22 +1924,33 @@ path = "src/lib.rs"
             "#![feature(decl_macro)]\n\npub macro placeholder_macro() { () }\n",
         )?;
 
-        let builder = rustdoc_json::Builder::default()
-            .toolchain("nightly")
-            .manifest_path(temp_dir.path().join("Cargo.toml"))
-            .document_private_items(true);
-
-        let json_path = match builder.build() {
-            Ok(path) => path,
-            Err(err) => {
-                let msg = err.to_string();
-                if msg.contains("rustup") || msg.contains("is not installed") {
-                    eprintln!("skipping placeholder detection test: {msg}");
-                    return Ok(());
-                }
-                return Err(RuskelError::Generate(msg));
+        let target_dir = temp_dir.path().join("target");
+        let output = Command::new("rustup")
+            .args(["run", "nightly", "cargo", "rustdoc", "--lib"])
+            .arg("--manifest-path")
+            .arg(temp_dir.path().join("Cargo.toml"))
+            .arg("--target-dir")
+            .arg(&target_dir)
+            .args([
+                "--",
+                "-Z",
+                "unstable-options",
+                "--output-format",
+                "json",
+                "--document-private-items",
+            ])
+            .output()?;
+        if !output.status.success() {
+            let message = String::from_utf8_lossy(&output.stderr);
+            if message.contains("toolchain") && message.contains("is not installed") {
+                eprintln!("skipping placeholder detection test: {message}");
+                return Ok(());
             }
-        };
+            return Err(RuskelError::Generate(format!(
+                "placeholder rustdoc build failed: {message}"
+            )));
+        }
+        let json_path = target_dir.join("doc/macro_fixture.json");
 
         let crate_data: Crate = serde_json::from_str(&fs::read_to_string(json_path)?)?;
         let macro_src = crate_data
