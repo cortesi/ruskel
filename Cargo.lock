@@ -4153,7 +4153,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tmcp"
-version = "0.5.0"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "70d86914682e5b3bee167c9bab82b347c1f94baeb83dc5b18b5f0bd71a0dead5"
 dependencies = [
  "async-trait",
  "base64",
@@ -4175,7 +4177,9 @@ dependencies = [
 
 [[package]]
 name = "tmcp-macros"
-version = "0.5.0"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aa55f27ae95a83330cb11916ea7b9d597d33e9ff3439ffaeddd8c42c8f354433"
 dependencies = [
  "heck",
  "proc-macro2",

@@ -124,7 +124,7 @@ async fn terminate_child(child: &mut ServerTask) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use tmcp::schema::{ContentBlock, SUPPORTED_PROTOCOL_VERSIONS};
+    use tmcp::schema::{ContentBlock, SupportedProtocolVersions};
 
     use super::*;
 
@@ -160,7 +160,10 @@ mod tests {
             .expect("Failed to initialize");
 
         // Verify response structure
-        assert_eq!(&result.protocol_version, SUPPORTED_PROTOCOL_VERSIONS[0]);
+        assert_eq!(
+            &result.protocol_version,
+            SupportedProtocolVersions::default().preferred()
+        );
         assert_eq!(result.server_info.name, "ruskel_server");
 
         // Clean up

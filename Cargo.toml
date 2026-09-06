@@ -84,6 +84,7 @@ which = "8.0"
 schema-version = 1
 requires-nanocode = ">=0.1, <0.2"
 features = "all"
+cargo-release = "ruskel"
 tidy-hooks = [["cargo", "xtask", "gen-std-mapping", "--check"]]
 
 [profile.dev]
