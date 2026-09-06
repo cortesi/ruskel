@@ -180,6 +180,8 @@ pub fn build_render_selection(
                     SearchItemKind::Crate
                         | SearchItemKind::Module
                         | SearchItemKind::Struct
+                        | SearchItemKind::Enum
+                        | SearchItemKind::Union
                         | SearchItemKind::Trait
                 )
             })

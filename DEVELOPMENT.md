@@ -15,7 +15,17 @@ rustup component add --toolchain nightly rust-docs-json
 
 ## Development Tasks
 
-Ruskel uses the `xtask` pattern for development tasks. All tasks are run through `cargo xtask`.
+Use Ncode for the standard development loop:
+
+```sh
+ncode check
+ncode test
+ncode tidy
+ncode tidy --check
+```
+
+Use `cargo xtask` for project-specific maintenance tasks, such as standard
+library mapping generation. The configured tidy hook runs the mapping check.
 
 ### Regenerating Standard Library Module Mappings
 
@@ -29,21 +39,28 @@ The standard library module mapping determines which modules come from `core`,
 To regenerate the mapping:
 
 ```sh
-# Preview the changes (outputs to stdout)
+# Print the generated mapping to stdout
 cargo xtask gen-std-mapping
 
-# Write the changes to the source file
+# Write the generated mapping to the source file
 cargo xtask gen-std-mapping --write
+
+# Check that the checked-in mapping matches generated output
+cargo xtask gen-std-mapping --check
 ```
 
 This will:
-1. Analyze the installed rust-docs-json to discover module locations
-2. Generate the `STD_MODULE_MAPPING` static in `crates/libruskel/src/cargoutils.rs`
-3. Update the source file with the new mapping
 
-After regenerating, run the tests to ensure everything still works:
+1. Analyze the installed rust-docs-json to discover module locations
+2. Generate the `STD_MODULE_MAPPING` static in `crates/libruskel/src/stdlib_mapping.rs`
+3. Update the source file with the new mapping when `--write` is selected
+
+The generated mapping is consumed by `crates/libruskel/src/stdlib.rs`. Run the
+standard checks after regenerating:
+
 ```sh
-cargo test
+ncode check
+ncode test
 ```
 
 ## Architecture Notes
@@ -53,10 +70,9 @@ cargo test
 Ruskel supports accessing Rust standard library documentation through the
 `rust-docs-json` component. The key components are:
 
-- **Module Mapping**: The `STD_MODULE_MAPPING` in `cargoutils.rs` maps module
+- **Module Mapping**: The `STD_MODULE_MAPPING` in `stdlib_mapping.rs` maps module
   names to their actual crate locations (core/alloc/std)
 - **Re-export Handling**: When users request `std::vec`, ruskel knows to load
   it from `alloc` while still displaying it as `std::vec`
 - **Bare Module Protection**: Common module names like `vec` or `rc` are
   rejected with helpful error messages
-

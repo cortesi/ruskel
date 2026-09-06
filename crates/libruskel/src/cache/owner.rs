@@ -2,7 +2,7 @@
 
 use std::{
     collections::{BTreeMap, HashMap},
-    env, fs,
+    env,
     fs::File,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, OnceLock, Weak},
@@ -114,13 +114,10 @@ impl CacheOwner {
         let workspace_lock = self.layout.workspace_lock(&workspace_identity);
         let workspace_lease = self.layout.lock_exclusive(&workspace_lock)?;
 
+        let workspace_dir = self
+            .layout
+            .ensure_build_workspace(toolchain_identity, &workspace_identity)?;
         let toolchain_dir = self.layout.build_dir().join(toolchain_identity);
-        let workspace_dir = toolchain_dir.join(&workspace_identity);
-        fs::create_dir_all(&workspace_dir).map_err(|source| RuskelError::CacheIo {
-            action: "create workspace cache entry",
-            path: workspace_dir.clone(),
-            source,
-        })?;
         update_workspace_metadata(
             &workspace_dir,
             workspace_root,
@@ -275,14 +272,12 @@ impl CacheOwner {
         let _workspace = self
             .layout
             .lock_exclusive(&self.layout.workspace_lock(&workspace_identity))?;
-        let path = self
+        let Some(path) = self
             .layout
-            .build_dir()
-            .join(toolchain_identity)
-            .join(&workspace_identity);
-        if !path.exists() {
+            .existing_build_workspace(toolchain_identity, &workspace_identity)?
+        else {
             return Ok(None);
-        }
+        };
         let label = format!("{toolchain_identity}.{workspace_identity}");
         layout::move_to_trash(self.layout.root(), &path, &label).map(Some)
     }
@@ -400,6 +395,7 @@ impl BuildLease {
 
     /// Update the entry timestamps after a successful JSON read.
     pub fn touch_success(&self) -> Result<()> {
+        self.owner.layout.validate_owned_path(&self.workspace_dir)?;
         let now = unix_now()?;
         let toolchain_dir = self.owner.layout.build_dir().join(&self.toolchain_identity);
         layout::write_timestamp(&toolchain_dir.join(LAST_USE), now)?;
@@ -408,6 +404,7 @@ impl BuildLease {
 
     /// Move the workspace entry to owned trash while its leases are held.
     pub fn move_to_trash(&self) -> Result<PathBuf> {
+        self.owner.layout.validate_owned_path(&self.workspace_dir)?;
         let label = format!("{}.{}", self.toolchain_identity, self.workspace_identity);
         layout::move_to_trash(self.owner.layout.root(), &self.workspace_dir, &label)
     }
@@ -580,6 +577,8 @@ fn hash_path_bytes(hasher: &mut Sha256, path: &Path) {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use std::{
         env, fs,
         io::{self, BufRead, BufReader, Read, Write},
@@ -604,6 +603,94 @@ mod tests {
         let second = CacheHandle::new(Some(temp.path().join("cache"))).owner()?;
         assert!(Arc::ptr_eq(&first, &second));
         assert!(first.layout.root().is_absolute());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn build_and_quarantine_reject_symlinked_owned_components() -> Result<()> {
+        let temp = tempdir()?;
+        let cache_root = temp.path().join("cache");
+        let owner = owner(&cache_root)?;
+        let toolchain = "a".repeat(64);
+        let workspace = fs::canonicalize(temp.path())?;
+        let workspace_identity = identity_for_path(&workspace);
+        let outside = temp.path().join("outside");
+        fs::create_dir(&outside)?;
+        let sentinel = outside.join("sentinel");
+        fs::write(&sentinel, b"keep")?;
+
+        let toolchain_path = owner.layout.build_dir().join(&toolchain);
+        symlink(&outside, &toolchain_path)?;
+        assert!(
+            owner
+                .begin_build(&toolchain, &workspace, "symlinked-toolchain", "0.1.0")
+                .is_err()
+        );
+        assert!(owner.quarantine_workspace(&toolchain, &workspace).is_err());
+        assert_eq!(fs::read(&sentinel)?, b"keep");
+        assert!(!outside.join(&workspace_identity).exists());
+
+        fs::remove_file(&toolchain_path)?;
+        fs::create_dir(&toolchain_path)?;
+        symlink(&outside, toolchain_path.join(&workspace_identity))?;
+        assert!(
+            owner
+                .begin_build(&toolchain, &workspace, "symlinked-workspace", "0.1.0")
+                .is_err()
+        );
+        assert!(owner.quarantine_workspace(&toolchain, &workspace).is_err());
+        assert_eq!(fs::read(&sentinel)?, b"keep");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn anchored_layout_survives_ancestor_alias_repoint() -> Result<()> {
+        let temp = tempdir()?;
+        let physical_parent = temp.path().join("physical");
+        let alternate_parent = temp.path().join("alternate");
+        fs::create_dir(&physical_parent)?;
+        fs::create_dir(&alternate_parent)?;
+        let alternate_root = alternate_parent.join("cache");
+        CacheLayout::initialize(alternate_root.clone())?;
+
+        let alias_parent = temp.path().join("alias");
+        symlink(&physical_parent, &alias_parent)?;
+        let logical_root = alias_parent.join("cache");
+        let owner = owner(&logical_root)?;
+        let physical_root = fs::canonicalize(&logical_root)?;
+
+        fs::remove_file(&alias_parent)?;
+        symlink(&alternate_parent, &alias_parent)?;
+
+        let toolchain = "a".repeat(64);
+        let workspace = fs::canonicalize(temp.path())?;
+        let workspace_identity = identity_for_path(&workspace);
+        let lease = owner.begin_build(&toolchain, &workspace, "anchored", "0.1.0")?;
+        let build_dir = lease.build_dir().to_path_buf();
+        drop(lease);
+
+        let physical_workspace = physical_root
+            .join("build")
+            .join(&toolchain)
+            .join(&workspace_identity);
+        let physical_lock = physical_root
+            .join("locks/workspace")
+            .join(format!("{workspace_identity}.lock"));
+        let alternate_workspace = alternate_root
+            .join("build")
+            .join(&toolchain)
+            .join(&workspace_identity);
+        let alternate_lock = alternate_root
+            .join("locks/workspace")
+            .join(format!("{workspace_identity}.lock"));
+        assert_eq!(owner.layout.root(), physical_root);
+        assert!(build_dir.starts_with(&physical_root));
+        assert!(physical_workspace.is_dir());
+        assert!(physical_lock.is_file());
+        assert!(!alternate_workspace.exists());
+        assert!(!alternate_lock.exists());
         Ok(())
     }
 

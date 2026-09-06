@@ -14,7 +14,7 @@ use rustdoc_types::Crate;
 
 use super::{
     stdlib,
-    target_resolution::{ResolvedSource, ResolvedTarget, create_quiet_cargo_config},
+    target_resolution::{ResolvedSource, ResolvedTarget, RootTarget, create_quiet_cargo_config},
 };
 use crate::{
     cache::{BuildLease, CacheHandle},
@@ -38,6 +38,7 @@ pub fn build(resolved: &ResolvedTarget, options: &CrateReadOptions) -> Result<Cr
         manifest_path,
         options.offline,
         options.bin_override.as_deref(),
+        resolved.root_target.as_ref(),
     )?;
     let include_private = options.private_items
         || selection
@@ -162,6 +163,7 @@ fn select_package_target(
     manifest_path: &Path,
     offline: bool,
     bin_override: Option<&str>,
+    root_target: Option<&RootTarget>,
 ) -> Result<PackageTargetSelection> {
     let config = create_quiet_cargo_config(offline)?;
     let workspace =
@@ -186,7 +188,29 @@ fn select_package_target(
         .collect();
     let bin_names: Vec<&str> = bin_targets.iter().map(|target| target.name()).collect();
 
-    if let Some(bin_name) = bin_override {
+    let effective_bin_override = match root_target {
+        Some(RootTarget::Library) => {
+            if let Some(bin_name) = bin_override {
+                return Err(RuskelError::InvalidTarget(format!(
+                    "Source file identifies the library target, but --bin '{bin_name}' selects a binary target"
+                )));
+            }
+            None
+        }
+        Some(RootTarget::Binary(inferred_name)) => {
+            if let Some(bin_name) = bin_override
+                && bin_name != inferred_name
+            {
+                return Err(RuskelError::InvalidTarget(format!(
+                    "Source file identifies binary target '{inferred_name}', but --bin '{bin_name}' selects a different binary target"
+                )));
+            }
+            Some(bin_override.unwrap_or(inferred_name))
+        }
+        None => bin_override,
+    };
+
+    if let Some(bin_name) = effective_bin_override {
         if bin_names.contains(&bin_name) {
             return Ok(PackageTargetSelection {
                 package_target: PackageTarget::Bin(bin_name.to_string()),
@@ -965,12 +989,12 @@ path = "src/second.rs"
         )?;
         let manifest = package.path().join("Cargo.toml");
 
-        let library = select_package_target(&manifest, true, None)?;
+        let library = select_package_target(&manifest, true, None, None)?;
         assert!(matches!(library.package_target, PackageTarget::Lib));
         assert_eq!(library.target_name, "selection_fixture");
         assert!(library.bin_target.is_none());
 
-        let binary = select_package_target(&manifest, true, Some("second"))?;
+        let binary = select_package_target(&manifest, true, Some("second"), None)?;
         assert!(matches!(
             binary.package_target,
             PackageTarget::Bin(ref name) if name == "second"
@@ -980,7 +1004,7 @@ path = "src/second.rs"
         assert_eq!(metadata.name, "second");
         assert!(!metadata.is_bin_only);
 
-        let error = select_package_target(&manifest, true, Some("missing"))
+        let error = select_package_target(&manifest, true, Some("missing"), None)
             .expect_err("unknown binary should fail");
         assert!(
             error
@@ -999,12 +1023,90 @@ version = "0.1.0"
 edition = "2024"
 "#,
         )?;
-        let selected = select_package_target(&bin_only.path().join("Cargo.toml"), true, None)?;
+        let selected =
+            select_package_target(&bin_only.path().join("Cargo.toml"), true, None, None)?;
         assert!(matches!(
             selected.package_target,
             PackageTarget::Bin(ref name) if name == "bin-only"
         ));
         assert!(selected.bin_target.expect("binary metadata").is_bin_only);
+
+        Ok(())
+    }
+
+    #[test]
+    fn package_target_selection_honors_inferred_source_root() -> Result<()> {
+        let package = tempdir()?;
+        fs::create_dir_all(package.path().join("src"))?;
+        fs::write(package.path().join("src/lib.rs"), "pub struct Library;\n")?;
+        fs::write(package.path().join("src/first.rs"), "fn main() {}\n")?;
+        fs::write(package.path().join("src/second.rs"), "fn main() {}\n")?;
+        fs::write(
+            package.path().join("Cargo.toml"),
+            r#"[package]
+name = "inferred-selection"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "first"
+path = "src/first.rs"
+
+[[bin]]
+name = "second"
+path = "src/second.rs"
+"#,
+        )?;
+        let manifest = package.path().join("Cargo.toml");
+
+        let inferred_library =
+            select_package_target(&manifest, true, None, Some(&RootTarget::Library))?;
+        assert!(matches!(
+            inferred_library.package_target,
+            PackageTarget::Lib
+        ));
+
+        let inferred_binary = select_package_target(
+            &manifest,
+            true,
+            None,
+            Some(&RootTarget::Binary("first".to_string())),
+        )?;
+        assert!(matches!(
+            inferred_binary.package_target,
+            PackageTarget::Bin(ref name) if name == "first"
+        ));
+
+        let matching_override = select_package_target(
+            &manifest,
+            true,
+            Some("first"),
+            Some(&RootTarget::Binary("first".to_string())),
+        )?;
+        assert!(matches!(
+            matching_override.package_target,
+            PackageTarget::Bin(ref name) if name == "first"
+        ));
+
+        let conflicting_binary = select_package_target(
+            &manifest,
+            true,
+            Some("second"),
+            Some(&RootTarget::Binary("first".to_string())),
+        )
+        .expect_err("different --bin selector should conflict with source root");
+        assert!(matches!(conflicting_binary, RuskelError::InvalidTarget(_)));
+        assert!(
+            conflicting_binary
+                .to_string()
+                .contains("different binary target")
+        );
+
+        let conflicting_library =
+            select_package_target(&manifest, true, Some("first"), Some(&RootTarget::Library))
+                .expect_err("--bin selector should conflict with a library root");
+        assert!(matches!(conflicting_library, RuskelError::InvalidTarget(_)));
+        assert!(conflicting_library.to_string().contains("library target"));
 
         Ok(())
     }

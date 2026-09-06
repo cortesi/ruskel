@@ -6,10 +6,10 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
+    process::Command,
 };
 
 use clap::{Parser, Subcommand};
-use libruskel::toolchain::nightly_sysroot;
 use rustdoc_types::{Crate, ItemEnum, Visibility};
 use tempfile::NamedTempFile;
 
@@ -130,6 +130,21 @@ fn main() -> Result<(), Box<dyn Error>> {
             generate_std_mapping(mode)
         }
     }
+}
+
+/// Locate the nightly toolchain sysroot path.
+fn nightly_sysroot() -> Result<PathBuf, Box<dyn Error>> {
+    let output = Command::new("rustc")
+        .args(["+nightly", "--print", "sysroot"])
+        .output()
+        .map_err(|error| format!("Failed to get sysroot: {error}"))?;
+    if !output.status.success() {
+        return Err("ruskel requires the nightly toolchain to be installed - run 'rustup toolchain install nightly'".into());
+    }
+
+    let sysroot = String::from_utf8(output.stdout)
+        .map_err(|error| format!("Invalid UTF-8 in sysroot path: {error}"))?;
+    Ok(PathBuf::from(sysroot.trim()))
 }
 
 /// Load rustdoc JSON metadata for one standard-library crate.

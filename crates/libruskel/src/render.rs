@@ -239,7 +239,11 @@ fn impl_type_key(ty: &Type) -> String {
                 .map(impl_type_key)
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("({inner})")
+            if types.len() == 1 {
+                format!("({inner},)")
+            } else {
+                format!("({inner})")
+            }
         }
         Type::Slice(ty) => format!("[{}]", impl_type_key(ty)),
         Type::Array { type_, len } => {
@@ -437,18 +441,31 @@ fn impl_poly_trait_key(poly_trait: &PolyTrait) -> String {
 
 /// Render a normalized function pointer key.
 fn impl_function_pointer_key(f: &FunctionPointer) -> String {
+    let generics = render_generic_params(&f.generic_params);
+    let qualifiers = render_function_qualifiers(&f.header);
     let args = impl_function_args_key(&f.sig);
     let return_type = impl_return_type_key(&f.sig);
-    if return_type.is_empty() {
-        format!("fn({args})")
+    let prefix = if generics.is_empty() {
+        String::new()
     } else {
-        format!("fn({args}) {return_type}")
+        format!("for{generics} ")
+    };
+    let prefix = if qualifiers.is_empty() {
+        prefix
+    } else {
+        format!("{prefix}{qualifiers} ")
+    };
+    if return_type.is_empty() {
+        format!("{prefix}fn({args})")
+    } else {
+        format!("{prefix}fn({args}) {return_type}")
     }
 }
 
 /// Render a normalized function argument list for a function pointer signature.
 fn impl_function_args_key(decl: &FunctionSignature) -> String {
-    decl.inputs
+    let mut args = decl
+        .inputs
         .iter()
         .map(|(name, ty)| {
             if name == "self" {
@@ -481,7 +498,14 @@ fn impl_function_args_key(decl: &FunctionSignature) -> String {
             }
         })
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(", ");
+    if decl.is_c_variadic {
+        if !args.is_empty() {
+            args.push_str(", ");
+        }
+        args.push_str("...");
+    }
+    args
 }
 
 /// Render a normalized return type for a function pointer signature.
@@ -1196,7 +1220,7 @@ impl RenderState<'_, '_> {
                     || self.selection_context_contains(item_id))
                     && (is_trait_impl || self.is_visible(item))
                 {
-                    let rendered = self.render_impl_item(item, expand_children)?;
+                    let rendered = self.render_impl_item(item, expand_children, is_trait_impl)?;
                     if !rendered.is_empty() {
                         body_fragments.push(rendered);
                     }
@@ -1222,7 +1246,12 @@ impl RenderState<'_, '_> {
     }
 
     /// Render the item inside an impl block.
-    fn render_impl_item(&self, item: &Item, include_all: bool) -> Result<String> {
+    fn render_impl_item(
+        &self,
+        item: &Item,
+        include_all: bool,
+        is_trait_impl: bool,
+    ) -> Result<String> {
         if !include_all && !self.selection_context_contains(&item.id) {
             return Ok(String::new());
         }
@@ -1230,9 +1259,10 @@ impl RenderState<'_, '_> {
         let rendered = match &item.inner {
             ItemEnum::Function(_) => self.render_function(item, false)?,
             ItemEnum::Constant { .. } => self.render_constant(item)?,
+            ItemEnum::AssocConst { .. } => self.render_associated_const(item, is_trait_impl)?,
             ItemEnum::AssocType { .. } => {
                 format!(
-                    "{}{}",
+                    "{}{};\n",
                     self.item_prefix(item)?,
                     render_associated_type(item)
                 )
@@ -1242,6 +1272,33 @@ impl RenderState<'_, '_> {
         };
 
         Ok(rendered)
+    }
+
+    /// Render an associated constant in a trait or impl block.
+    fn render_associated_const(&self, item: &Item, is_trait_item: bool) -> Result<String> {
+        let ItemEnum::AssocConst { type_, value, .. } = &item.inner else {
+            return Err(RuskelError::Generate(format!(
+                "expected associated constant, found {:?}",
+                item.inner
+            )));
+        };
+        let visibility = if is_trait_item {
+            String::new()
+        } else {
+            render_vis(item)
+        };
+        let value = value
+            .as_deref()
+            .map(|value| format!(" = {}", render_expression(value)))
+            .unwrap_or_default();
+        Ok(format!(
+            "{}{}const {}: {}{};\n",
+            self.item_prefix(item)?,
+            visibility,
+            render_name(item),
+            render_type(type_),
+            value
+        ))
     }
 
     /// Render a union declaration and its ordered fields.
@@ -1457,44 +1514,12 @@ impl RenderState<'_, '_> {
         }
         let rendered = match &item.inner {
             ItemEnum::Function(_) => self.render_function(item, true)?,
-            ItemEnum::AssocConst { type_, value, .. } => {
-                let default_str = value
-                    .as_ref()
-                    .map(|d| format!(" = {}", render_expression(d)))
-                    .unwrap_or_default();
-                format!(
-                    "{}const {}: {}{};\n",
-                    self.item_prefix(item)?,
-                    render_name(item),
-                    render_type(type_),
-                    default_str
-                )
-            }
-            ItemEnum::AssocType {
-                bounds,
-                generics,
-                type_,
-                ..
-            } => {
-                let bounds_str = if !bounds.is_empty() {
-                    format!(": {}", render_generic_bounds(bounds))
-                } else {
-                    String::new()
-                };
-                let generics_str = render_generics(generics);
-                let default_str = type_
-                    .as_ref()
-                    .map(|d| format!(" = {}", render_type(d)))
-                    .unwrap_or_default();
-                format!(
-                    "{}type {}{}{}{};\n",
-                    self.item_prefix(item)?,
-                    render_name(item),
-                    generics_str,
-                    bounds_str,
-                    default_str
-                )
-            }
+            ItemEnum::AssocConst { .. } => self.render_associated_const(item, true)?,
+            ItemEnum::AssocType { .. } => format!(
+                "{}{};\n",
+                self.item_prefix(item)?,
+                render_associated_type(item)
+            ),
             _ => String::new(),
         };
 
@@ -1821,9 +1846,9 @@ mod tests {
     use std::{collections::HashMap, fs, process::Command, slice};
 
     use rustdoc_types::{
-        Abi, Crate, Function, FunctionHeader, FunctionSignature, Generics, Id, Impl, Item,
-        ItemEnum, Module, Path, Struct, StructKind, Target, Trait, Type, Variant, VariantKind,
-        Visibility,
+        Abi, Crate, Function, FunctionHeader, FunctionPointer, FunctionSignature, Generics, Id,
+        Impl, Item, ItemEnum, Module, Path, Struct, StructKind, Target, Trait, Type, Variant,
+        VariantKind, Visibility,
     };
     use tempfile::tempdir;
 
@@ -2893,5 +2918,50 @@ path = "src/lib.rs"
         assert!(output.contains("//   - fixture::Widget [name]"));
 
         Ok(())
+    }
+
+    #[test]
+    fn impl_function_pointer_keys_include_header_and_variadic_details() {
+        let base = FunctionPointer {
+            sig: FunctionSignature {
+                inputs: vec![("value".into(), Type::Primitive("i32".into()))],
+                output: Some(Type::Primitive("i32".into())),
+                is_c_variadic: false,
+            },
+            generic_params: Vec::new(),
+            header: default_header(),
+        };
+        let mut unsafe_ = base.clone();
+        unsafe_.header.is_unsafe = true;
+        let mut c = base.clone();
+        c.header.abi = Abi::C { unwind: false };
+        let mut c_unwind = base.clone();
+        c_unwind.header.abi = Abi::C { unwind: true };
+        let mut variadic = base.clone();
+        variadic.sig.is_c_variadic = true;
+
+        let keys = [
+            impl_function_pointer_key(&base),
+            impl_function_pointer_key(&unsafe_),
+            impl_function_pointer_key(&c),
+            impl_function_pointer_key(&c_unwind),
+            impl_function_pointer_key(&variadic),
+        ];
+        for (index, key) in keys.iter().enumerate() {
+            for other in keys.iter().skip(index + 1) {
+                assert_ne!(key, other);
+            }
+        }
+        assert_eq!(keys[0], "fn(value: i32) -> i32");
+        assert_eq!(keys[1], "unsafe fn(value: i32) -> i32");
+        assert_eq!(keys[2], "extern \"C\" fn(value: i32) -> i32");
+        assert_eq!(keys[3], "extern \"C-unwind\" fn(value: i32) -> i32");
+        assert_eq!(keys[4], "fn(value: i32, ...) -> i32");
+        assert_eq!(
+            impl_type_key(&Type::Tuple(vec![Type::Primitive("u32".into())])),
+            "(u32,)"
+        );
+        let nested = Type::Tuple(vec![Type::Tuple(vec![Type::Primitive("u32".into())])]);
+        assert_eq!(impl_type_key(&nested), "((u32,),)");
     }
 }

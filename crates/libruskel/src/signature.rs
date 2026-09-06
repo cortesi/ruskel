@@ -4,8 +4,9 @@ use rustdoc_types::{Crate, Item, ItemEnum, MacroKind, Variant, VariantKind};
 
 use crate::{
     crateutils::{
-        render_function_args, render_generic_bounds, render_generics, render_identifier,
-        render_name, render_return_type, render_type, render_vis, render_where_clause,
+        render_associated_type, render_function_args, render_function_qualifiers,
+        render_generic_bounds, render_generics, render_identifier, render_name, render_return_type,
+        render_type, render_vis, render_where_clause,
     },
     search::SearchItemKind,
 };
@@ -122,18 +123,8 @@ pub fn item_signature(crate_data: &Crate, item: &Item, kind: SearchItemKind) -> 
             render_name(item),
             render_type(type_)
         )),
-        (ItemEnum::AssocType { bounds, type_, .. }, SearchItemKind::AssocType) => {
-            if let Some(ty) = type_ {
-                Some(format!("type {} = {}", render_name(item), render_type(ty)))
-            } else if !bounds.is_empty() {
-                Some(format!(
-                    "type {}: {}",
-                    render_name(item),
-                    render_generic_bounds(bounds)
-                ))
-            } else {
-                Some(format!("type {}", render_name(item)))
-            }
+        (ItemEnum::AssocType { .. }, SearchItemKind::AssocType) => {
+            Some(render_associated_type(item))
         }
         (ItemEnum::Macro(_), SearchItemKind::Macro) => Some(format!("macro {}", render_name(item))),
         (ItemEnum::ProcMacro(proc_macro), SearchItemKind::ProcMacro) => {
@@ -183,18 +174,9 @@ fn function_signature(item: &Item, function: &rustdoc_types::Function) -> String
         parts.push(vis.trim().to_string());
     }
 
-    let mut qualifiers = Vec::new();
-    if function.header.is_const {
-        qualifiers.push("const");
-    }
-    if function.header.is_async {
-        qualifiers.push("async");
-    }
-    if function.header.is_unsafe {
-        qualifiers.push("unsafe");
-    }
+    let qualifiers = render_function_qualifiers(&function.header);
     if !qualifiers.is_empty() {
-        parts.push(qualifiers.join(" "));
+        parts.push(qualifiers);
     }
     parts.push("fn".to_string());
 

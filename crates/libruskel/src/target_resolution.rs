@@ -282,11 +282,33 @@ pub struct ResolvedTarget {
     /// "module::submodule::item". Empty string for package root. This might not
     /// necessarily match the user's input.
     pub(super) filter: String,
+
+    /// Cargo crate root identified by a filesystem entrypoint, when the
+    /// entrypoint names a library or binary source file directly.
+    pub(super) root_target: Option<RootTarget>,
+}
+
+/// Cargo target selected by a source-file entrypoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RootTarget {
+    /// The package's library target.
+    Library,
+    /// A named binary target.
+    Binary(String),
 }
 
 impl ResolvedTarget {
     /// Build a `ResolvedTarget` with a normalised module filter path.
     fn new(source: ResolvedSource, components: &[String]) -> Self {
+        Self::with_root(source, components, None)
+    }
+
+    /// Build a resolved target with an optional Cargo crate-root selector.
+    fn with_root(
+        source: ResolvedSource,
+        components: &[String],
+        root_target: Option<RootTarget>,
+    ) -> Self {
         let filter = if components.is_empty() {
             String::new()
         } else {
@@ -295,7 +317,11 @@ impl ResolvedTarget {
             normalized_components.join("::")
         };
 
-        Self { source, filter }
+        Self {
+            source,
+            filter,
+            root_target,
+        }
     }
 
     /// Resolve a standard library crate name, optionally overriding the display
@@ -328,7 +354,7 @@ impl ResolvedTarget {
     /// Resolve a `Target` into a fully-qualified location and filter path.
     fn from_target(target: Target, offline: bool) -> Result<Self> {
         match target.entrypoint {
-            Entrypoint::Path(path) => Self::from_path_entry(path, &target.path),
+            Entrypoint::Path(path) => Self::from_path_entry(path, &target.path, offline),
             Entrypoint::Name { name, version } => {
                 Self::from_named_entry(&name, version, &target.path, offline)
             }
@@ -336,9 +362,9 @@ impl ResolvedTarget {
     }
 
     /// Resolve a filesystem entrypoint to a package or workspace member target.
-    fn from_path_entry(path: PathBuf, target_path: &[String]) -> Result<Self> {
+    fn from_path_entry(path: PathBuf, target_path: &[String], offline: bool) -> Result<Self> {
         if path.is_file() && path.extension().is_some_and(|ext| ext == "rs") {
-            return Self::from_rust_file(path, target_path);
+            return Self::from_rust_file(path, target_path, offline);
         }
 
         let canonical_path = fs::canonicalize(&path).map_err(|error| {
@@ -423,7 +449,11 @@ impl ResolvedTarget {
     }
 
     /// Resolve a module path starting from a specific Rust source file.
-    fn from_rust_file(file_path: PathBuf, additional_path: &[String]) -> Result<Self> {
+    fn from_rust_file(
+        file_path: PathBuf,
+        additional_path: &[String],
+        offline: bool,
+    ) -> Result<Self> {
         let file_path = fs::canonicalize(file_path)?;
         let mut current_dir = file_path
             .parent()
@@ -441,7 +471,20 @@ impl ResolvedTarget {
             RuskelError::InvalidTarget("Failed to determine relative path".to_string())
         })?;
 
-        // Convert the relative path to a module path
+        let context = ManifestContext::from_directory(&current_dir)?;
+        let root_target = identify_root_target(&context.manifest_path, &file_path, offline)?;
+
+        // A Cargo target source is a crate root. Only the requested suffix
+        // belongs in the renderer filter; the root itself does not.
+        if root_target.is_some() {
+            return Ok(Self::with_root(
+                ResolvedSource::package(&context.manifest_path)?,
+                additional_path,
+                root_target,
+            ));
+        }
+
+        // Convert the relative path to a module path.
         let mut components: Vec<_> = relative_path
             .components()
             .filter_map(|c| {
@@ -465,10 +508,19 @@ impl ResolvedTarget {
             components.push(stem.to_string());
         }
 
+        // In the conventional nested-module layout, `foo/mod.rs` defines
+        // `foo`, rather than a nested module named `mod`.
+        if components.len() > 1
+            && components
+                .last()
+                .is_some_and(|component| component == "mod")
+        {
+            components.pop();
+        }
+
         // Combine the module path with the additional path
         components.extend_from_slice(additional_path);
 
-        let context = ManifestContext::from_directory(&current_dir)?;
         Ok(Self::new(
             ResolvedSource::package(&context.manifest_path)?,
             &components,
@@ -512,6 +564,67 @@ impl ResolvedTarget {
                     Err(err)
                 }
             }
+        }
+    }
+}
+
+/// Match a canonical source file against the package's library and binary
+/// target roots.
+fn identify_root_target(
+    manifest_path: &Path,
+    file_path: &Path,
+    offline: bool,
+) -> Result<Option<RootTarget>> {
+    let config = create_quiet_cargo_config(offline)?;
+    let workspace =
+        Workspace::new(manifest_path, &config).map_err(|error| convert_cargo_error(&error))?;
+    let package = workspace
+        .current()
+        .map_err(|error| convert_cargo_error(&error))?;
+    let mut matches = Vec::new();
+
+    for target in package.targets() {
+        let root_target = if target.is_lib() {
+            Some(RootTarget::Library)
+        } else if target.is_bin() {
+            Some(RootTarget::Binary(target.name().to_string()))
+        } else {
+            None
+        };
+        let Some(root_target) = root_target else {
+            continue;
+        };
+        let Some(source_path) = target.src_path().path() else {
+            continue;
+        };
+        // A manifest may name a source file that is not present yet. It
+        // cannot match this existing input, so retain lexical resolution for
+        // the input rather than turning the missing unrelated target into an
+        // error.
+        let Ok(source_path) = fs::canonicalize(source_path) else {
+            continue;
+        };
+        if source_path == file_path {
+            matches.push(root_target);
+        }
+    }
+
+    match matches.as_slice() {
+        [] => Ok(None),
+        [root_target] => Ok(Some(root_target.clone())),
+        _ => {
+            let choices = matches
+                .iter()
+                .map(|root_target| match root_target {
+                    RootTarget::Library => "library".to_string(),
+                    RootTarget::Binary(name) => format!("binary '{name}'"),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(RuskelError::InvalidTarget(format!(
+                "Rust source file '{}' matches multiple Cargo crate roots: {choices}. Use a package path with an explicit --bin selector.",
+                file_path.display()
+            )))
         }
     }
 }
@@ -1131,7 +1244,7 @@ shared = { package = "shared-package", version = "=2.0.0" }
         let _guard = DirGuard::change_to(&workspace_root)?;
         let resolved = resolve_target("localcrate", true)?;
 
-        let ResolvedTarget { source, filter } = resolved;
+        let ResolvedTarget { source, filter, .. } = resolved;
         let expected = fs::canonicalize(&localcrate_dir)?;
 
         assert_eq!(package_directory(&source), expected);
@@ -1545,5 +1658,169 @@ shared = { package = "shared-package", version = "=2.0.0" }
                 }
             }
         }
+    }
+
+    #[test]
+    fn source_file_roots_use_cargo_target_metadata() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let package = temp_dir.path().join("package");
+        fs::create_dir_all(package.join("src/bin"))?;
+        fs::write(
+            package.join("Cargo.toml"),
+            r#"[package]
+name = "root-package"
+version = "0.1.0"
+edition = "2024"
+"#,
+        )?;
+        fs::write(package.join("src/lib.rs"), "pub struct LibraryItem;\n")?;
+        fs::write(package.join("src/main.rs"), "fn main() {}\n")?;
+        fs::write(package.join("src/bin/tool.rs"), "fn main() {}\n")?;
+
+        let cases = [
+            (
+                package.join("src/lib.rs"),
+                RootTarget::Library,
+                "LibraryItem",
+            ),
+            (
+                package.join("src/main.rs"),
+                RootTarget::Binary("root-package".to_string()),
+                "MainItem",
+            ),
+            (
+                package.join("src/bin/tool.rs"),
+                RootTarget::Binary("tool".to_string()),
+                "ToolItem",
+            ),
+        ];
+        for (path, expected_root, suffix) in cases {
+            let resolved = ResolvedTarget::from_target(
+                Target {
+                    entrypoint: Entrypoint::Path(path),
+                    path: vec![suffix.to_string()],
+                },
+                true,
+            )?;
+            assert_eq!(resolved.filter, suffix);
+            assert_eq!(resolved.root_target, Some(expected_root));
+        }
+
+        let custom = temp_dir.path().join("custom");
+        fs::create_dir_all(custom.join("src"))?;
+        fs::write(
+            custom.join("Cargo.toml"),
+            r#"[package]
+name = "custom-package"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/custom_lib.rs"
+
+[[bin]]
+name = "custom-bin"
+path = "src/custom_bin.rs"
+"#,
+        )?;
+        fs::write(
+            custom.join("src/custom_lib.rs"),
+            "pub struct CustomLibrary;\n",
+        )?;
+        fs::write(custom.join("src/custom_bin.rs"), "fn main() {}\n")?;
+
+        let custom_cases = [
+            (
+                custom.join("src/custom_lib.rs"),
+                RootTarget::Library,
+                "CustomLibrary",
+            ),
+            (
+                custom.join("src/custom_bin.rs"),
+                RootTarget::Binary("custom-bin".to_string()),
+                "CustomItem",
+            ),
+        ];
+        for (path, expected_root, suffix) in custom_cases {
+            let resolved = ResolvedTarget::from_target(
+                Target {
+                    entrypoint: Entrypoint::Path(path),
+                    path: vec![suffix.to_string()],
+                },
+                true,
+            )?;
+            assert_eq!(resolved.filter, suffix);
+            assert_eq!(resolved.root_target, Some(expected_root));
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn nested_mod_file_uses_parent_module_path() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let package = temp_dir.path().join("package");
+        fs::create_dir_all(package.join("src/foo"))?;
+        write_package(&package, "nested-mod", "")?;
+        fs::write(package.join("src/foo/mod.rs"), "pub struct Nested;\n")?;
+        fs::write(package.join("src/mod.rs"), "pub struct Root;\n")?;
+
+        let nested = ResolvedTarget::from_target(
+            Target {
+                entrypoint: Entrypoint::Path(package.join("src/foo/mod.rs")),
+                path: vec!["Nested".to_string()],
+            },
+            true,
+        )?;
+        assert_eq!(nested.filter, "foo::Nested");
+        assert_eq!(nested.root_target, None);
+
+        let root_mod = ResolvedTarget::from_target(
+            Target {
+                entrypoint: Entrypoint::Path(package.join("src/mod.rs")),
+                path: Vec::new(),
+            },
+            true,
+        )?;
+        assert_eq!(root_mod.filter, "mod");
+        assert_eq!(root_mod.root_target, None);
+        Ok(())
+    }
+
+    #[test]
+    fn shared_cargo_root_is_rejected_with_target_choices() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let package = temp_dir.path().join("package");
+        fs::create_dir_all(package.join("src"))?;
+        fs::write(
+            package.join("Cargo.toml"),
+            r#"[package]
+name = "shared-root"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+path = "src/shared.rs"
+
+[[bin]]
+name = "shared-bin"
+path = "src/shared.rs"
+"#,
+        )?;
+        fs::write(package.join("src/shared.rs"), "pub fn shared() {}\n")?;
+
+        let error = ResolvedTarget::from_target(
+            Target {
+                entrypoint: Entrypoint::Path(package.join("src/shared.rs")),
+                path: Vec::new(),
+            },
+            true,
+        )
+        .expect_err("shared Cargo roots should be ambiguous");
+        let message = error.to_string();
+        assert!(matches!(error, RuskelError::InvalidTarget(_)));
+        assert!(message.contains("library"));
+        assert!(message.contains("binary 'shared-bin'"));
+        Ok(())
     }
 }

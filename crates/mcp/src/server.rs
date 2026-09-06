@@ -7,6 +7,10 @@ use tokio::signal::ctrl_c;
 use tracing::error;
 use tracing_subscriber::filter::LevelFilter;
 
+/// Message returned when a search field is present but contains only
+/// whitespace.
+const EMPTY_SEARCH_MESSAGE: &str = "Search query is empty; nothing to do.";
+
 /// Default request values applied by the MCP server when a tool call omits
 /// them.
 #[derive(Debug, Clone, Copy)]
@@ -37,11 +41,15 @@ pub struct RuskelSkeletonTool {
     #[serde(default)]
     pub private: Option<bool>,
 
-    /// Restrict output to matches for this query.
+    /// Restrict output to matches for this query. Omit or pass null for full
+    /// rendering; an empty or whitespace-only value returns the empty-search
+    /// message without resolving the target.
     #[serde(default)]
     pub search: Option<String>,
 
-    /// Render a binary target as a library, with private items included.
+    /// Select a binary target when rendering a package. Binary-only packages
+    /// include private items automatically; pass `private=true` for private
+    /// items in a mixed library and binary package.
     #[serde(default)]
     pub bin: Option<String>,
 
@@ -71,7 +79,8 @@ pub struct RuskelSkeletonTool {
     #[serde(default)]
     pub all_features: bool,
 
-    /// Exact list of Cargo features to enable (ignored if all_features=true).
+    /// Explicit Cargo features to enable. These are still forwarded when
+    /// `all_features=true`.
     #[serde(default)]
     pub features: Vec<String>,
 }
@@ -199,18 +208,18 @@ impl RuskelServer {
             }
         };
 
+        let search = params.search.as_deref().map(str::trim);
+        if search == Some("") {
+            return Ok(CallToolResult::new().with_text_content(EMPTY_SEARCH_MESSAGE));
+        }
+
         let ruskel = self
             .ruskel
             .clone()
             .with_frontmatter(params.frontmatter)
             .with_bin_target(params.bin.clone());
 
-        if let Some(query) = params
-            .search
-            .as_ref()
-            .map(|q| q.trim())
-            .filter(|q| !q.is_empty())
-        {
+        if let Some(query) = search {
             return Ok(self.run_search_mode(&ruskel, &params, query, search_domains));
         }
 

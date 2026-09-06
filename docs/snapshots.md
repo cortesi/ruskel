@@ -58,6 +58,23 @@ ruskel-snapshot --no-default-features --features libruskel/extra --output ./api 
 `--all-features` conflicts with `--no-default-features` and `--features`.
 `--no-default-features` can be used with `--features`.
 
+## Snapshot lock
+
+Ruskel keeps a persistent advisory lock beside each destination, named
+`.<destination-name>.ruskel-snapshot.lock`. For a root `api/` destination, the
+lock beside the directory is `.api.ruskel-snapshot.lock`; add the following
+path to `.gitignore` when the repository stores its snapshot at the repository
+root:
+
+```gitignore
+/.api.ruskel-snapshot.lock
+```
+
+The lock coordinates update and check commands that use the same physical
+destination. Check mode can create this coordination file even though it never
+changes the generated destination. The file remains in place after each run so
+later processes continue to use the same lock identity.
+
 ## Ownership and reports
 
 The marker owns only the crate files that it names. Update mode refuses a

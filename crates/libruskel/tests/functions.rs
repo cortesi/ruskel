@@ -59,6 +59,16 @@ gen_tests! {
             "#
         }
         idemp {
+            unsafe_c_function: r#"
+                pub unsafe extern "C" fn unsafe_c_function(value: i32) -> i32 {}
+            "#
+        }
+        idemp {
+            c_unwind_function: r#"
+                pub extern "C-unwind" fn c_unwind_function(value: i32) -> i32 {}
+            "#
+        }
+        idemp {
             complex: r#"
                 pub async unsafe fn complex_function<'a, T, U>(x: &'a T, y: U) -> Result<T, U>
                 where
@@ -72,6 +82,27 @@ gen_tests! {
             function_pointer: r#"
                 pub fn function_with_fn_pointer(f: fn(arg1: i32, arg2: String) -> bool) {
                 }
+            "#
+        }
+        idemp {
+            unsafe_c_function_pointer: r#"
+                pub fn function_with_unsafe_c_pointer(
+                    callback: unsafe extern "C" fn(value: i32) -> i32,
+                ) {
+                }
+            "#
+        }
+        idemp {
+            hrtb_function_pointer: r#"
+                pub fn function_with_hrtb_pointer(
+                    callback: for<'a> fn(value: &'a i32) -> &'a i32,
+                ) {
+                }
+            "#
+        }
+        idemp {
+            singleton_tuple_types: r#"
+                pub fn singleton_tuple(value: (u32,)) -> (u32,) {}
             "#
         }
         idemp {
@@ -213,4 +244,64 @@ gen_tests! {
         }
     }
 
+}
+
+#[cfg(test)]
+mod standalone {
+    use libruskel::{CrateRequest, SearchDomain, SearchOptions};
+
+    use super::*;
+
+    #[test]
+    fn search_signatures_preserve_abi_and_singleton_tuples() {
+        let source = r#"
+            pub unsafe extern "C" fn unsafe_c(value: i32) -> i32 { value }
+
+            pub fn call_c(callback: unsafe extern "C" fn(value: i32) -> i32) {}
+
+            pub fn singleton(value: (u32,)) -> (u32,) { value }
+        "#;
+        let (_workspace, target) = create_test_crate(source, false);
+        let (_cache, ruskel) = isolated_ruskel();
+        let request = CrateRequest {
+            private_items: true,
+            ..CrateRequest::default()
+        };
+
+        let options = SearchOptions::configured("unsafe_c", SearchDomain::NAMES, false, true);
+        let response = ruskel.search(&target, &request, &options).unwrap();
+        let unsafe_c = response
+            .results
+            .iter()
+            .find(|result| result.path_string.ends_with("::unsafe_c"))
+            .expect("unsafe C function search result");
+        assert_eq!(
+            unsafe_c.signature.as_deref(),
+            Some("pub unsafe extern \"C\" fn unsafe_c(value: i32)-> i32")
+        );
+
+        let options = SearchOptions::configured("call_c", SearchDomain::NAMES, false, true);
+        let response = ruskel.search(&target, &request, &options).unwrap();
+        let call_c = response
+            .results
+            .iter()
+            .find(|result| result.path_string.ends_with("::call_c"))
+            .expect("function-pointer search result");
+        assert_eq!(
+            call_c.signature.as_deref(),
+            Some("pub fn call_c(callback: unsafe extern \"C\" fn(value: i32) -> i32)")
+        );
+
+        let options = SearchOptions::configured("singleton", SearchDomain::NAMES, false, true);
+        let response = ruskel.search(&target, &request, &options).unwrap();
+        let singleton = response
+            .results
+            .iter()
+            .find(|result| result.path_string.ends_with("::singleton"))
+            .expect("singleton-tuple search result");
+        assert_eq!(
+            singleton.signature.as_deref(),
+            Some("pub fn singleton(value: (u32,))-> (u32,)")
+        );
+    }
 }

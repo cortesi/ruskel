@@ -57,6 +57,7 @@ fn capture_package(
             manifest_path: package.manifest_path.clone(),
         },
         filter: String::new(),
+        root_target: None,
     };
     let read = rustdoc_build::build(
         &resolved,

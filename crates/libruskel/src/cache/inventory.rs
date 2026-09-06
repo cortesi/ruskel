@@ -29,6 +29,8 @@ pub struct WorkspaceInventory {
     pub size_bytes: Option<u64>,
     /// Parsed last-use timestamp.
     pub last_use: Option<u64>,
+    /// Physical cache root used to validate the complete ancestry.
+    cache_root: PathBuf,
 }
 
 impl WorkspaceInventory {
@@ -37,7 +39,7 @@ impl WorkspaceInventory {
         self.path
             .file_name()
             .is_some_and(|name| name == self.identity.as_str())
-            && is_owned_directory(&self.path)
+            && layout::validate_owned_directory(&self.cache_root, &self.path).is_ok()
             && is_identity(&self.identity)
             && layout::read_timestamp(&self.path.join(LAST_USE))
                 .is_ok_and(|value| value == self.last_use)
@@ -58,6 +60,8 @@ pub struct ToolchainInventory {
     pub last_use: Option<u64>,
     /// Recognized workspaces in identity order.
     pub workspaces: Vec<WorkspaceInventory>,
+    /// Physical cache root used to validate the complete ancestry.
+    cache_root: PathBuf,
 }
 
 impl ToolchainInventory {
@@ -66,7 +70,7 @@ impl ToolchainInventory {
         self.path
             .file_name()
             .is_some_and(|name| name == self.identity.as_str())
-            && is_owned_directory(&self.path)
+            && layout::validate_owned_directory(&self.cache_root, &self.path).is_ok()
             && is_identity(&self.identity)
             && layout::read_timestamp(&self.path.join(LAST_USE))
                 .is_ok_and(|value| value == self.last_use)
@@ -82,6 +86,8 @@ pub struct TrashInventory {
     pub path: PathBuf,
     /// Recognized entry size.
     pub size_bytes: Option<u64>,
+    /// Physical cache root used to validate the complete ancestry.
+    cache_root: PathBuf,
 }
 
 impl TrashInventory {
@@ -90,7 +96,7 @@ impl TrashInventory {
         self.path
             .file_name()
             .is_some_and(|name| name == self.name.as_str())
-            && is_owned_directory(&self.path)
+            && layout::validate_owned_directory(&self.cache_root, &self.path).is_ok()
             && is_trash_name(&self.name)
             && layout::path_size(&self.path).ok() == self.size_bytes
     }
@@ -110,6 +116,7 @@ pub struct CacheInventory {
 impl CacheInventory {
     /// Traverse the recognized cache tree without following symbolic links.
     pub fn collect(layout: &CacheLayout) -> Result<Self> {
+        layout.validate_static_directories()?;
         let mut inventory = Self {
             toolchains: Vec::new(),
             trash: Vec::new(),
@@ -147,14 +154,19 @@ impl CacheInventory {
                     .push(CacheIssue::new(path, "unrecognized toolchain cache entry"));
                 continue;
             }
-            let toolchain = self.collect_toolchain(identity, path);
+            let toolchain = self.collect_toolchain(layout, identity, path);
             self.toolchains.push(toolchain);
         }
         Ok(())
     }
 
     /// Traverse one recognized toolchain.
-    fn collect_toolchain(&mut self, identity: String, path: PathBuf) -> ToolchainInventory {
+    fn collect_toolchain(
+        &mut self,
+        layout: &CacheLayout,
+        identity: String,
+        path: PathBuf,
+    ) -> ToolchainInventory {
         let last_use_path = path.join(LAST_USE);
         let last_use = read_timestamp(&last_use_path, &mut self.issues);
         let mut size_bytes = metadata_size(&last_use_path, &mut self.issues);
@@ -194,6 +206,7 @@ impl CacheInventory {
                         path: workspace_path,
                         size_bytes: workspace_size,
                         last_use: workspace_last_use,
+                        cache_root: layout.root().to_path_buf(),
                     });
                 }
             }
@@ -206,6 +219,7 @@ impl CacheInventory {
             size_bytes,
             last_use,
             workspaces,
+            cache_root: layout.root().to_path_buf(),
         }
     }
 
@@ -230,6 +244,7 @@ impl CacheInventory {
                 name,
                 path,
                 size_bytes,
+                cache_root: layout.root().to_path_buf(),
             });
         }
         Ok(())
@@ -296,6 +311,9 @@ fn is_owned_directory(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
+
     use tempfile::tempdir;
 
     use super::*;
@@ -367,6 +385,58 @@ mod tests {
                 .iter()
                 .any(|issue| issue.message().contains("trash"))
         );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn revalidation_rejects_a_replaced_owned_parent() -> Result<()> {
+        let temp = tempdir()?;
+        let layout = CacheLayout::initialize(temp.path().join("cache"))?;
+        let toolchain = "e".repeat(64);
+        let workspace = "f".repeat(64);
+        let toolchain_path = layout.build_dir().join(&toolchain);
+        let workspace_path = toolchain_path.join(&workspace);
+        fs::create_dir_all(&workspace_path)?;
+        layout::write_timestamp(&toolchain_path.join(LAST_USE), 10)?;
+        layout::write_timestamp(&workspace_path.join(LAST_USE), 10)?;
+        fs::write(workspace_path.join("artifact"), b"owned")?;
+        fs::write(toolchain_path.join("sentinel"), b"keep")?;
+
+        let inventory = CacheInventory::collect(&layout)?;
+        let toolchain_candidate = inventory.toolchains[0].clone();
+        let workspace_candidate = toolchain_candidate.workspaces[0].clone();
+        let saved = temp.path().join("toolchain-saved");
+        fs::rename(&toolchain_path, &saved)?;
+        symlink(&saved, &toolchain_path)?;
+
+        assert!(!toolchain_candidate.revalidate());
+        assert!(!workspace_candidate.revalidate());
+        assert_eq!(fs::read(saved.join("sentinel"))?, b"keep");
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn trash_revalidation_rejects_a_replaced_owned_parent() -> Result<()> {
+        let temp = tempdir()?;
+        let layout = CacheLayout::initialize(temp.path().join("cache"))?;
+        let name = format!("{}.{}.1.1", "a".repeat(64), "b".repeat(64));
+        let trash_entry = layout.trash_dir().join(&name);
+        fs::create_dir(&trash_entry)?;
+        fs::write(trash_entry.join("sentinel"), b"keep")?;
+
+        let inventory = CacheInventory::collect(&layout)?;
+        let candidate = inventory.trash[0].clone();
+        let outside = temp.path().join("trash-outside");
+        fs::create_dir(&outside)?;
+        let saved = outside.join(&name);
+        fs::rename(&trash_entry, &saved)?;
+        fs::remove_dir(layout.trash_dir())?;
+        symlink(&outside, layout.trash_dir())?;
+
+        assert!(!candidate.revalidate());
+        assert_eq!(fs::read(saved.join("sentinel"))?, b"keep");
         Ok(())
     }
 }

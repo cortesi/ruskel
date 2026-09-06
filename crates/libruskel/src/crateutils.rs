@@ -1,7 +1,8 @@
 use rustdoc_types::{
-    AssocItemConstraint, AssocItemConstraintKind, FunctionPointer, FunctionSignature, GenericArg,
-    GenericArgs, GenericBound, GenericParamDef, GenericParamDefKind, Generics, Item, ItemEnum,
-    Path, PolyTrait, Term, TraitBoundModifier, Type, Visibility, WherePredicate,
+    Abi, AssocItemConstraint, AssocItemConstraintKind, FunctionHeader, FunctionPointer,
+    FunctionSignature, GenericArg, GenericArgs, GenericBound, GenericParamDef, GenericParamDefKind,
+    Generics, Item, ItemEnum, Path, PolyTrait, Term, TraitBoundModifier, Type, Visibility,
+    WherePredicate,
 };
 
 use crate::keywords::is_reserved_word;
@@ -200,17 +201,70 @@ fn fix_missing_turbofish(expr: &str) -> String {
 
 /// Render the generic parameter list for an item.
 pub fn render_generics(generics: &Generics) -> String {
-    let params: Vec<String> = generics
-        .params
-        .iter()
-        .filter_map(render_generic_param_def)
-        .collect();
+    render_generic_params(&generics.params)
+}
+
+/// Render a generic parameter list.
+pub fn render_generic_params(params: &[GenericParamDef]) -> String {
+    let params: Vec<String> = params.iter().filter_map(render_generic_param_def).collect();
 
     if params.is_empty() {
         String::new()
     } else {
         format!("<{}>", params.join(", "))
     }
+}
+
+/// Render an ABI qualifier, omitting Rust's default ABI.
+pub fn render_abi(abi: &Abi) -> String {
+    match abi {
+        Abi::Rust => String::new(),
+        Abi::C { unwind } => format!("extern \"C{}\"", if *unwind { "-unwind" } else { "" }),
+        Abi::Cdecl { unwind } => {
+            format!("extern \"cdecl{}\"", if *unwind { "-unwind" } else { "" })
+        }
+        Abi::Stdcall { unwind } => {
+            format!("extern \"stdcall{}\"", if *unwind { "-unwind" } else { "" })
+        }
+        Abi::Fastcall { unwind } => {
+            format!(
+                "extern \"fastcall{}\"",
+                if *unwind { "-unwind" } else { "" }
+            )
+        }
+        Abi::Aapcs { unwind } => {
+            format!("extern \"aapcs{}\"", if *unwind { "-unwind" } else { "" })
+        }
+        Abi::Win64 { unwind } => {
+            format!("extern \"win64{}\"", if *unwind { "-unwind" } else { "" })
+        }
+        Abi::SysV64 { unwind } => {
+            format!("extern \"sysv64{}\"", if *unwind { "-unwind" } else { "" })
+        }
+        Abi::System { unwind } => {
+            format!("extern \"system{}\"", if *unwind { "-unwind" } else { "" })
+        }
+        Abi::Other(name) => format!("extern {name:?}"),
+    }
+}
+
+/// Render function qualifiers in Rust's source order.
+pub fn render_function_qualifiers(header: &FunctionHeader) -> String {
+    let mut qualifiers = Vec::new();
+    if header.is_const {
+        qualifiers.push("const".to_string());
+    }
+    if header.is_async {
+        qualifiers.push("async".to_string());
+    }
+    if header.is_unsafe {
+        qualifiers.push("unsafe".to_string());
+    }
+    let abi = render_abi(&header.abi);
+    if !abi.is_empty() {
+        qualifiers.push(abi);
+    }
+    qualifiers.join(" ")
 }
 
 /// Render an individual generic parameter definition.
@@ -341,7 +395,11 @@ pub fn render_type_inner(ty: &Type, nested: bool) -> String {
                 .map(|ty| render_type_inner(ty, true))
                 .collect::<Vec<_>>()
                 .join(", ");
-            format!("({inner})")
+            if types.len() == 1 {
+                format!("({inner},)")
+            } else {
+                format!("({inner})")
+            }
         }
         Type::Slice(ty) => format!("[{}]", render_type_inner(ty, true)),
         Type::Array { type_, len } => {
@@ -440,13 +498,33 @@ pub fn render_path(path: &Path) -> String {
 
 /// Render a function pointer signature.
 fn render_function_pointer(f: &FunctionPointer) -> String {
-    let args = render_function_args(&f.sig);
-    format!("fn({}) {}", args, render_return_type(&f.sig))
+    let mut signature = String::new();
+    let generics = render_generic_params(&f.generic_params);
+    if !generics.is_empty() {
+        signature.push_str("for");
+        signature.push_str(&generics);
+        signature.push(' ');
+    }
+    let qualifiers = render_function_qualifiers(&f.header);
+    if !qualifiers.is_empty() {
+        signature.push_str(&qualifiers);
+        signature.push(' ');
+    }
+    signature.push_str("fn(");
+    signature.push_str(&render_function_args(&f.sig));
+    signature.push(')');
+    let return_type = render_return_type(&f.sig);
+    if !return_type.is_empty() {
+        signature.push(' ');
+        signature.push_str(&return_type);
+    }
+    signature
 }
 
 /// Render a function's parameter list, including names and types.
 pub fn render_function_args(decl: &FunctionSignature) -> String {
-    decl.inputs
+    let mut args = decl
+        .inputs
         .iter()
         .map(|(name, ty)| {
             if name == "self" {
@@ -479,7 +557,14 @@ pub fn render_function_args(decl: &FunctionSignature) -> String {
             }
         })
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(", ");
+    if decl.is_c_variadic {
+        if !args.is_empty() {
+            args.push_str(", ");
+        }
+        args.push_str("...");
+    }
+    args
 }
 
 /// Render a function's return type, including the `->` separator when needed.
@@ -650,25 +735,41 @@ pub fn render_where_predicate(pred: &WherePredicate) -> Option<String> {
     }
 }
 
-/// Render an associated type definition, including defaults and bounds.
+/// Render an associated type signature, including generics, defaults, and
+/// bounds.
 pub fn render_associated_type(item: &Item) -> String {
-    let (bounds, default) = extract_item!(item, ItemEnum::AssocType { bounds, type_ });
+    let (generics, bounds, default) = extract_item!(
+        item,
+        ItemEnum::AssocType {
+            generics,
+            bounds,
+            type_
+        }
+    );
 
+    let mut signature = format!("type {}{}", render_name(item), render_generics(generics));
     let bounds_str = if !bounds.is_empty() {
         format!(": {}", render_generic_bounds(bounds))
     } else {
         String::new()
     };
-    let default_str = default
-        .as_ref()
-        .map(|d| format!(" = {}", render_type(d)))
-        .unwrap_or_default();
-    format!("type {}{bounds_str}{default_str};\n", render_name(item))
+    signature.push_str(&bounds_str);
+    if let Some(default) = default {
+        signature.push_str(" = ");
+        signature.push_str(&render_type(default));
+    }
+    signature.push_str(&render_where_clause(generics));
+    signature
 }
 
 #[cfg(test)]
 mod tests {
-    use rustdoc_types::{GenericBound, Id, Path, TraitBoundModifier};
+    use std::collections::HashMap;
+
+    use rustdoc_types::{
+        Abi, FunctionHeader, GenericBound, GenericParamDef, GenericParamDefKind, Generics, Id,
+        Item, ItemEnum, Path, TraitBoundModifier, Type, Visibility, WherePredicate,
+    };
 
     use super::*;
 
@@ -803,5 +904,202 @@ mod tests {
             render_expression("Date::<Utc>::MAX_UTC"),
             "Date::<Utc>::MAX_UTC"
         );
+    }
+
+    #[test]
+    fn render_abi_covers_known_and_custom_variants() {
+        assert_eq!(render_abi(&Abi::Rust), "");
+        assert_eq!(render_abi(&Abi::C { unwind: false }), "extern \"C\"");
+        assert_eq!(render_abi(&Abi::C { unwind: true }), "extern \"C-unwind\"");
+        assert_eq!(
+            render_abi(&Abi::Cdecl { unwind: false }),
+            "extern \"cdecl\""
+        );
+        assert_eq!(
+            render_abi(&Abi::Cdecl { unwind: true }),
+            "extern \"cdecl-unwind\""
+        );
+        assert_eq!(
+            render_abi(&Abi::Stdcall { unwind: false }),
+            "extern \"stdcall\""
+        );
+        assert_eq!(
+            render_abi(&Abi::Stdcall { unwind: true }),
+            "extern \"stdcall-unwind\""
+        );
+        assert_eq!(
+            render_abi(&Abi::Fastcall { unwind: false }),
+            "extern \"fastcall\""
+        );
+        assert_eq!(
+            render_abi(&Abi::Fastcall { unwind: true }),
+            "extern \"fastcall-unwind\""
+        );
+        assert_eq!(
+            render_abi(&Abi::Aapcs { unwind: false }),
+            "extern \"aapcs\""
+        );
+        assert_eq!(
+            render_abi(&Abi::Aapcs { unwind: true }),
+            "extern \"aapcs-unwind\""
+        );
+        assert_eq!(
+            render_abi(&Abi::Win64 { unwind: false }),
+            "extern \"win64\""
+        );
+        assert_eq!(
+            render_abi(&Abi::Win64 { unwind: true }),
+            "extern \"win64-unwind\""
+        );
+        assert_eq!(
+            render_abi(&Abi::SysV64 { unwind: false }),
+            "extern \"sysv64\""
+        );
+        assert_eq!(
+            render_abi(&Abi::SysV64 { unwind: true }),
+            "extern \"sysv64-unwind\""
+        );
+        assert_eq!(
+            render_abi(&Abi::System { unwind: false }),
+            "extern \"system\""
+        );
+        assert_eq!(
+            render_abi(&Abi::System { unwind: true }),
+            "extern \"system-unwind\""
+        );
+        assert_eq!(
+            render_abi(&Abi::Other("custom\"abi".into())),
+            r#"extern "custom\"abi""#
+        );
+    }
+
+    #[test]
+    fn render_function_qualifiers_use_rust_order() {
+        let header = FunctionHeader {
+            is_const: true,
+            is_unsafe: true,
+            is_async: true,
+            abi: Abi::C { unwind: false },
+        };
+        assert_eq!(
+            render_function_qualifiers(&header),
+            "const async unsafe extern \"C\""
+        );
+    }
+
+    #[test]
+    fn render_function_pointer_preserves_qualifiers_generics_and_variadics() {
+        let pointer = FunctionPointer {
+            sig: FunctionSignature {
+                inputs: vec![(
+                    "value".into(),
+                    Type::BorrowedRef {
+                        lifetime: Some("'a".into()),
+                        is_mutable: false,
+                        type_: Box::new(Type::Primitive("i32".into())),
+                    },
+                )],
+                output: Some(Type::Primitive("i32".into())),
+                is_c_variadic: true,
+            },
+            generic_params: vec![GenericParamDef {
+                name: "'a".into(),
+                kind: GenericParamDefKind::Lifetime {
+                    outlives: Vec::new(),
+                },
+            }],
+            header: FunctionHeader {
+                is_const: false,
+                is_unsafe: true,
+                is_async: false,
+                abi: Abi::C { unwind: true },
+            },
+        };
+
+        assert_eq!(
+            render_type(&Type::FunctionPointer(Box::new(pointer))),
+            "for<'a> unsafe extern \"C-unwind\" fn(value: &'a i32, ...) -> i32"
+        );
+        assert_eq!(
+            render_function_args(&FunctionSignature {
+                inputs: Vec::new(),
+                output: None,
+                is_c_variadic: true,
+            }),
+            "..."
+        );
+    }
+
+    #[test]
+    fn render_associated_type_preserves_generics_defaults_bounds_and_where_clause() {
+        let clone_bound = GenericBound::TraitBound {
+            trait_: Path {
+                id: Id(2),
+                path: "Clone".into(),
+                args: None,
+            },
+            generic_params: Vec::new(),
+            modifier: TraitBoundModifier::None,
+        };
+        let item = Item {
+            id: Id(1),
+            crate_id: 0,
+            name: Some("Container".into()),
+            span: None,
+            visibility: Visibility::Default,
+            docs: None,
+            links: HashMap::new(),
+            attrs: Vec::new(),
+            deprecation: None,
+            stability: None,
+            const_stability: None,
+            inner: ItemEnum::AssocType {
+                generics: Generics {
+                    params: vec![GenericParamDef {
+                        name: "T".into(),
+                        kind: GenericParamDefKind::Type {
+                            bounds: Vec::new(),
+                            default: None,
+                            is_synthetic: false,
+                        },
+                    }],
+                    where_predicates: vec![WherePredicate::BoundPredicate {
+                        type_: Type::Generic("T".into()),
+                        bounds: vec![clone_bound.clone()],
+                        generic_params: Vec::new(),
+                    }],
+                },
+                bounds: vec![clone_bound],
+                type_: Some(Type::ResolvedPath(Path {
+                    id: Id(3),
+                    path: "Vec".into(),
+                    args: None,
+                })),
+                default_unstable: None,
+            },
+        };
+
+        assert_eq!(
+            render_associated_type(&item),
+            "type Container<T>: Clone = Vec where T: Clone"
+        );
+    }
+
+    #[test]
+    fn render_tuple_types_preserves_singleton_tuple_syntax() {
+        assert_eq!(render_type(&Type::Tuple(Vec::new())), "()");
+        assert_eq!(
+            render_type(&Type::Tuple(vec![Type::Primitive("u32".into())])),
+            "(u32,)"
+        );
+        assert_eq!(
+            render_type(&Type::Tuple(vec![
+                Type::Primitive("u32".into()),
+                Type::Primitive("u64".into()),
+            ])),
+            "(u32, u64)"
+        );
+        let nested = Type::Tuple(vec![Type::Tuple(vec![Type::Primitive("u32".into())])]);
+        assert_eq!(render_type(&nested), "((u32,),)");
     }
 }

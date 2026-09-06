@@ -42,6 +42,9 @@ mod tests {
             "#,
             r#"
                 pub struct Date<T>(pub T);
+                impl Date<Utc> {
+                    pub const MAX_UTC: Date<Utc> = _;
+                }
                 pub struct Utc;
                 pub const MAX_DATE: Date<Utc> = Date::<Utc>::MAX_UTC;
             "#,

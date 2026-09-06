@@ -592,7 +592,7 @@ fn page_output(content: String) -> Result<(), Box<dyn Error>> {
     let (pager_command, pager_args) = pager_command_from_env();
 
     if !is_command_available(&pager_command) {
-        println!("{content}");
+        io::stdout().write_all(content.as_bytes())?;
         return Ok(());
     }
 

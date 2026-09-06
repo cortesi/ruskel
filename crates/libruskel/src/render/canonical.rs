@@ -488,7 +488,7 @@ fn render_attribute(attribute: &Attribute) -> Result<Option<String>> {
         Attribute::MacroExport => "#[macro_export]".to_string(),
         Attribute::AutomaticallyDerived => return Ok(None),
         Attribute::Other(source) => {
-            if omit_other_attribute(source) {
+            if is_opaque_attribute_placeholder(source) {
                 return Ok(None);
             }
             let parser = syn::Attribute::parse_outer;
@@ -502,6 +502,9 @@ fn render_attribute(attribute: &Attribute) -> Result<Option<String>> {
                     "snapshot format 1 expected one retained attribute in '{source}'"
                 )));
             }
+            if omit_other_attribute(&parsed[0]) {
+                return Ok(None);
+            }
             source.clone()
         }
     };
@@ -509,30 +512,61 @@ fn render_attribute(attribute: &Attribute) -> Result<Option<String>> {
 }
 
 /// Omit attributes that do not define supported public API shape.
-fn omit_other_attribute(source: &str) -> bool {
+fn omit_other_attribute(attribute: &syn::Attribute) -> bool {
+    let Some(first_segment) = attribute.path().segments.first() else {
+        return false;
+    };
+    let first_name = first_segment.ident.to_string();
+
+    if first_name.starts_with("rustc_") {
+        return true;
+    }
+    let Some(name) = attribute.path().get_ident().map(ToString::to_string) else {
+        return false;
+    };
+    if name == "attr" && matches!(&attribute.meta, syn::Meta::NameValue(_)) {
+        return true;
+    }
+    if name == "cfg_attr" {
+        return cfg_attr_has_test_condition(attribute);
+    }
+    matches!(
+        name.as_str(),
+        "allow"
+            | "warn"
+            | "deny"
+            | "forbid"
+            | "test"
+            | "bench"
+            | "derive"
+            | "automatically_derived"
+            | "stable"
+            | "unstable"
+    )
+}
+
+/// Return whether rustdoc emitted its opaque `attr = ...` placeholder form.
+fn is_opaque_attribute_placeholder(source: &str) -> bool {
     let trimmed = source.trim();
     let compact = trimmed
         .strip_prefix("#[")
         .or_else(|| trimmed.strip_prefix("# ["))
         .unwrap_or(trimmed)
         .trim_start();
-    [
-        "allow",
-        "warn",
-        "deny",
-        "forbid",
-        "cfg_attr(test",
-        "test",
-        "bench",
-        "derive",
-        "automatically_derived",
-        "attr = ",
-        "rustc_",
-        "stable",
-        "unstable",
-    ]
-    .iter()
-    .any(|prefix| compact.starts_with(prefix))
+    compact.starts_with("attr = ")
+}
+
+/// Return whether a `cfg_attr` starts with the exact `test` condition.
+fn cfg_attr_has_test_condition(attribute: &syn::Attribute) -> bool {
+    let syn::Meta::List(list) = &attribute.meta else {
+        return false;
+    };
+    let mut tokens = list.tokens.clone().into_iter();
+    matches!(
+        (tokens.next(), tokens.next()),
+        (Some(condition), Some(comma))
+            if condition.to_string() == "test" && comma.to_string() == ","
+    )
 }
 
 /// Render a structured representation attribute.
@@ -604,6 +638,55 @@ mod tests {
         assert_eq!(
             retained_attributes(&item)?,
             "#[doc(hidden)]\n#[macro_export]\n#[unsafe(no_mangle)]\n#[unsafe(export_name = \"external_name\")]\n#[unsafe(link_section = \"api\")]\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn attribute_policy_matches_only_exact_unqualified_names() -> Result<()> {
+        let item = item_with_attributes(vec![
+            Attribute::Other("#[allow(dead_code)]".to_string()),
+            Attribute::Other("#[warn(dead_code)]".to_string()),
+            Attribute::Other("#[deny(dead_code)]".to_string()),
+            Attribute::Other("#[forbid(dead_code)]".to_string()),
+            Attribute::Other("#[test]".to_string()),
+            Attribute::Other("#[bench]".to_string()),
+            Attribute::Other("#[derive(Clone)]".to_string()),
+            Attribute::Other("#[automatically_derived]".to_string()),
+            Attribute::Other("#[stable(feature = \"api\")]".to_string()),
+            Attribute::Other("#[unstable(feature = \"api\")]".to_string()),
+            Attribute::Other("#[rustc_private::nested]".to_string()),
+            Attribute::Other("#[allowance]".to_string()),
+            Attribute::Other("# [ stable_api ]".to_string()),
+            Attribute::Other("#[stable_api]".to_string()),
+            Attribute::Other("#[derive_more]".to_string()),
+            Attribute::Other("#[testable]".to_string()),
+            Attribute::Other("#[expect(dead_code)]".to_string()),
+        ]);
+        assert_eq!(
+            retained_attributes(&item)?,
+            "#[allowance]\n# [ stable_api ]\n#[stable_api]\n#[derive_more]\n#[testable]\n#[expect(dead_code)]\n"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn attribute_policy_preserves_qualified_paths_and_exception_forms() -> Result<()> {
+        let item = item_with_attributes(vec![
+            Attribute::Other("# [ allow(dead_code) ]".to_string()),
+            Attribute::Other("#[cfg_attr(test, derive(Clone))]".to_string()),
+            Attribute::Other("# [ attr = Optimize(Speed) ]".to_string()),
+            Attribute::Other("#[attr = <opaque rustdoc payload>]".to_string()),
+            Attribute::Other("#[attr(foo)]".to_string()),
+            Attribute::Other("#[rustc_private]".to_string()),
+            Attribute::Other("#[cfg_attr(testing, derive(Clone))]".to_string()),
+            Attribute::Other("#[cfg_attr(test::nested, derive(Clone))]".to_string()),
+            Attribute::Other("#[outer::allow(dead_code)]".to_string()),
+            Attribute::Other("#[doc(hidden)]".to_string()),
+        ]);
+        assert_eq!(
+            retained_attributes(&item)?,
+            "#[attr(foo)]\n#[cfg_attr(testing, derive(Clone))]\n#[cfg_attr(test::nested, derive(Clone))]\n#[outer::allow(dead_code)]\n#[doc(hidden)]\n"
         );
         Ok(())
     }

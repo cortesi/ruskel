@@ -1,6 +1,6 @@
 //! Integration tests for impl block rendering.
 mod utils;
-use libruskel::Renderer;
+use libruskel::{CrateRequest, Renderer, SearchDomain, SearchItemKind, SearchOptions};
 use utils::*;
 
 gen_tests! {
@@ -79,6 +79,29 @@ gen_tests! {
                     type Item;
                     fn get_item(&self) -> Self::Item;
                 }
+                "#
+        }
+        idemp {
+            generic_associated_types_impl: r#"
+                struct GenericAssocTypeStruct;
+
+                impl GenericAssocTypeTrait for GenericAssocTypeStruct {
+                    type Container<T> = Vec<T>
+                    where
+                        T: Clone;
+                    type Borrowed<'a> = &'a GenericAssocTypeStruct
+                    where
+                        Self: 'a;
+                }
+
+                trait GenericAssocTypeTrait {
+                    type Container<T>
+                    where
+                        T: Clone;
+                    type Borrowed<'a>
+                    where
+                        Self: 'a;
+                }
             "#
         }
         idemp {
@@ -103,6 +126,29 @@ gen_tests! {
                 
                 impl ConstStruct {
                     pub const fn const_method(&self) -> i32 { }
+                }
+                "#
+        }
+        idemp {
+            associated_constants_impl: r#"
+                struct Constants;
+
+                impl Constants {
+                    pub const VALUE: u32 = 42;
+                    const PRIVATE_VALUE: u32 = 7;
+                }
+            "#
+        }
+        idemp {
+            trait_assoc_const_only_idemp: r#"
+                pub trait HasConstant {
+                    const VALUE: u32;
+                }
+
+                struct ConstantImpl;
+
+                impl HasConstant for ConstantImpl {
+                    const VALUE: u32 = 42;
                 }
             "#
         }
@@ -242,6 +288,92 @@ gen_tests! {
                 "#
             }
         }
+        rt {
+            associated_constants_visibility: {
+                input: r#"
+                    pub struct Constants;
+
+                    impl Constants {
+                        pub const VALUE: u32 = 42;
+                        const PRIVATE_VALUE: u32 = 7;
+                    }
+                "#,
+                output: r#"
+                    pub struct Constants;
+
+                    impl Constants {
+                        pub const VALUE: u32 = 42;
+                    }
+                "#
+            }
+        }
+        rt {
+            trait_impl_with_only_associated_constant: {
+                input: r#"
+                    pub trait HasConstant {
+                        const VALUE: u32;
+                    }
+
+                    pub struct ConstantImpl;
+
+                    impl HasConstant for ConstantImpl {
+                        const VALUE: u32 = 42;
+                    }
+                "#,
+                output: r#"
+                    pub trait HasConstant {
+                        const VALUE: u32;
+                    }
+
+                    pub struct ConstantImpl;
+
+                    impl HasConstant for ConstantImpl {
+                        const VALUE: u32 = 42;
+                    }
+                "#
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod associated_constant_search {
+    use super::*;
+
+    #[test]
+    fn search_selects_an_associated_constant_in_a_trait_impl() {
+        let source = r#"
+            pub trait HasConstant {
+                const VALUE: u32;
+            }
+
+            pub struct ConstantImpl;
+
+            impl HasConstant for ConstantImpl {
+                const VALUE: u32 = 42;
+            }
+        "#;
+        let (_workspace, target) = create_test_crate(source, false);
+        let (_cache, ruskel) = isolated_ruskel();
+        let response = ruskel
+            .search(
+                &target,
+                &CrateRequest::default(),
+                &SearchOptions::configured("VALUE", SearchDomain::NAMES, false, true),
+            )
+            .unwrap();
+
+        assert!(response.results.iter().any(|result| {
+            result.kind == SearchItemKind::AssocConst
+                && result.path_string.ends_with("ConstantImpl::VALUE")
+                && result.signature.as_deref() == Some("const VALUE: u32")
+        }));
+        assert!(response.rendered.contains("const VALUE: u32 = 42;"));
+        assert!(
+            response
+                .rendered
+                .contains("impl HasConstant for ConstantImpl")
+        );
     }
 }
 

@@ -5,7 +5,7 @@ use std::{
     process::Command,
 };
 
-use rustdoc_types::{Crate, ItemEnum, MacroKind, ProcMacro};
+use rustdoc_types::{Crate, ItemEnum, MacroKind, ProcMacro, Type};
 use tempfile::TempDir;
 
 use super::{SNAPSHOT_RUSTFMT_V1, snapshot_rustfmt_command};
@@ -75,6 +75,10 @@ impl std::fmt::Display for Alpha {
     }
 }
 
+impl Alpha {
+    pub const VERSION: u8 = 1;
+}
+
 pub union Choice {
     pub integer: u32,
     pub float: f32,
@@ -92,12 +96,31 @@ pub enum Discriminated {
 }
 
 pub trait Surface {
+    const KIND: u8;
     type Item: Clone + Send;
+    type Container<T>
+    where
+        T: Clone;
     fn zed(&self);
     fn alpha(&self);
 }
 
+impl Surface for Alpha {
+    const KIND: u8 = 1;
+    type Item = u8;
+    type Container<T> = Vec<T>
+    where
+        T: Clone;
+
+    fn zed(&self) {}
+    fn alpha(&self) {}
+}
+
 pub trait Alias = Sync + Send;
+
+pub type SingletonTuple = (u32,);
+pub type CCallback = unsafe extern "C" fn(value: i32) -> i32;
+pub type HrtbCallback = for<'a> fn(value: &'a i32) -> &'a i32;
 
 #[unsafe(no_mangle)]
 pub static EXPORTED: u8 = 7;
@@ -238,6 +261,12 @@ fn snapshot_is_stable_across_unordered_rustdoc_sequences() -> Result<()> {
     );
     assert!(expected.contains("impl Clone for Alpha"));
     assert!(expected.contains("impl Renamed"));
+    assert!(expected.contains("pub const VERSION: u8 = 1;"));
+    assert!(expected.contains("const KIND: u8;"));
+    assert!(expected.contains("const KIND: u8 = 1;"));
+    assert!(expected.contains("pub type SingletonTuple = (u32,);"));
+    assert!(expected.contains("pub type CCallback = unsafe extern \"C\" fn(value: i32) -> i32;"));
+    assert!(expected.contains("pub type HrtbCallback = for<'a> fn(value: &'a i32) -> &'a i32;"));
     assert!(expected.contains("pub union Choice"));
     assert!(expected.contains("pub trait Alias"));
     assert!(expected.contains("pub static EXPORTED"));
@@ -352,6 +381,98 @@ fn snapshot_preserves_ordered_api_sequences() -> Result<()> {
         .expect("explicit discriminant")
         .expr = "11".to_string();
     assert_ne!(snapshot(&discriminants)?, expected);
+
+    let mut associated_type = original.clone();
+    let container = associated_type
+        .index
+        .values_mut()
+        .find(|item| {
+            item.name.as_deref() == Some("Container")
+                && matches!(&item.inner, ItemEnum::AssocType { .. })
+        })
+        .expect("generic associated type");
+    let ItemEnum::AssocType { generics, .. } = &mut container.inner else {
+        panic!("Container must be an associated type");
+    };
+    generics.params[0].name = "Changed".to_string();
+    assert_ne!(snapshot(&associated_type)?, expected);
+
+    let mut associated_type_where = original.clone();
+    let container = associated_type_where
+        .index
+        .values_mut()
+        .find(|item| {
+            item.name.as_deref() == Some("Container")
+                && matches!(&item.inner, ItemEnum::AssocType { .. })
+        })
+        .expect("generic associated type where clause");
+    let ItemEnum::AssocType { generics, .. } = &mut container.inner else {
+        panic!("Container must be an associated type");
+    };
+    let Some(rustdoc_types::WherePredicate::BoundPredicate { bounds, .. }) =
+        generics.where_predicates.first_mut()
+    else {
+        panic!("Container must have a where predicate");
+    };
+    let Some(rustdoc_types::GenericBound::TraitBound { trait_, .. }) = bounds.first_mut() else {
+        panic!("Container where predicate must have a trait bound");
+    };
+    trait_.path = "Send".to_string();
+    assert_ne!(snapshot(&associated_type_where)?, expected);
+
+    let mut associated_const = original.clone();
+    let version = associated_const
+        .index
+        .values_mut()
+        .find(|item| item.name.as_deref() == Some("VERSION"))
+        .expect("associated constant");
+    let ItemEnum::AssocConst { value, .. } = &mut version.inner else {
+        panic!("VERSION must be an associated constant");
+    };
+    *value = Some("2".to_string());
+    assert_ne!(snapshot(&associated_const)?, expected);
+
+    let mut abi = original.clone();
+    let callback = abi
+        .index
+        .values_mut()
+        .find(|item| item.name.as_deref() == Some("CCallback"))
+        .expect("function pointer alias");
+    let ItemEnum::TypeAlias(alias) = &mut callback.inner else {
+        panic!("CCallback must be a type alias");
+    };
+    let Type::FunctionPointer(pointer) = &mut alias.type_ else {
+        panic!("CCallback must refer to a function pointer");
+    };
+    pointer.header.abi = rustdoc_types::Abi::C { unwind: true };
+    assert_ne!(snapshot(&abi)?, expected);
+
+    let mut variadic = original.clone();
+    let callback = variadic
+        .index
+        .values_mut()
+        .find(|item| item.name.as_deref() == Some("CCallback"))
+        .expect("function pointer alias");
+    let ItemEnum::TypeAlias(alias) = &mut callback.inner else {
+        panic!("CCallback must be a type alias");
+    };
+    let Type::FunctionPointer(pointer) = &mut alias.type_ else {
+        panic!("CCallback must refer to a function pointer");
+    };
+    pointer.sig.is_c_variadic = true;
+    assert_ne!(snapshot(&variadic)?, expected);
+
+    let mut singleton_tuple = original.clone();
+    let singleton_item = singleton_tuple
+        .index
+        .values_mut()
+        .find(|item| item.name.as_deref() == Some("SingletonTuple"))
+        .expect("singleton tuple alias");
+    let ItemEnum::TypeAlias(alias) = &mut singleton_item.inner else {
+        panic!("SingletonTuple must be a type alias");
+    };
+    alias.type_ = Type::Tuple(vec![Type::Primitive("u64".to_string())]);
+    assert_ne!(snapshot(&singleton_tuple)?, expected);
 
     let mut documentation = original;
     let function = documentation

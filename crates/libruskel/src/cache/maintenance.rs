@@ -310,7 +310,8 @@ fn run_pass(
     cleanup_trash(layout, &mut result)?;
     collect_old_toolchains(layout, hooks, current_toolchain, now, &mut result)?;
     collect_old_workspaces(layout, hooks, now, &mut result)?;
-    enforce_budget(layout, hooks, now, &mut result)?;
+    let inventory = collect_inventory(layout, &mut result)?;
+    enforce_budget(layout, hooks, now, &mut result, &inventory)?;
     layout::write_timestamp(&layout.maintenance_stamp(), now)?;
     drop(gc_lease);
     Ok(result)
@@ -438,8 +439,8 @@ fn enforce_budget(
     hooks: &MaintenanceHooks,
     now: u64,
     result: &mut MaintenanceResult,
+    inventory: &CacheInventory,
 ) -> Result<()> {
-    let inventory = collect_inventory(layout, result)?;
     let mut candidates: Vec<(WorkspaceInventory, u64)> = inventory
         .toolchains
         .iter()
@@ -553,6 +554,8 @@ fn unix_seconds(time: SystemTime) -> Result<u64> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
     use std::{fs, sync::Barrier};
 
     use tempfile::tempdir;
@@ -653,6 +656,51 @@ mod tests {
         assert!(layout.build_dir().join(&toolchain).join(locked).exists());
         assert!(layout.build_dir().join(&toolchain).join(newest).exists());
         drop(locked_lease);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn budget_skips_workspace_after_owned_toolchain_is_replaced() -> Result<()> {
+        let temp = tempdir()?;
+        let layout = CacheLayout::initialize(temp.path().join("cache"))?;
+        let old_toolchain = "a".repeat(64);
+        let old_workspace = "b".repeat(64);
+        let newest_toolchain = "c".repeat(64);
+        let newest_workspace = "d".repeat(64);
+        entry(&layout, &old_toolchain, &old_workspace, 80, 64);
+        entry(&layout, &newest_toolchain, &newest_workspace, 100, 64);
+
+        let old_toolchain_path = layout.build_dir().join(&old_toolchain);
+        fs::write(old_toolchain_path.join("sentinel"), b"keep")?;
+        let mut result = MaintenanceResult::default();
+        let inventory = collect_inventory(&layout, &mut result)?;
+        let saved_toolchain = temp.path().join("saved-toolchain");
+        fs::rename(&old_toolchain_path, &saved_toolchain)?;
+        symlink(&saved_toolchain, &old_toolchain_path)?;
+
+        enforce_budget(&layout, &hooks(100, 1, 0), 100, &mut result, &inventory)?;
+
+        assert!(
+            layout
+                .build_dir()
+                .join(&old_toolchain)
+                .join(&old_workspace)
+                .is_dir()
+        );
+        assert!(
+            layout
+                .build_dir()
+                .join(&newest_toolchain)
+                .join(&newest_workspace)
+                .is_dir()
+        );
+        assert_eq!(fs::read(saved_toolchain.join("sentinel"))?, b"keep");
+        assert_eq!(result.removed_entries, 0);
+        assert!(result.issues.iter().any(|issue| {
+            issue.path() == layout.build_dir().join(&old_toolchain).join(&old_workspace)
+                && issue.message().contains("changed after inventory")
+        }));
         Ok(())
     }
 

@@ -313,18 +313,56 @@ fn physical_identity(input: &Path) -> Result<(PathBuf, PathBuf, String)> {
 
 /// Acquire the persistent exclusive advisory lock.
 fn acquire_lock(lock_path: &Path, destination: &Path) -> Result<File> {
-    let file = OpenOptions::new()
-        .create(true)
-        .truncate(false)
+    let file = match OpenOptions::new()
+        .create_new(true)
         .read(true)
         .write(true)
         .open(lock_path)
-        .map_err(|error| {
-            store_error(
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+            let metadata = fs::symlink_metadata(lock_path).map_err(|error| {
+                store_error(
+                    destination,
+                    format!("failed to inspect snapshot lock: {error}"),
+                )
+            })?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err(store_error(
+                    destination,
+                    "snapshot lock must be a regular file",
+                ));
+            }
+            OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(lock_path)
+                .map_err(|error| {
+                    store_error(
+                        destination,
+                        format!("failed to open snapshot lock: {error}"),
+                    )
+                })?
+        }
+        Err(error) => {
+            return Err(store_error(
                 destination,
                 format!("failed to open snapshot lock: {error}"),
-            )
-        })?;
+            ));
+        }
+    };
+    let metadata = file.metadata().map_err(|error| {
+        store_error(
+            destination,
+            format!("failed to inspect open snapshot lock: {error}"),
+        )
+    })?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(store_error(
+            destination,
+            "snapshot lock must be a regular file",
+        ));
+    }
     FileExt::lock(&file)
         .map_err(|error| store_error(destination, format!("failed to lock snapshot: {error}")))?;
     Ok(file)
@@ -978,6 +1016,59 @@ mod tests {
         SnapshotStore::open(&output, SnapshotMode::Update)?.sync(&captured)?;
         fs::remove_file(output.join("alpha.rs"))?;
         symlink(root.path().join("outside"), output.join("alpha.rs"))?;
+        assert!(SnapshotStore::open(&output, SnapshotMode::Check).is_err());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_lock_rejects_symlinks_and_preserves_regular_lock_identity() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let output = root.path().join("api");
+        let lock = root.path().join(".api.ruskel-snapshot.lock");
+        let captured = snapshot(vec![crate_snapshot("alpha", "alpha", "pub fn one();")]);
+
+        let live_target = root.path().join("live-lock-target");
+        fs::write(&live_target, b"outside")?;
+        symlink(&live_target, &lock)?;
+        for mode in [SnapshotMode::Update, SnapshotMode::Check] {
+            assert!(SnapshotStore::open(&output, mode).is_err());
+            assert_eq!(fs::read(&live_target)?, b"outside");
+        }
+        fs::remove_file(&lock)?;
+
+        let dangling_target = root.path().join("dangling-lock-target");
+        symlink(&dangling_target, &lock)?;
+        for mode in [SnapshotMode::Update, SnapshotMode::Check] {
+            assert!(SnapshotStore::open(&output, mode).is_err());
+            assert!(!dangling_target.exists());
+        }
+        fs::remove_file(&lock)?;
+
+        fs::write(&lock, b"persistent")?;
+        SnapshotStore::open(&output, SnapshotMode::Update)?.sync(&captured)?;
+        assert_eq!(fs::read(&lock)?, b"persistent");
+        let before = fs::metadata(&lock)?;
+        SnapshotStore::open(&output, SnapshotMode::Check)?.sync(&captured)?;
+        let after = fs::metadata(&lock)?;
+        assert_eq!(fs::read(&lock)?, b"persistent");
+        assert_eq!(before.len(), after.len());
+        assert_eq!(before.ino(), after.ino());
+
+        fs::remove_file(&lock)?;
+        SnapshotStore::open(&output, SnapshotMode::Check)?;
+        assert!(fs::symlink_metadata(&lock)?.is_file());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_lock_rejects_a_directory() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let output = root.path().join("api");
+        let lock = root.path().join(".api.ruskel-snapshot.lock");
+        fs::create_dir(&lock)?;
+        assert!(SnapshotStore::open(&output, SnapshotMode::Update).is_err());
         assert!(SnapshotStore::open(&output, SnapshotMode::Check).is_err());
         Ok(())
     }

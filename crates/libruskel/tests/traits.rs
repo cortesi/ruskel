@@ -1,5 +1,6 @@
 //! Integration tests ensuring trait rendering stays stable.
 mod utils;
+use libruskel::{CrateRequest, SearchDomain, SearchOptions};
 use utils::*;
 
 gen_tests! {
@@ -17,7 +18,12 @@ gen_tests! {
             with_associated_types: r#"
                 pub trait TraitWithAssocTypes {
                     type Item;
-                    type Container<T>;
+                    type Container<T>
+                    where
+                        T: Clone;
+                    type Borrowed<'a>
+                    where
+                        Self: 'a;
                     fn get_item(&self) -> Self::Item;
                 }
             "#
@@ -116,5 +122,43 @@ gen_tests! {
                 "#
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod standalone {
+    use super::*;
+
+    #[test]
+    fn search_signature_preserves_generic_associated_type_constraints() {
+        let source = r#"
+            pub trait GenericAssoc {
+                type Container<T>
+                where
+                    T: Clone;
+                type Borrowed<'a>
+                where
+                    Self: 'a;
+            }
+        "#;
+        let (_workspace, target) = create_test_crate(source, false);
+        let (_cache, ruskel) = isolated_ruskel();
+        let response = ruskel
+            .search(
+                &target,
+                &CrateRequest::default(),
+                &SearchOptions::configured("Container", SearchDomain::NAMES, false, true),
+            )
+            .unwrap();
+
+        let container = response
+            .results
+            .iter()
+            .find(|result| result.path_string.ends_with("GenericAssoc::Container"))
+            .expect("generic associated type search result");
+        assert_eq!(
+            container.signature.as_deref(),
+            Some("type Container<T> where T: Clone")
+        );
     }
 }

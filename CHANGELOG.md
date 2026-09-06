@@ -1,3 +1,19 @@
+# Unreleased
+
+- [fix] Reject symlinked cache directories and cache/snapshot lock files before
+  using them for owned storage operations.
+- [fix] Preserve impl constants, generic associated types and their where
+  clauses, function ABIs, function-pointer qualifiers, variadics, and singleton
+  tuples in API output.
+- [fix] Retain snapshot attributes whose names share prefixes with omitted
+  built-in attributes. Regenerating existing snapshots can expose previously
+  omitted API information.
+- [fix] Resolve Rust source files that are Cargo library or binary roots,
+  including custom paths, and handle nested `mod.rs` module targets.
+- [fix] Expand enum and union contents in searches. Treat an empty MCP search
+  as an empty query instead of rendering the whole crate.
+- [fix] Preserve output bytes when the configured pager is unavailable.
+
 # v0.0.11
 
 - [feat] Isolate rustdoc JSON builds in a dedicated Ruskel cache.

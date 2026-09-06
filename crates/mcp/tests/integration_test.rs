@@ -3,7 +3,14 @@
 //! These tests verify the MCP server protocol implementation using the tmcp
 //! client.
 
-use std::{io, result::Result as StdResult, sync::OnceLock, time::Duration};
+use std::{
+    env, io,
+    path::PathBuf,
+    process,
+    result::Result as StdResult,
+    sync::OnceLock,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use libruskel::{Ruskel, toolchain::ensure_nightly_with_docs};
 use ruskel_mcp::{RuskelServer, RuskelServerDefaults};
@@ -29,7 +36,15 @@ async fn create_test_client() -> Result<(Client, ServerTask)> {
 async fn create_test_client_with_defaults(
     defaults: RuskelServerDefaults,
 ) -> Result<(Client, ServerTask)> {
-    let ruskel = Ruskel::new().with_silent(true);
+    create_test_client_with_defaults_and_cache(defaults, None).await
+}
+
+/// Helper to create a test MCP client with an optional isolated cache root.
+async fn create_test_client_with_defaults_and_cache(
+    defaults: RuskelServerDefaults,
+    cache_dir: Option<PathBuf>,
+) -> Result<(Client, ServerTask)> {
+    let ruskel = Ruskel::new().with_silent(true).with_cache_dir(cache_dir);
     let server = Server::new(move || RuskelServer::with_defaults(ruskel.clone(), defaults));
 
     let (server_side, client_side) = duplex(64 * 1024);
@@ -48,6 +63,18 @@ async fn create_test_client_with_defaults(
         .await?;
 
     Ok((client, server_task))
+}
+
+/// Return a cache path that this test can prove remains untouched.
+fn isolated_cache_path() -> PathBuf {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after the Unix epoch")
+        .as_nanos();
+    env::temp_dir().join(format!(
+        "ruskel-mcp-empty-search-{}-{timestamp}",
+        process::id()
+    ))
 }
 
 /// Create a client for a request that needs installed standard-library JSON.
@@ -203,6 +230,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_mcp_server_null_search_renders_normally() {
+        let (mut client, mut child) = create_rustdoc_test_client()
+            .await
+            .expect("Failed to create test client");
+
+        initialize_client(&mut client)
+            .await
+            .expect("Failed to initialize");
+
+        let arguments = json!({
+            "target": "std::option::Option",
+            "search": null,
+            "frontmatter": false
+        });
+        let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
+        let result = timeout(Duration::from_secs(30), client.call_tool("ruskel", args))
+            .await
+            .expect("Timeout during null-search render")
+            .expect("Failed to call tool");
+
+        assert_ne!(result.is_error, Some(true));
+        let text = response_text(&result);
+        assert!(text.contains("pub enum Option<T>"));
+        assert!(text.contains("None"));
+        assert!(text.contains("Some(T)"));
+
+        terminate_child(&mut child)
+            .await
+            .expect("Failed to stop MCP server");
+    }
+
+    #[tokio::test]
     async fn test_mcp_server_applies_frontmatter_startup_default() {
         let defaults = RuskelServerDefaults {
             private: true,
@@ -233,6 +292,48 @@ mod tests {
         terminate_child(&mut child)
             .await
             .expect("Failed to stop MCP server");
+    }
+
+    #[tokio::test]
+    async fn test_mcp_server_empty_search_returns_without_resolving_target() {
+        let cache_dir = isolated_cache_path();
+        assert!(!cache_dir.exists(), "isolated cache path should be new");
+
+        let (mut client, mut child) = create_test_client_with_defaults_and_cache(
+            RuskelServerDefaults::default(),
+            Some(cache_dir.clone()),
+        )
+        .await
+        .expect("Failed to create test client");
+        initialize_client(&mut client)
+            .await
+            .expect("Failed to initialize");
+
+        for search in ["", " \t\n"] {
+            let arguments = json!({
+                "target": "crate\n[workspace]",
+                "search": search
+            });
+            let args = Arguments::from_struct(arguments).expect("invalid arguments struct");
+            let result = client
+                .call_tool("ruskel", args)
+                .await
+                .expect("Failed to call tool");
+
+            assert_ne!(result.is_error, Some(true));
+            assert_eq!(
+                response_text(&result),
+                "Search query is empty; nothing to do."
+            );
+        }
+
+        terminate_child(&mut child)
+            .await
+            .expect("Failed to stop MCP server");
+        assert!(
+            !cache_dir.exists(),
+            "empty search should not initialize the cache"
+        );
     }
 
     #[tokio::test]

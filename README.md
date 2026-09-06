@@ -263,7 +263,20 @@ To start Ruskel in MCP server mode:
 ruskel --mcp
 ```
 
-This starts the server on stdout, exposing a single `ruskel` tool.
+This starts the server on the stdio transport, exposing a single `ruskel` tool.
+
+To run the server over TCP instead, provide a host and port:
+
+```bash
+ruskel --mcp --addr 127.0.0.1:7878 --log info
+```
+
+The `--log` option requires TCP mode and defaults to `info`. The other server
+startup options are `--cache-dir`, `--auto-impls`, `--private`,
+`--no-frontmatter`, `--offline`, and `--verbose`. The `--private` and
+`--no-frontmatter` options set defaults for omitted request fields, and an
+individual request can override those `private` and `frontmatter` defaults.
+The other options apply to every request handled by the server.
 
 ### MCP Configuration
 
@@ -291,17 +304,22 @@ The `ruskel` tool accepts the following JSON parameters:
 #### Optional
 
 - `bin` (string | null, default: null): Select a specific binary target when rendering a package.
+  Binary-only packages include private items automatically. For a binary in a mixed package, pass
+  `private: true` when private items are needed.
 - `private` (boolean, default: false): Include private items. **Caution:** Avoid using this on
   entire crates as output can be extremely large. Prefer targeting specific modules or items.
 - `frontmatter` (boolean, default: true): Include comment frontmatter.
-- `search` (string | null, default: null): Restrict output to matches for this query.
+- `search` (string | null, default: null): Restrict output to matches for this query. An empty or
+  whitespace-only value returns `Search query is empty; nothing to do.` without resolving the target;
+  omit this field or pass `null` to render normally.
 - `search_spec` (array of strings | null, default: null): Search domains (name, doc, signature,
   path). Defaults to name, doc, signature.
 - `search_case_sensitive` (boolean, default: false): Require exact-case matches when searching.
 - `direct_match_only` (boolean, default: false): Only render direct matches, not expanded containers.
 - `no_default_features` (boolean, default: false): Disable default features.
 - `all_features` (boolean, default: false): Enable all features.
-- `features` (array of strings, default: []): Features to enable.
+- `features` (array of strings, default: []): Explicit Cargo feature selectors. These are still
+  forwarded when `all_features` is `true`.
 
 
 ---
