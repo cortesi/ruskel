@@ -50,7 +50,7 @@ struct Cli {
     #[arg(long, value_delimiter = ',', value_name = "FEATURES")]
     features: Vec<String>,
 
-    /// Select a portable dated-nightly toolchain.
+    /// Select a nightly toolchain instead of the rolling nightly channel.
     #[arg(long, value_name = "NIGHTLY")]
     toolchain: Option<String>,
 

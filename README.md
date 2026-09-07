@@ -104,10 +104,10 @@ Capture the public APIs of workspace crates in a generated directory:
 ruskel-snapshot --output ./api ./crates/*
 ```
 
-The first capture needs an explicit dated nightly unless the active toolchain
-already has a `nightly-YYYY-MM-DD` name. See the
-[snapshot reference](docs/snapshots.md) for setup, profile migration, Git hooks,
-and CI checks.
+Snapshots use the installed `nightly` toolchain by default. Updating that
+toolchain can change the generated API text. See the [snapshot
+reference](docs/snapshots.md) for setup, profile migration, Git hooks, and CI
+checks.
 
 ```sh
 # Current project

@@ -2,8 +2,12 @@ use std::{path::PathBuf, process::Command};
 
 use crate::{
     error::{Result, RuskelError},
-    toolchain::{active_dated_nightly, host_target, normalize_dated_nightly, toolchain_binary},
+    toolchain::{host_target, normalize_dated_nightly, toolchain_binary},
 };
+
+/// Rolling nightly channel used when a snapshot has no stored or explicit
+/// toolchain.
+const DEFAULT_TOOLCHAIN: &str = "nightly";
 
 /// Cargo feature policy shared by every crate in one snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,7 +81,7 @@ impl Default for SnapshotFeatures {
 /// Optional first-capture or profile-migration overrides.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SnapshotProfileOptions {
-    /// Explicit portable toolchain override.
+    /// Explicit nightly toolchain override.
     toolchain: Option<String>,
     /// Explicit target override.
     target: Option<String>,
@@ -91,7 +95,7 @@ impl SnapshotProfileOptions {
         Self::default()
     }
 
-    /// Select a portable dated-nightly toolchain.
+    /// Select a nightly toolchain.
     pub fn with_toolchain(mut self, toolchain: impl Into<String>) -> Self {
         self.toolchain = Some(toolchain.into());
         self
@@ -130,7 +134,7 @@ impl SnapshotProfileOptions {
 pub struct SnapshotProfile {
     /// Snapshot format version.
     format: u32,
-    /// Portable dated-nightly toolchain.
+    /// Nightly toolchain.
     toolchain: String,
     /// Cargo target triple.
     target: String,
@@ -161,7 +165,7 @@ impl SnapshotProfile {
 
     /// Resolve stored values and explicit overrides as one atomic profile.
     pub fn resolve(stored: Option<&Self>, options: SnapshotProfileOptions) -> Result<Self> {
-        let values = resolve_profile_values(stored, options, active_dated_nightly, host_target)?;
+        let values = resolve_profile_values(stored, options, host_target)?;
         Self::new(values.0, values.1, values.2)
     }
 
@@ -170,7 +174,7 @@ impl SnapshotProfile {
         self.format
     }
 
-    /// Return the portable dated-nightly toolchain.
+    /// Return the selected nightly toolchain.
     pub fn toolchain(&self) -> &str {
         &self.toolchain
     }
@@ -206,9 +210,9 @@ impl SnapshotProfile {
                 "snapshot format {format} is not supported"
             )));
         }
-        if normalize_dated_nightly(&toolchain).as_deref() != Some(toolchain.as_str()) {
+        if !is_snapshot_toolchain(&toolchain) {
             return Err(RuskelError::SnapshotProfile(format!(
-                "stored toolchain '{toolchain}' is not a portable dated nightly"
+                "stored toolchain '{toolchain}' is not nightly or a dated nightly"
             )));
         }
         if target.trim().is_empty() {
@@ -226,9 +230,9 @@ impl SnapshotProfile {
 
     /// Validate all selected profile values after resolution is complete.
     fn validate(&self) -> Result<()> {
-        if normalize_dated_nightly(&self.toolchain).as_deref() != Some(self.toolchain.as_str()) {
+        if !is_snapshot_toolchain(&self.toolchain) {
             return Err(RuskelError::SnapshotProfile(format!(
-                "toolchain '{}' is not portable; use nightly-YYYY-MM-DD",
+                "toolchain '{}' must be nightly or nightly-YYYY-MM-DD",
                 self.toolchain
             )));
         }
@@ -248,22 +252,19 @@ impl SnapshotProfile {
 type ProfileValues = (String, String, SnapshotFeatures);
 
 /// Select all stored, explicit, and environment-derived profile values.
-fn resolve_profile_values<A, H>(
+fn resolve_profile_values<H>(
     stored: Option<&SnapshotProfile>,
     options: SnapshotProfileOptions,
-    active_toolchain: A,
     compiler_host: H,
 ) -> Result<ProfileValues>
 where
-    A: FnOnce() -> Result<String>,
     H: FnOnce(&str) -> Result<String>,
 {
     let toolchain = match options.toolchain {
         Some(toolchain) => toolchain,
         None => stored
             .map(|profile| profile.toolchain.clone())
-            .map(Ok)
-            .unwrap_or_else(active_toolchain)?,
+            .unwrap_or_else(|| DEFAULT_TOOLCHAIN.to_string()),
     };
     let target = match options.target {
         Some(target) => target,
@@ -277,6 +278,12 @@ where
         .or_else(|| stored.map(|profile| profile.features.clone()))
         .unwrap_or_default();
     Ok((toolchain, target, features))
+}
+
+/// Accept the rolling nightly channel and canonical dated nightly names.
+fn is_snapshot_toolchain(toolchain: &str) -> bool {
+    toolchain == DEFAULT_TOOLCHAIN
+        || normalize_dated_nightly(toolchain).as_deref() == Some(toolchain)
 }
 
 /// Require the selected target in the selected rustup toolchain.
@@ -400,8 +407,6 @@ impl ApiSnapshot {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
-
     use super::*;
 
     fn unvalidated_profile(toolchain: &str, target: &str) -> SnapshotProfile {
@@ -429,26 +434,27 @@ mod tests {
     }
 
     #[test]
-    fn explicit_toolchain_does_not_inspect_active_toolchain() -> Result<()> {
-        for active_name in ["stable-aarch64-apple-darwin", "beta-aarch64-apple-darwin"] {
-            let active_called = Cell::new(false);
-            let values = resolve_profile_values(
-                None,
-                SnapshotProfileOptions::new()
-                    .with_toolchain("nightly-2026-07-01")
-                    .with_target("aarch64-apple-darwin"),
-                || {
-                    active_called.set(true);
-                    Err(RuskelError::SnapshotProfile(format!(
-                        "active {active_name}"
-                    )))
-                },
-                |_| Err(RuskelError::SnapshotProfile("host queried".into())),
-            )?;
-            assert_eq!(values.0, "nightly-2026-07-01");
-            assert_eq!(values.1, "aarch64-apple-darwin");
-            assert!(!active_called.get());
-        }
+    fn first_capture_uses_the_rolling_nightly() -> Result<()> {
+        let values = resolve_profile_values(None, SnapshotProfileOptions::new(), |toolchain| {
+            assert_eq!(toolchain, "nightly");
+            Ok("aarch64-apple-darwin".to_string())
+        })?;
+        assert_eq!(values.0, "nightly");
+        assert_eq!(values.1, "aarch64-apple-darwin");
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_profile_does_not_inspect_the_default_toolchain() -> Result<()> {
+        let values = resolve_profile_values(
+            None,
+            SnapshotProfileOptions::new()
+                .with_toolchain("nightly-2026-07-01")
+                .with_target("aarch64-apple-darwin"),
+            |_| Err(RuskelError::SnapshotProfile("host queried".into())),
+        )?;
+        assert_eq!(values.0, "nightly-2026-07-01");
+        assert_eq!(values.1, "aarch64-apple-darwin");
         Ok(())
     }
 
@@ -458,7 +464,6 @@ mod tests {
         let values = resolve_profile_values(
             Some(&stored),
             SnapshotProfileOptions::new().with_toolchain("nightly-2026-07-01"),
-            || unreachable!(),
             |_| unreachable!(),
         )?;
         assert_eq!(values.0, "nightly-2026-07-01");

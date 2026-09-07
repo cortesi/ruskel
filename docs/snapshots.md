@@ -5,15 +5,12 @@ The generated directory is stable input for Git history and review.
 
 ## Create a snapshot
 
-Install one dated nightly, its `rustfmt` component, and its host target. Replace
-the example target when the repository uses a different target.
+Install the nightly toolchain and its `rustfmt` component. Ruskel selects the
+toolchain's host target unless you pass `--target`.
 
 ```sh
-rustup toolchain install nightly-2026-07-01 --component rustfmt
-rustup target add --toolchain nightly-2026-07-01 aarch64-apple-darwin
+rustup toolchain install nightly --component rustfmt
 ruskel-snapshot \
-  --toolchain nightly-2026-07-01 \
-  --target aarch64-apple-darwin \
   --output ./api \
   ./crates/*
 ```
@@ -22,8 +19,9 @@ Each input is a `Cargo.toml` file or a directory that contains one. A workspace
 manifest selects all workspace members. A package manifest selects only that
 package. The shell expands globs before Ruskel receives the paths.
 
-The first capture stores its toolchain, target, and feature policy in
-`api/.ruskel-snapshot.toml`. Later commands reuse omitted profile values:
+The first capture stores `nightly`, its current host target, and the feature
+policy in `api/.ruskel-snapshot.toml`. Later commands reuse omitted profile
+values. Updating the nightly toolchain can change the generated snapshot:
 
 ```sh
 ruskel-snapshot --output ./api ./crates/*
@@ -40,11 +38,15 @@ makes the migration visible in Git.
 
 ```sh
 ruskel-snapshot \
-  --toolchain nightly-2026-08-15 \
+  --toolchain nightly \
   --target aarch64-apple-darwin \
   --output ./api \
   ./crates/*
 ```
+
+The `--toolchain nightly` migration moves an older dated profile back to the
+rolling nightly channel. A dated nightly remains available as an explicit
+override when a project chooses to pin one.
 
 Use `--features package/feature` for a multi-package capture. Separate multiple
 features with commas. An unqualified feature is valid only when the command
