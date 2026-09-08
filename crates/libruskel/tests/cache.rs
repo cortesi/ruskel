@@ -25,7 +25,8 @@ mod tests {
         fn set(path: &Path) -> Self {
             let lock = ENV_LOCK.lock().expect("cache environment lock");
             let previous = env::var_os("RUSKEL_CACHE_DIR");
-            // SAFETY: this test serializes all cache-environment mutation in this target.
+            // SAFETY: this test serializes all cache-environment mutation in
+            // this target.
             unsafe { env::set_var("RUSKEL_CACHE_DIR", path) };
             Self {
                 _lock: lock,

@@ -61,6 +61,17 @@ fn must_get<'a>(crate_data: &'a Crate, id: &Id) -> Result<&'a Item> {
         .ok_or_else(|| RuskelError::ItemNotFound(format!("{id:?}")))
 }
 
+/// Whether rustdoc identifies an external item without an inline definition.
+fn is_external_reference(crate_data: &Crate, id: Id) -> bool {
+    !crate_data.index.contains_key(&id)
+        && crate_data.paths.get(&id).is_some_and(|path| {
+            crate_data
+                .index
+                .get(&crate_data.root)
+                .is_some_and(|root| path.crate_id != root.crate_id)
+        })
+}
+
 /// Append `name` to a path prefix using `::` separators.
 fn ppush(path_prefix: &str, name: &str) -> String {
     if path_prefix.is_empty() {
@@ -75,7 +86,8 @@ fn ppush(path_prefix: &str, name: &str) -> String {
 fn escape_path(path: &str) -> String {
     path.split("::")
         .map(|segment| {
-            // Some keywords like 'crate', 'self', 'super' cannot be raw identifiers
+            // Some keywords like 'crate', 'self', 'super' cannot be raw
+            // identifiers
             if segment == "crate" || segment == "self" || segment == "super" || segment == "Self" {
                 segment.to_string()
             } else if is_reserved_word(segment) {
@@ -976,14 +988,23 @@ impl RenderState<'_, '_> {
                     .collect();
                 return Ok(output);
             }
-            if self.is_snapshot() {
+            if self.is_snapshot()
+                && !import
+                    .id
+                    .is_some_and(|id| is_external_reference(self.crate_data, id))
+            {
                 return Err(RuskelError::Generate(format!(
                     "snapshot format 1 cannot resolve public glob export '{}'",
                     import.source
                 )));
             }
-            // If we can't resolve the glob import, fall back to rendering it as-is
-            return Ok(format!("pub use {}::*;\n", escape_path(&import.source)));
+            // If we can't resolve the glob import, fall back to rendering it
+            // as-is
+            return Ok(format!(
+                "{}pub use {}::*;\n",
+                self.item_prefix(item)?,
+                escape_path(&import.source)
+            ));
         }
 
         if let Some(imported_id) = import.id.as_ref()
@@ -1003,7 +1024,11 @@ impl RenderState<'_, '_> {
             return self.render_item(path_prefix, &aliased_item, Some(use_id), true);
         }
 
-        if self.is_snapshot() {
+        if self.is_snapshot()
+            && !import
+                .id
+                .is_some_and(|id| is_external_reference(self.crate_data, id))
+        {
             return Err(RuskelError::Generate(format!(
                 "snapshot format 1 cannot resolve public export '{}'",
                 import.source
@@ -1159,6 +1184,9 @@ impl RenderState<'_, '_> {
                 let Some(imported_id) = import.id else {
                     return Ok(Vec::new());
                 };
+                if is_external_reference(self.crate_data, imported_id) {
+                    return Ok(Vec::new());
+                }
                 let imported = must_get(self.crate_data, &imported_id)?;
                 if import.is_glob {
                     let module = try_extract_item!(imported, ItemEnum::Module)?;
@@ -1768,7 +1796,8 @@ impl RenderState<'_, '_> {
             })?;
         output.push_str(&signature);
 
-        // Use semicolon for trait method declarations, empty body for implementations
+        // Use semicolon for trait method declarations, empty body for
+        // implementations
         if is_trait_method && !function.has_body {
             output.push_str(";\n\n");
         } else {

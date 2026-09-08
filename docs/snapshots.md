@@ -81,6 +81,12 @@ Binary-only packages do not fail a mixed capture. Capture fails if all selected
 packages are binary-only. Public items with `#[doc(hidden)]` remain in the
 snapshot because Rust visibility defines the captured surface.
 
+External re-exports without inline rustdoc definitions remain `pub use`
+declarations, including aliases and globs. Their dependency APIs are not expanded
+at that occurrence. Workspace capture records selected dependency packages in
+their own snapshot files. Unknown references and missing local definitions still
+fail capture.
+
 Update mode writes a complete sibling tree and swaps it into place. A process
 stop between the two renames can leave one validated backup. The next update
 restores or removes that backup. Check mode never performs recovery. It reports

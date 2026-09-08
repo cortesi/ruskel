@@ -308,7 +308,8 @@ mod tests {
     #[test]
     fn test_use_with_reserved_keyword() {
         // Test that rustdoc doesn't output reserved keywords without escaping
-        // This should demonstrate the fix by not including invalid `use` statements
+        // This should demonstrate the fix by not including invalid `use`
+        // statements
         rt(
             r#"
                 pub mod test_mod {

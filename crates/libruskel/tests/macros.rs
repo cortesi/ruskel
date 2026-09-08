@@ -31,8 +31,8 @@ mod tests {
         "#;
 
         // The expected output should show the macro definitions
-        // but not the unexpanded macro invocations. Macro-generated items should
-        // remain visible when they are part of the public API.
+        // but not the unexpanded macro invocations. Macro-generated items
+        // should remain visible when they are part of the public API.
         let expected_output = r#"
             pub type f32x1 = Simd<f32, 1>;
 

@@ -486,6 +486,61 @@ fn snapshot_preserves_ordered_api_sequences() -> Result<()> {
 }
 
 #[test]
+fn snapshot_preserves_external_reexports_without_inline_definitions() -> Result<()> {
+    let root = fixture()?;
+    let mut crate_data = inspect_fixture(&root.package)?;
+    let external_id = rustdoc_types::Id(u32::MAX);
+    let use_id = crate_data
+        .index
+        .values()
+        .find(|item| matches!(item.inner, ItemEnum::Use(_)))
+        .unwrap()
+        .id;
+    crate_data.paths.insert(
+        external_id,
+        rustdoc_types::ItemSummary {
+            crate_id: 1,
+            path: vec!["dependency".into()],
+            kind: rustdoc_types::ItemKind::Module,
+        },
+    );
+    let item = crate_data.index.get_mut(&use_id).unwrap();
+    item.docs = Some("External API.".into());
+    item.inner = ItemEnum::Use(rustdoc_types::Use {
+        source: "dependency".into(),
+        name: "type".into(),
+        id: Some(external_id),
+        is_glob: false,
+    });
+    let rendered = snapshot(&crate_data)?;
+    assert!(rendered.contains("/// External API."), "{rendered}");
+    assert!(
+        rendered.contains("pub use dependency as r#type;"),
+        "{rendered}"
+    );
+
+    let ItemEnum::Use(import) = &mut crate_data.index.get_mut(&use_id).unwrap().inner else {
+        unreachable!()
+    };
+    import.is_glob = true;
+    let rendered = snapshot(&crate_data)?;
+    assert!(rendered.contains("/// External API."), "{rendered}");
+    assert!(rendered.contains("pub use dependency::*;"), "{rendered}");
+
+    crate_data.paths.get_mut(&external_id).unwrap().crate_id = 0;
+    assert!(
+        snapshot(&crate_data).is_err(),
+        "missing local definitions must fail"
+    );
+    crate_data.paths.remove(&external_id);
+    assert!(
+        snapshot(&crate_data).is_err(),
+        "unknown references must fail"
+    );
+    Ok(())
+}
+
+#[test]
 fn snapshot_renders_proc_macros_and_rejects_unsupported_public_items() -> Result<()> {
     let root = fixture()?;
     let original = inspect_fixture(&root.package)?;

@@ -501,7 +501,8 @@ impl ResolvedTarget {
             components.remove(0);
         }
 
-        // Remove the last component (file name) and add it back without the extension
+        // Remove the last component (file name) and add it back without the
+        // extension
         if let Some(file_name) = components.pop()
             && let Some(stem) = Path::new(&file_name).file_stem().and_then(|s| s.to_str())
         {
@@ -733,8 +734,8 @@ mod tests {
         fn set_path(key: &'static str, value: &Path) -> Self {
             let guard = ENV_LOCK.lock().expect("env mutex poisoned");
             let original = env::var_os(key);
-            // SAFETY: the mutex ensures exclusive access while we mutate process
-            // environment.
+            // SAFETY: the mutex ensures exclusive access while we mutate
+            // process environment.
             unsafe { env::set_var(key, value) };
             Self {
                 key,
@@ -746,7 +747,8 @@ mod tests {
 
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
-            // SAFETY: still holding the mutex guard so this mutation is synchronized.
+            // SAFETY: still holding the mutex guard so this mutation is
+            // synchronized.
             match &self.original {
                 Some(value) => unsafe { env::set_var(self.key, value) },
                 None => unsafe { env::remove_var(self.key) },

@@ -345,7 +345,9 @@ fn validate_item(
                     import.source
                 )));
             }
-            if let Some(target) = import.id {
+            if let Some(target) = import.id
+                && !super::is_external_reference(crate_data, target)
+            {
                 validate_item(crate_data, target, true, active)?;
             }
         }
