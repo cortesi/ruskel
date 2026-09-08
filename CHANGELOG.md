@@ -1,5 +1,7 @@
 # Unreleased
 
+- [change] Publish `ruskel` and `ruskel-snapshot` as separate packages so each
+  `cargo install` command installs only the named tool.
 - [fix] Reject symlinked cache directories and cache/snapshot lock files before
   using them for owned storage operations.
 - [fix] Preserve impl constants, generic associated types and their where

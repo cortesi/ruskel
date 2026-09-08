@@ -3511,6 +3511,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ruskel-snapshot"
+version = "0.0.11"
+dependencies = [
+ "assert_cmd",
+ "clap",
+ "libruskel",
+ "predicates",
+ "tempfile",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.40.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

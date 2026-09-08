@@ -1,0 +1,21 @@
+[package]
+name = "ruskel-snapshot"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Captures canonical public API snapshots for Rust workspaces"
+readme.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+libruskel = { workspace = true }
+clap = { workspace = true, features = ["derive", "env"] }
+
+[dev-dependencies]
+assert_cmd = "2.2.2"
+predicates = "3.1.4"
+tempfile = { workspace = true }

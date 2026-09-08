@@ -72,14 +72,16 @@ rustup toolchain install nightly
 rustup component add --toolchain nightly rust-docs-json
 ```
 
-Install Ruskel:
+Install the command you need:
 
 ```sh
 cargo install ruskel
+cargo install ruskel-snapshot
 ```
 
 Ruskel requires nightly to run but can be installed with any toolchain.
-The package installs both `ruskel` and `ruskel-snapshot`.
+The `ruskel` and `ruskel-snapshot` commands are separate packages. From a
+source checkout, `./scripts/install.sh` installs both.
 
 ---
 
