@@ -101,12 +101,12 @@ ruskel --help
 Capture the public APIs of workspace crates in a generated directory:
 
 ```sh
-ruskel-snapshot --output ./api ./crates/*
+ruskel-snapshot --workspace --output ./api
 ```
 
 Snapshots use the installed `nightly` toolchain by default. Updating that
 toolchain can change the generated API text. See the [snapshot
-reference](docs/snapshots.md) for setup, profile migration, Git hooks, and CI
+reference](docs/snapshots.md) for setup, capture options, Git hooks, and CI
 checks.
 
 ```sh

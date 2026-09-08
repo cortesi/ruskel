@@ -19,7 +19,7 @@ use super::{
 use crate::{
     cache::{BuildLease, CacheHandle},
     error::{Result, RuskelError, convert_cargo_error},
-    toolchain::{nightly_identity, toolchain_identity},
+    toolchain::{nightly_identity, remove_loader_paths, toolchain_identity},
 };
 
 /// Build rustdoc JSON for one resolved target.
@@ -478,6 +478,7 @@ impl RustdocInvocation {
     fn run(&self) -> io::Result<Output> {
         let mut command = Command::new(&self.program);
         command.args(&self.args).envs(self.envs.iter().cloned());
+        remove_loader_paths(&mut command);
         command.output()
     }
 

@@ -100,26 +100,10 @@ mod tests {
         assert!(status.success(), "generate fixture lockfile");
     }
 
-    fn host_target() -> String {
-        let output = Command::new("rustup")
-            .args(["run", TOOLCHAIN, "rustc", "-vV"])
-            .output()
-            .expect("inspect fixture toolchain");
-        assert!(output.status.success(), "fixture toolchain is installed");
-        String::from_utf8(output.stdout)
-            .expect("UTF-8 compiler description")
-            .lines()
-            .find_map(|line| line.strip_prefix("host: "))
-            .expect("compiler host")
-            .to_string()
-    }
-
     fn profile(features: SnapshotFeatures) -> SnapshotProfile {
         SnapshotProfile::resolve(
-            None,
             SnapshotProfileOptions::new()
                 .with_toolchain(TOOLCHAIN)
-                .with_target(host_target())
                 .with_features(features),
         )
         .expect("valid fixture profile")

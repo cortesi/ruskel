@@ -1,6 +1,10 @@
 //! Command-line interface for canonical workspace API snapshots.
 
-use std::{path::PathBuf, process::ExitCode};
+use std::{
+    env,
+    path::PathBuf,
+    process::{Command, ExitCode},
+};
 
 use clap::Parser;
 use libruskel::{
@@ -58,8 +62,12 @@ struct Cli {
     #[arg(long, value_name = "TRIPLE")]
     target: Option<String>,
 
+    /// Capture all packages in the current Cargo workspace.
+    #[arg(long, conflicts_with = "inputs")]
+    workspace: bool,
+
     /// Cargo manifests or directories that contain Cargo.toml.
-    #[arg(required = true, value_name = "INPUT")]
+    #[arg(required_unless_present = "workspace", value_name = "INPUT")]
     inputs: Vec<PathBuf>,
 }
 
@@ -82,6 +90,53 @@ impl Cli {
         }
         Ok(options)
     }
+
+    /// Resolve the requested positional or workspace input.
+    fn capture_inputs(&self) -> libruskel::Result<Vec<PathBuf>> {
+        if self.workspace {
+            Ok(vec![workspace_manifest()?])
+        } else {
+            Ok(self.inputs.clone())
+        }
+    }
+}
+
+/// Locate the workspace manifest that contains the current directory.
+fn workspace_manifest() -> libruskel::Result<PathBuf> {
+    let current_dir =
+        env::current_dir().map_err(|error| libruskel::RuskelError::SnapshotDiscovery {
+            input: PathBuf::from("."),
+            message: format!("cannot inspect the current directory: {error}"),
+        })?;
+    let output = Command::new("cargo")
+        .args(["locate-project", "--workspace", "--message-format", "plain"])
+        .current_dir(&current_dir)
+        .output()
+        .map_err(|error| libruskel::RuskelError::SnapshotDiscovery {
+            input: current_dir.clone(),
+            message: format!("failed to run cargo locate-project: {error}"),
+        })?;
+    if !output.status.success() {
+        let message = String::from_utf8_lossy(&output.stderr);
+        return Err(libruskel::RuskelError::SnapshotDiscovery {
+            input: current_dir,
+            message: format!("cargo locate-project failed: {}", message.trim()),
+        });
+    }
+    let manifest = String::from_utf8(output.stdout).map_err(|error| {
+        libruskel::RuskelError::SnapshotDiscovery {
+            input: current_dir.clone(),
+            message: format!("cargo locate-project returned invalid UTF-8: {error}"),
+        }
+    })?;
+    let manifest = manifest.trim_end_matches(['\r', '\n']);
+    if manifest.is_empty() {
+        return Err(libruskel::RuskelError::SnapshotDiscovery {
+            input: current_dir,
+            message: "cargo locate-project returned no workspace manifest".to_string(),
+        });
+    }
+    Ok(PathBuf::from(manifest))
 }
 
 /// Run one capture and return the process status.
@@ -92,8 +147,8 @@ fn run(cli: Cli) -> libruskel::Result<ExitCode> {
         SnapshotMode::Update
     };
     let store = SnapshotStore::open(&cli.output, mode)?;
-    let profile = SnapshotProfile::resolve(store.profile(), cli.profile_options()?)?;
-    let request = SnapshotRequest::new(cli.inputs, profile)?;
+    let profile = SnapshotProfile::resolve(cli.profile_options()?)?;
+    let request = SnapshotRequest::new(cli.capture_inputs()?, profile)?;
     let snapshot = Ruskel::new()
         .with_cache_dir(cli.cache_dir)
         .with_offline(cli.offline)
@@ -162,6 +217,7 @@ mod tests {
         assert_eq!(cli.output, PathBuf::from("api"));
         assert!(cli.check && cli.offline && cli.verbose);
         assert_eq!(cli.features, ["alpha/extra", "beta/std"]);
+        assert!(!cli.workspace);
         assert_eq!(cli.inputs.len(), 2);
         let options = cli.profile_options().expect("valid features");
         let features = options.features().expect("explicit features");
@@ -169,7 +225,21 @@ mod tests {
     }
 
     #[test]
-    fn omitted_profile_flags_reuse_the_stored_profile() {
+    fn workspace_replaces_the_positional_input() {
+        let cli = Cli::try_parse_from(["ruskel-snapshot", "--output", "api", "--workspace"])
+            .expect("workspace selector");
+        assert!(cli.workspace);
+        assert!(cli.inputs.is_empty());
+
+        assert!(
+            Cli::try_parse_from(["ruskel-snapshot", "--output", "api", "--workspace", ".",])
+                .is_err()
+        );
+        assert!(Cli::try_parse_from(["ruskel-snapshot", "--output", "api"]).is_err());
+    }
+
+    #[test]
+    fn omitted_profile_flags_use_invocation_defaults() {
         let cli = Cli::try_parse_from(["ruskel-snapshot", "--output", "api", "."])
             .expect("valid arguments");
         let options = cli.profile_options().expect("valid defaults");

@@ -134,6 +134,17 @@ pub fn toolchain_binary(toolchain: &str, binary: &str) -> Result<PathBuf> {
     parse_binary_path(&output.stdout, binary)
 }
 
+/// Prevent a selected toolchain from loading another toolchain's libraries.
+pub(crate) fn remove_loader_paths(command: &mut Command) {
+    for variable in [
+        "DYLD_LIBRARY_PATH",
+        "DYLD_FALLBACK_LIBRARY_PATH",
+        "LD_LIBRARY_PATH",
+    ] {
+        command.env_remove(variable);
+    }
+}
+
 /// Hash exact command output bytes into a stable full identity.
 fn identity_from_stdout(stdout: &[u8]) -> String {
     hex::encode(Sha256::digest(stdout))
@@ -231,6 +242,7 @@ fn run_command(
 ) -> Result<Output> {
     let mut command = Command::new(program);
     command.args(args);
+    remove_loader_paths(&mut command);
     if quiet_stderr {
         command.stderr(Stdio::null());
     }

@@ -23,7 +23,7 @@ use crate::{
     search::SearchItemKind,
     selection::{RenderSelection, derive_trait_name, should_render_impl},
     signature,
-    toolchain::toolchain_binary,
+    toolchain::{remove_loader_paths, toolchain_binary},
 };
 
 /// Canonical snapshot rendering rules.
@@ -1833,6 +1833,7 @@ fn format_snapshot_v1(toolchain: &str, source: &str) -> Result<String> {
 /// Build the exact format 1 rustfmt command.
 fn snapshot_rustfmt_command(rustfmt: &FsPath, config_path: &FsPath, work_dir: &FsPath) -> Command {
     let mut command = Command::new(rustfmt);
+    remove_loader_paths(&mut command);
     command
         .args(["--edition", "2024", "--style-edition", "2024"])
         .arg("--config-path")

@@ -12,9 +12,6 @@ use crate::{
     target_resolution::create_quiet_cargo_config,
 };
 
-/// Generated ownership marker reserved by the snapshot store.
-const MARKER_FILENAME: &str = ".ruskel-snapshot.toml";
-
 /// Owned metadata for one selected library-like Cargo package.
 #[derive(Debug, Clone)]
 pub struct DiscoveredPackage {
@@ -219,10 +216,7 @@ fn validate_artifact_names(packages: &[DiscoveredPackage]) -> Result<()> {
     let mut folded = BTreeMap::<String, &str>::new();
     for package in packages {
         let filename = package.filename.as_str();
-        if filename == MARKER_FILENAME
-            || Path::new(filename).components().count() != 1
-            || filename.contains(['/', '\\'])
-        {
+        if Path::new(filename).components().count() != 1 || filename.contains(['/', '\\']) {
             return Err(RuskelError::SnapshotDiscovery {
                 input: package.manifest_path.clone(),
                 message: format!(

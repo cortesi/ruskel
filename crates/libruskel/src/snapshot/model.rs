@@ -2,11 +2,10 @@ use std::{path::PathBuf, process::Command};
 
 use crate::{
     error::{Result, RuskelError},
-    toolchain::{host_target, normalize_dated_nightly, toolchain_binary},
+    toolchain::{host_target, normalize_dated_nightly, remove_loader_paths, toolchain_binary},
 };
 
-/// Rolling nightly channel used when a snapshot has no stored or explicit
-/// toolchain.
+/// Rolling nightly channel used when a snapshot has no explicit toolchain.
 const DEFAULT_TOOLCHAIN: &str = "nightly";
 
 /// Cargo feature policy shared by every crate in one snapshot.
@@ -78,7 +77,7 @@ impl Default for SnapshotFeatures {
     }
 }
 
-/// Optional first-capture or profile-migration overrides.
+/// Optional capture profile overrides.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SnapshotProfileOptions {
     /// Explicit nightly toolchain override.
@@ -129,11 +128,9 @@ impl SnapshotProfileOptions {
     }
 }
 
-/// Fully resolved capture profile stored with one snapshot tree.
+/// Fully resolved capture profile for one invocation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SnapshotProfile {
-    /// Snapshot format version.
-    format: u32,
     /// Nightly toolchain.
     toolchain: String,
     /// Cargo target triple.
@@ -143,18 +140,13 @@ pub struct SnapshotProfile {
 }
 
 impl SnapshotProfile {
-    /// Snapshot format implemented by this release.
-    pub const FORMAT: u32 = 1;
-
-    /// Validate a complete format 1 profile against the local Rust
-    /// installation.
+    /// Validate a complete profile against the local Rust installation.
     pub fn new(
         toolchain: impl Into<String>,
         target: impl Into<String>,
         features: SnapshotFeatures,
     ) -> Result<Self> {
         let profile = Self {
-            format: Self::FORMAT,
             toolchain: toolchain.into(),
             target: target.into(),
             features,
@@ -163,15 +155,20 @@ impl SnapshotProfile {
         Ok(profile)
     }
 
-    /// Resolve stored values and explicit overrides as one atomic profile.
-    pub fn resolve(stored: Option<&Self>, options: SnapshotProfileOptions) -> Result<Self> {
-        let values = resolve_profile_values(stored, options, host_target)?;
+    /// Resolve explicit overrides and invocation defaults as one profile.
+    pub fn resolve(options: SnapshotProfileOptions) -> Result<Self> {
+        let values = resolve_profile_values(options, host_target)?;
         Self::new(values.0, values.1, values.2)
     }
 
-    /// Return the snapshot format version.
-    pub fn format(&self) -> u32 {
-        self.format
+    /// Build a profile without consulting an installed toolchain.
+    #[cfg(test)]
+    pub(crate) fn fixture() -> Self {
+        Self {
+            toolchain: "nightly-2099-01-01".to_string(),
+            target: "fixture-target".to_string(),
+            features: SnapshotFeatures::default(),
+        }
     }
 
     /// Return the selected nightly toolchain.
@@ -197,37 +194,6 @@ impl SnapshotProfile {
         }
     }
 
-    /// Build a profile from a validated format marker without inspecting the
-    /// local Rust installation.
-    pub(crate) fn from_marker(
-        format: u32,
-        toolchain: String,
-        target: String,
-        features: SnapshotFeatures,
-    ) -> Result<Self> {
-        if format != Self::FORMAT {
-            return Err(RuskelError::SnapshotProfile(format!(
-                "snapshot format {format} is not supported"
-            )));
-        }
-        if !is_snapshot_toolchain(&toolchain) {
-            return Err(RuskelError::SnapshotProfile(format!(
-                "stored toolchain '{toolchain}' is not nightly or a dated nightly"
-            )));
-        }
-        if target.trim().is_empty() {
-            return Err(RuskelError::SnapshotProfile(
-                "stored target triple cannot be empty".to_string(),
-            ));
-        }
-        Ok(Self {
-            format,
-            toolchain,
-            target,
-            features,
-        })
-    }
-
     /// Validate all selected profile values after resolution is complete.
     fn validate(&self) -> Result<()> {
         if !is_snapshot_toolchain(&self.toolchain) {
@@ -251,32 +217,22 @@ impl SnapshotProfile {
 /// Profile fields selected before local installation validation.
 type ProfileValues = (String, String, SnapshotFeatures);
 
-/// Select all stored, explicit, and environment-derived profile values.
+/// Select all explicit and environment-derived profile values.
 fn resolve_profile_values<H>(
-    stored: Option<&SnapshotProfile>,
     options: SnapshotProfileOptions,
     compiler_host: H,
 ) -> Result<ProfileValues>
 where
     H: FnOnce(&str) -> Result<String>,
 {
-    let toolchain = match options.toolchain {
-        Some(toolchain) => toolchain,
-        None => stored
-            .map(|profile| profile.toolchain.clone())
-            .unwrap_or_else(|| DEFAULT_TOOLCHAIN.to_string()),
-    };
+    let toolchain = options
+        .toolchain
+        .unwrap_or_else(|| DEFAULT_TOOLCHAIN.to_string());
     let target = match options.target {
         Some(target) => target,
-        None => match stored {
-            Some(profile) => profile.target.clone(),
-            None => compiler_host(&toolchain)?,
-        },
+        None => compiler_host(&toolchain)?,
     };
-    let features = options
-        .features
-        .or_else(|| stored.map(|profile| profile.features.clone()))
-        .unwrap_or_default();
+    let features = options.features.unwrap_or_default();
     Ok((toolchain, target, features))
 }
 
@@ -288,7 +244,9 @@ fn is_snapshot_toolchain(toolchain: &str) -> bool {
 
 /// Require the selected target in the selected rustup toolchain.
 fn ensure_target_installed(toolchain: &str, target: &str) -> Result<()> {
-    let output = Command::new("rustup")
+    let mut command = Command::new("rustup");
+    remove_loader_paths(&mut command);
+    let output = command
         .args(["target", "list", "--installed", "--toolchain", toolchain])
         .output()
         .map_err(|error| {
@@ -409,15 +367,6 @@ impl ApiSnapshot {
 mod tests {
     use super::*;
 
-    fn unvalidated_profile(toolchain: &str, target: &str) -> SnapshotProfile {
-        SnapshotProfile {
-            format: SnapshotProfile::FORMAT,
-            toolchain: toolchain.to_string(),
-            target: target.to_string(),
-            features: SnapshotFeatures::default(),
-        }
-    }
-
     #[test]
     fn feature_forms_are_canonical() -> Result<()> {
         assert_eq!(SnapshotFeatures::default().features(), &[] as &[String]);
@@ -435,7 +384,7 @@ mod tests {
 
     #[test]
     fn first_capture_uses_the_rolling_nightly() -> Result<()> {
-        let values = resolve_profile_values(None, SnapshotProfileOptions::new(), |toolchain| {
+        let values = resolve_profile_values(SnapshotProfileOptions::new(), |toolchain| {
             assert_eq!(toolchain, "nightly");
             Ok("aarch64-apple-darwin".to_string())
         })?;
@@ -447,7 +396,6 @@ mod tests {
     #[test]
     fn explicit_profile_does_not_inspect_the_default_toolchain() -> Result<()> {
         let values = resolve_profile_values(
-            None,
             SnapshotProfileOptions::new()
                 .with_toolchain("nightly-2026-07-01")
                 .with_target("aarch64-apple-darwin"),
@@ -455,19 +403,6 @@ mod tests {
         )?;
         assert_eq!(values.0, "nightly-2026-07-01");
         assert_eq!(values.1, "aarch64-apple-darwin");
-        Ok(())
-    }
-
-    #[test]
-    fn migration_preserves_stored_target() -> Result<()> {
-        let stored = unvalidated_profile("nightly-2026-06-01", "x86_64-unknown-linux-gnu");
-        let values = resolve_profile_values(
-            Some(&stored),
-            SnapshotProfileOptions::new().with_toolchain("nightly-2026-07-01"),
-            |_| unreachable!(),
-        )?;
-        assert_eq!(values.0, "nightly-2026-07-01");
-        assert_eq!(values.1, "x86_64-unknown-linux-gnu");
         Ok(())
     }
 }

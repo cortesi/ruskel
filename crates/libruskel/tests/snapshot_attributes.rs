@@ -84,10 +84,8 @@ pub fn helper(_: TokenStream) -> TokenStream {
         /// Capture the API package through the public snapshot boundary.
         fn capture(&self) -> Result<ApiSnapshot> {
             let profile = SnapshotProfile::resolve(
-                None,
                 SnapshotProfileOptions::new()
                     .with_toolchain(TOOLCHAIN)
-                    .with_target(host_target()?)
                     .with_features(SnapshotFeatures::default()),
             )?;
             let request = SnapshotRequest::new(vec![self.api_manifest.clone()], profile)?;
@@ -114,26 +112,6 @@ pub fn helper(_: TokenStream) -> TokenStream {
             .find(|entry| entry.package() == "helper-api")
             .expect("helper API snapshot")
             .contents()
-    }
-
-    /// Return the host target used by the fixed snapshot toolchain.
-    fn host_target() -> Result<String> {
-        let output = Command::new("rustup")
-            .args(["run", TOOLCHAIN, "rustc", "-vV"])
-            .output()?;
-        if !output.status.success() {
-            return Err(libruskel::RuskelError::Generate(
-                "snapshot toolchain host query failed".to_string(),
-            ));
-        }
-        String::from_utf8(output.stdout)
-            .map_err(|error| libruskel::RuskelError::Generate(error.to_string()))?
-            .lines()
-            .find_map(|line| line.strip_prefix("host: "))
-            .map(str::to_string)
-            .ok_or_else(|| {
-                libruskel::RuskelError::Generate("snapshot toolchain host is missing".to_string())
-            })
     }
 
     #[test]
