@@ -1,5 +1,10 @@
 # Unreleased
 
+- [fix] Fold derivable trait impls into `#[derive(...)]` in API snapshots,
+  matching `ruskel` output. Snapshots no longer expand serde, thiserror, and
+  similar derives into impl blocks with macro-internal paths.
+- [fix] Render `#[derive(...)]` on unions and omit the compiler-internal
+  `StructuralPartialEq` marker from derive lists.
 - [change] Publish `ruskel` and `ruskel-snapshot` as separate packages so each
   `cargo install` command installs only the named tool.
 - [fix] Reject symlinked cache directories and cache/snapshot lock files before

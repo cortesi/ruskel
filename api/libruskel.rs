@@ -62,18 +62,23 @@ pub mod libruskel {
     }
 
     /// Complete ordered snapshot captured without destination I/O.
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct ApiSnapshot {}
 
     /// A cache entry or operation that Ruskel skipped.
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct CacheIssue {}
 
     /// A read-only snapshot of the dedicated Ruskel cache.
+    #[derive(Clone, Debug)]
     pub struct CacheStatus {}
 
     /// Result of one explicit cache-clean operation.
+    #[derive(Clone, Debug)]
     pub struct CleanReport {}
 
     /// Cargo feature and visibility options for one crate inspection request.
+    #[derive(Clone, Debug, Default, Eq, PartialEq)]
     pub struct CrateRequest {
         /// Build without the crate's default features.
         pub no_default_features: bool,
@@ -86,22 +91,28 @@ pub mod libruskel {
     }
 
     /// One canonical generated crate file held in memory.
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct CrateSnapshot {}
 
     /// Binary target metadata for frontmatter rendering.
+    #[derive(Clone, Debug)]
     pub struct FrontmatterBinaryTarget {}
 
     /// Configuration describing optional frontmatter comments rendered ahead of
     /// skeleton output.
+    #[derive(Clone, Debug, Default)]
     pub struct FrontmatterConfig {}
 
     /// Individual search hit included in the frontmatter summary.
+    #[derive(Clone, Debug)]
     pub struct FrontmatterHit {}
 
     /// Summary of a search invocation attached to the frontmatter.
+    #[derive(Clone, Debug)]
     pub struct FrontmatterSearch {}
 
     /// Lightweight record describing an item for list mode output.
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct ListItem {
         /// Kind classification for the item.
         pub kind: SearchItemKind,
@@ -110,6 +121,7 @@ pub mod libruskel {
     }
 
     /// Configurable renderer that turns rustdoc data into skeleton Rust source.
+    #[derive(Default)]
     pub struct Renderer {}
 
     /// Convenience alias for results returned by libruskel operations.
@@ -122,9 +134,11 @@ pub mod libruskel {
     /// locally, then uses 'cargo doc' with the nightly toolchain to generate JSON
     /// output. This JSON is parsed and used to render the skeletonized code. Users
     /// must have the nightly Rust toolchain installed and available.
+    #[derive(Clone, Debug, Default)]
     pub struct Ruskel {}
 
     /// Errors surfaced while generating rustdoc skeletons.
+    #[derive(Debug, Display, Error)]
     pub enum RuskelError {
         #[error("Invalid snapshot profile: {0}")]
         /// Indicates that a snapshot profile is invalid or unavailable.
@@ -223,9 +237,11 @@ pub mod libruskel {
     }
 
     /// Domains that a search query can operate over.
+    #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
     pub struct SearchDomain(_);
 
     /// Classified kind associated with a search result.
+    #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
     pub enum SearchItemKind {
         /// Synthetic crate root module.
         Crate,
@@ -274,6 +290,7 @@ pub mod libruskel {
     }
 
     /// Options that control how a crate search should be performed.
+    #[derive(Clone, Debug)]
     pub struct SearchOptions {
         /// Raw user query to evaluate.
         pub query: String,
@@ -286,6 +303,7 @@ pub mod libruskel {
     }
 
     /// Component in a canonical path leading to an item.
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct SearchPathSegment {
         /// Raw identifier for the segment without keyword escaping.
         pub name: String,
@@ -298,6 +316,7 @@ pub mod libruskel {
     }
 
     /// Aggregated search response containing matches and rendered output.
+    #[derive(Clone, Debug)]
     pub struct SearchResponse {
         /// Matched records returned by the query.
         pub results: Vec<SearchResult>,
@@ -306,6 +325,7 @@ pub mod libruskel {
     }
 
     /// Result of performing a query against a crate index.
+    #[derive(Clone, Debug)]
     pub struct SearchResult {
         /// Identifier of the matching item.
         pub item_id: rustdoc_types::Id,
@@ -330,9 +350,11 @@ pub mod libruskel {
     }
 
     /// One path and its typed comparison result.
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct SnapshotChange {}
 
     /// One typed snapshot comparison result.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum SnapshotChangeKind {
         /// The captured entry does not exist in the stored tree.
         Added,
@@ -349,9 +371,11 @@ pub mod libruskel {
     }
 
     /// Cargo feature policy shared by every crate in one snapshot.
+    #[derive(Clone, Debug, Default, Eq, PartialEq)]
     pub struct SnapshotFeatures {}
 
     /// Persistence behavior for one snapshot destination.
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum SnapshotMode {
         /// Replace the generated tree when captured bytes differ.
         Update,
@@ -360,24 +384,31 @@ pub mod libruskel {
     }
 
     /// Fully resolved capture profile for one invocation.
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct SnapshotProfile {}
 
     /// Optional capture profile overrides.
+    #[derive(Clone, Debug, Default, Eq, PartialEq)]
     pub struct SnapshotProfileOptions {}
 
     /// Complete ordered result from one snapshot synchronization.
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct SnapshotReport {}
 
     /// Inputs and resolved profile for one in-memory capture.
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct SnapshotRequest {}
 
     /// One physically resolved snapshot destination.
+    #[derive(Debug)]
     pub struct SnapshotStore {}
 
     /// Status for one nightly toolchain entry in the cache.
+    #[derive(Clone, Debug)]
     pub struct ToolchainCacheStatus {}
 
     /// Status for one workspace entry in the cache.
+    #[derive(Clone, Debug)]
     pub struct WorkspaceCacheStatus {}
 
     impl ApiSnapshot {
@@ -389,23 +420,6 @@ pub mod libruskel {
 
         /// Return the canonical profile used for this capture.
         pub fn profile(&self) -> &SnapshotProfile {}
-    }
-
-    impl Clone for ApiSnapshot {
-        fn clone(&self) -> ApiSnapshot {}
-    }
-
-    impl Debug for ApiSnapshot {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Eq for ApiSnapshot {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
-    }
-
-    impl PartialEq for ApiSnapshot {
-        fn eq(&self, other: &ApiSnapshot) -> bool {}
     }
 
     impl Binary for SearchDomain {
@@ -447,23 +461,6 @@ pub mod libruskel {
     impl BitXorAssign for SearchDomain {
         /// The bitwise exclusive-or (`^`) of the bits in `self` and `other`.
         fn bitxor_assign(&mut self, other: Self) {}
-    }
-
-    impl Clone for SearchDomain {
-        fn clone(&self) -> SearchDomain {}
-    }
-
-    impl Debug for SearchDomain {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Default for SearchDomain {
-        fn default() -> Self {}
-    }
-
-    impl Eq for SearchDomain {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
     }
 
     impl Extend<SearchDomain> for SearchDomain {
@@ -509,10 +506,6 @@ pub mod libruskel {
     impl Octal for SearchDomain {
         fn fmt(&self, f: &mut __private::core::fmt::Formatter<'_>) -> __private::core::fmt::Result {
         }
-    }
-
-    impl PartialEq for SearchDomain {
-        fn eq(&self, other: &SearchDomain) -> bool {}
     }
 
     impl PublicFlags for SearchDomain {
@@ -657,23 +650,6 @@ pub mod libruskel {
         pub fn path(&self) -> &Path {}
     }
 
-    impl Clone for CacheIssue {
-        fn clone(&self) -> CacheIssue {}
-    }
-
-    impl Debug for CacheIssue {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Eq for CacheIssue {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
-    }
-
-    impl PartialEq for CacheIssue {
-        fn eq(&self, other: &CacheIssue) -> bool {}
-    }
-
     impl CacheStatus {
         /// Return entries that status could not safely recognize or inspect.
         pub fn skipped(&self) -> &[CacheIssue] {}
@@ -692,14 +668,6 @@ pub mod libruskel {
 
         /// Return usage above the soft high-water mark.
         pub fn excess_bytes(&self) -> u64 {}
-    }
-
-    impl Clone for CacheStatus {
-        fn clone(&self) -> CacheStatus {}
-    }
-
-    impl Debug for CacheStatus {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
     }
 
     impl CleanReport {
@@ -729,39 +697,6 @@ pub mod libruskel {
         pub fn is_complete(&self) -> bool {}
     }
 
-    impl Clone for CleanReport {
-        fn clone(&self) -> CleanReport {}
-    }
-
-    impl Debug for CleanReport {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Clone for CrateRequest {
-        fn clone(&self) -> CrateRequest {}
-    }
-
-    impl Debug for CrateRequest {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Default for CrateRequest {
-        fn default() -> CrateRequest {}
-    }
-
-    impl Eq for CrateRequest {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
-    }
-
-    impl PartialEq for CrateRequest {
-        fn eq(&self, other: &CrateRequest) -> bool {}
-    }
-
-    impl Clone for CrateSnapshot {
-        fn clone(&self) -> CrateSnapshot {}
-    }
-
     impl CrateSnapshot {
         /// Return the Cargo package name.
         pub fn package(&self) -> &str {}
@@ -776,42 +711,25 @@ pub mod libruskel {
         pub fn filename(&self) -> &str {}
     }
 
-    impl Debug for CrateSnapshot {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
+    impl From<Error> for RuskelError {
+        fn from(err: rust_format::Error) -> Self {}
     }
 
-    impl Eq for CrateSnapshot {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
+    impl From<Error> for RuskelError {
+        fn from(err: serde_json::Error) -> Self {}
     }
 
-    impl PartialEq for CrateSnapshot {
-        fn eq(&self, other: &CrateSnapshot) -> bool {}
+    impl From<Error> for RuskelError {
+        fn from(err: syntect::Error) -> Self {}
     }
 
-    impl Clone for FrontmatterBinaryTarget {
-        fn clone(&self) -> FrontmatterBinaryTarget {}
-    }
-
-    impl Debug for FrontmatterBinaryTarget {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
+    impl From<Error> for RuskelError {
+        fn from(source: io::Error) -> Self {}
     }
 
     impl FrontmatterBinaryTarget {
         /// Build a binary target descriptor for frontmatter output.
         pub fn new(name: impl Into<String>, is_bin_only: bool) -> Self {}
-    }
-
-    impl Clone for FrontmatterConfig {
-        fn clone(&self) -> FrontmatterConfig {}
-    }
-
-    impl Debug for FrontmatterConfig {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Default for FrontmatterConfig {
-        fn default() -> FrontmatterConfig {}
     }
 
     impl FrontmatterConfig {
@@ -842,25 +760,9 @@ pub mod libruskel {
         }
     }
 
-    impl Clone for FrontmatterHit {
-        fn clone(&self) -> FrontmatterHit {}
-    }
-
-    impl Debug for FrontmatterHit {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
     impl FrontmatterHit {
         /// Build a frontmatter search hit summary.
         pub fn new(path: impl Into<String>, domains: SearchDomain) -> Self {}
-    }
-
-    impl Clone for FrontmatterSearch {
-        fn clone(&self) -> FrontmatterSearch {}
-    }
-
-    impl Debug for FrontmatterSearch {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
     }
 
     impl FrontmatterSearch {
@@ -875,33 +777,28 @@ pub mod libruskel {
         }
     }
 
-    impl Clone for ListItem {
-        fn clone(&self) -> ListItem {}
-    }
+    impl Renderer {
+        /// Apply a filter to output. The filter is a path BELOW the outermost
+        /// module.
+        pub fn with_filter(self, filter: &str) -> Self {}
 
-    impl Debug for ListItem {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
+        /// Attach optional frontmatter metadata to the rendered output.
+        pub fn with_frontmatter(self, frontmatter: FrontmatterConfig) -> Self {}
 
-    impl Eq for ListItem {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
-    }
+        /// Create a renderer with default configuration.
+        pub fn new() -> Self {}
 
-    impl PartialEq for ListItem {
-        fn eq(&self, other: &ListItem) -> bool {}
-    }
+        /// Render a crate into formatted Rust source text.
+        pub fn render(&self, crate_data: &Crate) -> Result<String> {}
 
-    impl Clone for Ruskel {
-        fn clone(&self) -> Ruskel {}
-    }
+        /// Render impl blocks for auto traits like Send and Sync?
+        pub fn with_auto_impls(self, render_auto_impls: bool) -> Self {}
 
-    impl Debug for Ruskel {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
+        /// Render impl blocks for traits implemented for all types?
+        pub fn with_blanket_impls(self, render_blanket_impls: bool) -> Self {}
 
-    impl Default for Ruskel {
-        fn default() -> Self {}
+        /// Render private items?
+        pub fn with_private_items(self, render_private_items: bool) -> Self {}
     }
 
     impl Ruskel {
@@ -1017,38 +914,9 @@ pub mod libruskel {
         pub fn inspect(&self, target: &str, request: &CrateRequest) -> Result<Crate> {}
     }
 
-    impl Clone for SearchItemKind {
-        fn clone(&self) -> SearchItemKind {}
-    }
-
-    impl Debug for SearchItemKind {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Eq for SearchItemKind {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
-    }
-
-    impl Hash for SearchItemKind {
-        fn hash<__H: hash::Hasher>(&self, state: &mut __H) {}
-    }
-
-    impl PartialEq for SearchItemKind {
-        fn eq(&self, other: &SearchItemKind) -> bool {}
-    }
-
     impl SearchItemKind {
         /// Human-friendly label describing the item kind.
         pub fn label(self) -> &'static str {}
-    }
-
-    impl Clone for SearchOptions {
-        fn clone(&self) -> SearchOptions {}
-    }
-
-    impl Debug for SearchOptions {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
     }
 
     impl SearchOptions {
@@ -1069,100 +937,12 @@ pub mod libruskel {
         pub fn ensure_domains(&mut self) {}
     }
 
-    impl Clone for SearchPathSegment {
-        fn clone(&self) -> SearchPathSegment {}
-    }
-
-    impl Debug for SearchPathSegment {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Eq for SearchPathSegment {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
-    }
-
-    impl PartialEq for SearchPathSegment {
-        fn eq(&self, other: &SearchPathSegment) -> bool {}
-    }
-
-    impl Clone for SearchResponse {
-        fn clone(&self) -> SearchResponse {}
-    }
-
-    impl Debug for SearchResponse {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Clone for SearchResult {
-        fn clone(&self) -> SearchResult {}
-    }
-
-    impl Debug for SearchResult {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Clone for SnapshotChange {
-        fn clone(&self) -> SnapshotChange {}
-    }
-
-    impl Debug for SnapshotChange {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Eq for SnapshotChange {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
-    }
-
-    impl PartialEq for SnapshotChange {
-        fn eq(&self, other: &SnapshotChange) -> bool {}
-    }
-
     impl SnapshotChange {
         /// Return the comparison result.
         pub fn kind(&self) -> SnapshotChangeKind {}
 
         /// Return the path relative to the snapshot parent.
         pub fn path(&self) -> &Path {}
-    }
-
-    impl Clone for SnapshotChangeKind {
-        fn clone(&self) -> SnapshotChangeKind {}
-    }
-
-    impl Debug for SnapshotChangeKind {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Eq for SnapshotChangeKind {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
-    }
-
-    impl PartialEq for SnapshotChangeKind {
-        fn eq(&self, other: &SnapshotChangeKind) -> bool {}
-    }
-
-    impl Clone for SnapshotFeatures {
-        fn clone(&self) -> SnapshotFeatures {}
-    }
-
-    impl Debug for SnapshotFeatures {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Default for SnapshotFeatures {
-        fn default() -> Self {}
-    }
-
-    impl Eq for SnapshotFeatures {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
-    }
-
-    impl PartialEq for SnapshotFeatures {
-        fn eq(&self, other: &SnapshotFeatures) -> bool {}
     }
 
     impl SnapshotFeatures {
@@ -1182,40 +962,6 @@ pub mod libruskel {
             features: Vec<String>,
         ) -> Result<Self> {
         }
-    }
-
-    impl Clone for SnapshotMode {
-        fn clone(&self) -> SnapshotMode {}
-    }
-
-    impl Debug for SnapshotMode {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Eq for SnapshotMode {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
-    }
-
-    impl PartialEq for SnapshotMode {
-        fn eq(&self, other: &SnapshotMode) -> bool {}
-    }
-
-    impl Clone for SnapshotProfile {
-        fn clone(&self) -> SnapshotProfile {}
-    }
-
-    impl Debug for SnapshotProfile {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Eq for SnapshotProfile {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
-    }
-
-    impl PartialEq for SnapshotProfile {
-        fn eq(&self, other: &SnapshotProfile) -> bool {}
     }
 
     impl SnapshotProfile {
@@ -1238,27 +984,6 @@ pub mod libruskel {
             features: SnapshotFeatures,
         ) -> Result<Self> {
         }
-    }
-
-    impl Clone for SnapshotProfileOptions {
-        fn clone(&self) -> SnapshotProfileOptions {}
-    }
-
-    impl Debug for SnapshotProfileOptions {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Default for SnapshotProfileOptions {
-        fn default() -> SnapshotProfileOptions {}
-    }
-
-    impl Eq for SnapshotProfileOptions {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
-    }
-
-    impl PartialEq for SnapshotProfileOptions {
-        fn eq(&self, other: &SnapshotProfileOptions) -> bool {}
     }
 
     impl SnapshotProfileOptions {
@@ -1284,23 +1009,6 @@ pub mod libruskel {
         pub fn with_features(self, features: SnapshotFeatures) -> Self {}
     }
 
-    impl Clone for SnapshotReport {
-        fn clone(&self) -> SnapshotReport {}
-    }
-
-    impl Debug for SnapshotReport {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Eq for SnapshotReport {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
-    }
-
-    impl PartialEq for SnapshotReport {
-        fn eq(&self, other: &SnapshotReport) -> bool {}
-    }
-
     impl SnapshotReport {
         /// Return file results in display order.
         pub fn changes(&self) -> &[SnapshotChange] {}
@@ -1310,23 +1018,6 @@ pub mod libruskel {
 
         /// Return whether the destination matches the captured snapshot.
         pub fn is_current(&self) -> bool {}
-    }
-
-    impl Clone for SnapshotRequest {
-        fn clone(&self) -> SnapshotRequest {}
-    }
-
-    impl Debug for SnapshotRequest {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Eq for SnapshotRequest {
-        #[doc(hidden)]
-        fn assert_fields_are_eq(&self) {}
-    }
-
-    impl PartialEq for SnapshotRequest {
-        fn eq(&self, other: &SnapshotRequest) -> bool {}
     }
 
     impl SnapshotRequest {
@@ -1340,12 +1031,12 @@ pub mod libruskel {
         pub fn profile(&self) -> &SnapshotProfile {}
     }
 
-    impl Clone for ToolchainCacheStatus {
-        fn clone(&self) -> ToolchainCacheStatus {}
-    }
+    impl SnapshotStore {
+        /// Compare or atomically update the destination with one captured snapshot.
+        pub fn sync(&self, snapshot: &ApiSnapshot) -> Result<SnapshotReport> {}
 
-    impl Debug for ToolchainCacheStatus {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
+        /// Open and validate one generated destination.
+        pub fn open(path: impl AsRef<Path>, mode: SnapshotMode) -> Result<Self> {}
     }
 
     impl ToolchainCacheStatus {
@@ -1363,14 +1054,6 @@ pub mod libruskel {
 
         /// Return whether another operation currently holds the toolchain lease.
         pub fn is_locked(&self) -> bool {}
-    }
-
-    impl Clone for WorkspaceCacheStatus {
-        fn clone(&self) -> WorkspaceCacheStatus {}
-    }
-
-    impl Debug for WorkspaceCacheStatus {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
     }
 
     impl WorkspaceCacheStatus {
@@ -1391,76 +1074,5 @@ pub mod libruskel {
 
         /// Return whether another operation currently holds the workspace lease.
         pub fn is_locked(&self) -> bool {}
-    }
-
-    impl Debug for RuskelError {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Display for RuskelError {
-        fn fmt(&self, __formatter: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {}
-    }
-
-    impl Error for RuskelError {
-        fn source(
-            &self,
-        ) -> ::core::option::Option<&(dyn ::thiserror::__private20::Error + 'static)> {
-        }
-    }
-
-    impl From<Error> for RuskelError {
-        fn from(err: rust_format::Error) -> Self {}
-    }
-
-    impl From<Error> for RuskelError {
-        fn from(err: serde_json::Error) -> Self {}
-    }
-
-    impl From<Error> for RuskelError {
-        fn from(err: syntect::Error) -> Self {}
-    }
-
-    impl From<Error> for RuskelError {
-        fn from(source: io::Error) -> Self {}
-    }
-
-    impl Debug for SnapshotStore {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl SnapshotStore {
-        /// Compare or atomically update the destination with one captured snapshot.
-        pub fn sync(&self, snapshot: &ApiSnapshot) -> Result<SnapshotReport> {}
-
-        /// Open and validate one generated destination.
-        pub fn open(path: impl AsRef<Path>, mode: SnapshotMode) -> Result<Self> {}
-    }
-
-    impl Default for Renderer {
-        fn default() -> Self {}
-    }
-
-    impl Renderer {
-        /// Apply a filter to output. The filter is a path BELOW the outermost
-        /// module.
-        pub fn with_filter(self, filter: &str) -> Self {}
-
-        /// Attach optional frontmatter metadata to the rendered output.
-        pub fn with_frontmatter(self, frontmatter: FrontmatterConfig) -> Self {}
-
-        /// Create a renderer with default configuration.
-        pub fn new() -> Self {}
-
-        /// Render a crate into formatted Rust source text.
-        pub fn render(&self, crate_data: &Crate) -> Result<String> {}
-
-        /// Render impl blocks for auto traits like Send and Sync?
-        pub fn with_auto_impls(self, render_auto_impls: bool) -> Self {}
-
-        /// Render impl blocks for traits implemented for all types?
-        pub fn with_blanket_impls(self, render_blanket_impls: bool) -> Self {}
-
-        /// Render private items?
-        pub fn with_private_items(self, render_private_items: bool) -> Self {}
     }
 }

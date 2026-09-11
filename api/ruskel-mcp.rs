@@ -6,11 +6,13 @@ pub mod ruskel_mcp {
     #[doc(hidden)]
     /// MCP server implementation that forwards requests to an underlying `Ruskel`
     /// instance.
+    #[derive(Clone)]
     pub struct RuskelServer {}
 
     #[doc(hidden)]
     /// Default request values applied by the MCP server when a tool call omits
     /// them.
+    #[derive(Clone, Copy, Debug, Default)]
     pub struct RuskelServerDefaults {
         /// Whether omitted requests should include private items.
         pub private: bool,
@@ -28,10 +30,6 @@ pub mod ruskel_mcp {
         log_level: Option<tracing_subscriber::filter::LevelFilter>,
         defaults: RuskelServerDefaults,
     ) -> tmcp::Result<()> {
-    }
-
-    impl Clone for RuskelServer {
-        fn clone(&self) -> RuskelServer {}
     }
 
     impl RuskelServer {
@@ -102,17 +100,5 @@ pub mod ruskel_mcp {
             'life1: 'async_trait,
             Self: 'async_trait, {
         }
-    }
-
-    impl Clone for RuskelServerDefaults {
-        fn clone(&self) -> RuskelServerDefaults {}
-    }
-
-    impl Debug for RuskelServerDefaults {
-        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {}
-    }
-
-    impl Default for RuskelServerDefaults {
-        fn default() -> Self {}
     }
 }

@@ -24,11 +24,13 @@ const DERIVE_TRAITS: &[&str] = &[
     "PartialEq",
     "PartialOrd",
     "Send",
-    "StructuralPartialEq",
     "Sync",
     "Serialize",
     "Deserialize",
 ];
+
+/// Compiler-internal marker traits whose impls are never rendered.
+const HIDDEN_TRAITS: &[&str] = &["StructuralPartialEq"];
 
 /// One parent-to-child occurrence in the render traversal.
 pub type RenderEdge = (Option<Id>, Id);
@@ -220,16 +222,26 @@ pub fn should_render_impl(
     if impl_.is_synthetic && !render_auto_impls {
         return false;
     }
-    if derive_trait_name(impl_).is_some() {
+    if derive_trait_name(impl_).is_some() || is_hidden_trait_impl(impl_) {
         return false;
     }
     render_blanket_impls || impl_.blanket_impl.is_none()
 }
 
+/// Return the short name of the trait an impl block implements.
+fn impl_trait_name(impl_: &Impl) -> Option<&str> {
+    impl_.trait_.as_ref()?.path.split("::").last()
+}
+
 /// Return the short name of a trait rendered through `#[derive(...)]`.
 pub fn derive_trait_name(impl_: &Impl) -> Option<&str> {
-    let name = impl_.trait_.as_ref()?.path.split("::").last()?;
+    let name = impl_trait_name(impl_)?;
     DERIVE_TRAITS.contains(&name).then_some(name)
+}
+
+/// Whether an impl targets a compiler-internal marker trait.
+fn is_hidden_trait_impl(impl_: &Impl) -> bool {
+    impl_trait_name(impl_).is_some_and(|name| HIDDEN_TRAITS.contains(&name))
 }
 
 /// One render-visible path and the item-ID chain needed to reach it.

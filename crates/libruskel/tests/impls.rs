@@ -224,6 +224,34 @@ gen_tests! {
                 "#
             }
         }
+        rt {
+            derived_union: {
+                input: r#"
+                    #[derive(Clone, Copy)]
+                    pub union Bits {
+                        pub word: u32,
+                    }
+                "#,
+                output: r#"
+                    #[derive(Clone, Copy)]
+                    pub union Bits {
+                        pub word: u32,
+                    }
+                "#
+            }
+        }
+        rt {
+            hidden_structural_marker: {
+                input: r#"
+                    #[derive(PartialEq)]
+                    pub struct Marker;
+                "#,
+                output: r#"
+                    #[derive(PartialEq)]
+                    pub struct Marker;
+                "#
+            }
+        }
         // FIXME: This appears to be a bug in rustdoc - unsafe is not set on the unsafe impl block.
         rt {
             unsafe_impl: {

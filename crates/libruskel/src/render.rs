@@ -792,9 +792,6 @@ impl RenderState<'_, '_> {
 
     /// Determine whether an impl block should be rendered in the output.
     fn should_render_impl(&self, impl_: &Impl) -> bool {
-        if self.is_snapshot() {
-            return !impl_.is_synthetic && impl_.blanket_impl.is_none();
-        }
         should_render_impl(
             impl_,
             self.config.render_auto_impls,
@@ -1106,6 +1103,11 @@ impl RenderState<'_, '_> {
             }
         }
 
+        if self.is_snapshot() {
+            inline_traits.sort();
+            inline_traits.dedup();
+        }
+
         Ok(inline_traits)
     }
 
@@ -1333,6 +1335,8 @@ impl RenderState<'_, '_> {
     fn render_union(&self, item: &Item) -> Result<String> {
         let union_ = try_extract_item!(item, ItemEnum::Union)?;
         let mut output = self.item_prefix(item)?;
+        let inline_traits = self.collect_inline_derive_traits(&union_.impls)?;
+        Self::push_inline_derive_attribute(&mut output, &inline_traits);
         let signature = signature::item_signature(self.crate_data, item, SearchItemKind::Union)
             .ok_or_else(|| {
                 RuskelError::Generate(format!(
@@ -1364,10 +1368,8 @@ impl RenderState<'_, '_> {
         let selection_active = self.selection().is_some();
         let include_all_variants = self.selection_expands(&item.id);
 
-        if !self.is_snapshot() {
-            let inline_traits = self.collect_inline_derive_traits(&enum_.impls)?;
-            Self::push_inline_derive_attribute(&mut output, &inline_traits);
-        }
+        let inline_traits = self.collect_inline_derive_traits(&enum_.impls)?;
+        Self::push_inline_derive_attribute(&mut output, &inline_traits);
 
         let signature = signature::item_signature(self.crate_data, item, SearchItemKind::Enum)
             .ok_or_else(|| {
@@ -1568,10 +1570,8 @@ impl RenderState<'_, '_> {
         let expand_children = selection_active && self.selection_expands(&item.id);
         let force_fields = selection_active && expand_children;
 
-        if !self.is_snapshot() {
-            let inline_traits = self.collect_inline_derive_traits(&struct_.impls)?;
-            Self::push_inline_derive_attribute(&mut output, &inline_traits);
-        }
+        let inline_traits = self.collect_inline_derive_traits(&struct_.impls)?;
+        Self::push_inline_derive_attribute(&mut output, &inline_traits);
 
         let signature = signature::item_signature(self.crate_data, item, SearchItemKind::Struct)
             .ok_or_else(|| {

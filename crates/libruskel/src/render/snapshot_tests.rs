@@ -79,6 +79,7 @@ impl Alpha {
     pub const VERSION: u8 = 1;
 }
 
+#[derive(Clone, Copy)]
 pub union Choice {
     pub integer: u32,
     pub float: f32,
@@ -259,7 +260,11 @@ fn snapshot_is_stable_across_unordered_rustdoc_sequences() -> Result<()> {
         expected.contains("#[doc(hidden)]"),
         "snapshot omitted doc(hidden):\n{expected}"
     );
-    assert!(expected.contains("impl Clone for Alpha"));
+    assert!(expected.contains("#[derive(Clone, Display)]\n    pub struct Alpha"));
+    assert!(!expected.contains("impl Clone for Alpha"));
+    assert!(!expected.contains("impl Display for Alpha"));
+    assert!(expected.contains("#[derive(Clone, Copy)]\n    pub union Choice"));
+    assert!(!expected.contains("impl Clone for Choice"));
     assert!(expected.contains("impl Renamed"));
     assert!(expected.contains("pub const VERSION: u8 = 1;"));
     assert!(expected.contains("const KIND: u8;"));

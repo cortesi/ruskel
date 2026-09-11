@@ -4,7 +4,8 @@ use std::collections::HashSet;
 
 use rustdoc_types::{
     AssocItemConstraintKind, Attribute, AttributeRepr, Crate, GenericArg, GenericArgs,
-    GenericBound, GenericParamDefKind, Generics, Id, Item, ItemEnum, ReprKind, Type, Visibility,
+    GenericBound, GenericParamDefKind, Generics, Id, Impl, Item, ItemEnum, ReprKind, Type,
+    Visibility,
 };
 use syn::parse::Parser;
 
@@ -12,6 +13,7 @@ use crate::{
     crateutils::{render_generic_bound, render_name, render_poly_trait, render_where_predicate},
     error::{Result, RuskelError},
     search::SearchItemKind,
+    selection::should_render_impl,
     signature,
 };
 
@@ -380,7 +382,7 @@ fn validate_item(
             }
         }
         ItemEnum::Impl(impl_) => {
-            if !impl_.is_synthetic && impl_.blanket_impl.is_none() {
+            if is_snapshot_impl(impl_) {
                 for child in &impl_.items {
                     validate_item(crate_data, *child, true, active)?;
                 }
@@ -408,7 +410,7 @@ fn validate_item(
     Ok(())
 }
 
-/// Validate non-synthetic and non-blanket implementations.
+/// Validate the implementations that snapshot rendering emits as impl blocks.
 fn validate_impls(crate_data: &Crate, impls: &[Id], active: &mut HashSet<Id>) -> Result<()> {
     for id in impls {
         let item = crate_data
@@ -416,13 +418,20 @@ fn validate_impls(crate_data: &Crate, impls: &[Id], active: &mut HashSet<Id>) ->
             .get(id)
             .ok_or_else(|| RuskelError::ItemNotFound(format!("{id:?}")))?;
         if let ItemEnum::Impl(impl_) = &item.inner
-            && !impl_.is_synthetic
-            && impl_.blanket_impl.is_none()
+            && is_snapshot_impl(impl_)
         {
             validate_item(crate_data, *id, true, active)?;
         }
     }
     Ok(())
+}
+
+/// Whether snapshot rendering emits an impl as its own block.
+///
+/// Snapshot format 1 never renders auto-trait or blanket impls, and it folds
+/// derivable traits into a `#[derive(...)]` attribute like ordinary rendering.
+fn is_snapshot_impl(impl_: &Impl) -> bool {
+    should_render_impl(impl_, false, false)
 }
 
 /// Return struct field IDs without changing their semantic order.
