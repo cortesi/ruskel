@@ -1,10 +1,8 @@
 //! Command-line interface for canonical workspace API snapshots.
 
-use std::{
-    env,
-    path::PathBuf,
-    process::{Command, ExitCode},
-};
+mod cargo_env;
+
+use std::{env, path::PathBuf, process::ExitCode};
 
 use clap::Parser;
 use libruskel::{
@@ -108,7 +106,7 @@ fn workspace_manifest() -> libruskel::Result<PathBuf> {
             input: PathBuf::from("."),
             message: format!("cannot inspect the current directory: {error}"),
         })?;
-    let output = Command::new("cargo")
+    let output = cargo_env::command("cargo")
         .args(["locate-project", "--workspace", "--message-format", "plain"])
         .current_dir(&current_dir)
         .output()

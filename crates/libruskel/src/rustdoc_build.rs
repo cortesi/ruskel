@@ -5,7 +5,7 @@ use std::{
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
-    process::{Command, Output},
+    process::Output,
     result,
 };
 
@@ -18,6 +18,7 @@ use super::{
 };
 use crate::{
     cache::{BuildLease, CacheHandle},
+    cargo_env,
     error::{Result, RuskelError, convert_cargo_error},
     toolchain::{nightly_identity, remove_loader_paths, toolchain_identity},
 };
@@ -476,7 +477,7 @@ impl RustdocInvocation {
 
     /// Execute the command and capture both output streams.
     fn run(&self) -> io::Result<Output> {
-        let mut command = Command::new(&self.program);
+        let mut command = cargo_env::command(&self.program);
         command.args(&self.args).envs(self.envs.iter().cloned());
         remove_loader_paths(&mut command);
         command.output()

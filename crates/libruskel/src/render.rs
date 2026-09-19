@@ -15,6 +15,8 @@ use rustdoc_types::{
     StructKind, Term, TraitBoundModifier, Type, VariantKind, Visibility,
 };
 
+#[cfg(test)]
+use crate::cargo_env;
 use crate::{
     crateutils::*,
     error::{Result, RuskelError},
@@ -1873,7 +1875,7 @@ fn snapshot_rustfmt_command(rustfmt: &FsPath, config_path: &FsPath, work_dir: &F
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, fs, process::Command, slice};
+    use std::{collections::HashMap, fs, slice};
 
     use rustdoc_types::{
         Abi, Crate, Function, FunctionHeader, FunctionPointer, FunctionSignature, Generics, Id,
@@ -1992,7 +1994,7 @@ path = "src/lib.rs"
         )?;
 
         let target_dir = temp_dir.path().join("target");
-        let output = Command::new("rustup")
+        let output = cargo_env::command("rustup")
             .args(["run", "nightly", "cargo", "rustdoc", "--lib"])
             .arg("--manifest-path")
             .arg(temp_dir.path().join("Cargo.toml"))

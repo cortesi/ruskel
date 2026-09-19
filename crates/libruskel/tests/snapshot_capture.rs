@@ -1,11 +1,13 @@
 //! End-to-end tests for canonical workspace snapshot capture.
 
+#[path = "../src/cargo_env.rs"]
+mod cargo_env;
+
 #[cfg(test)]
 mod tests {
     use std::{
         fs,
         path::{Path, PathBuf},
-        process::Command,
     };
 
     use libruskel::{
@@ -13,6 +15,8 @@ mod tests {
         SnapshotRequest,
     };
     use tempfile::{TempDir, tempdir};
+
+    use crate::cargo_env;
 
     const TOOLCHAIN: &str = "nightly-2026-07-01";
 
@@ -92,7 +96,7 @@ mod tests {
     }
 
     fn generate_lockfile(manifest: &Path) {
-        let status = Command::new("cargo")
+        let status = cargo_env::command("cargo")
             .args(["generate-lockfile", "--offline", "--manifest-path"])
             .arg(manifest)
             .status()

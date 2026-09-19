@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use rustdoc_types::{Crate, ItemEnum, MacroKind, ProcMacro, Type};
@@ -12,6 +11,7 @@ use super::{SNAPSHOT_RUSTFMT_V1, snapshot_rustfmt_command};
 use crate::{
     Renderer, Result,
     cache::CacheHandle,
+    cargo_env,
     rustdoc_build::{self, CrateReadOptions},
     target_resolution::resolve_target,
 };
@@ -155,7 +155,7 @@ mod private_support {
 pub use private_support::Internal as Renamed;
 "#,
     )?;
-    let status = Command::new("cargo")
+    let status = cargo_env::command("cargo")
         .arg("generate-lockfile")
         .arg("--manifest-path")
         .arg(package.join("Cargo.toml"))

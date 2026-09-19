@@ -1,5 +1,8 @@
 //! Process-level checks for the `ruskel-snapshot` command.
 
+#[path = "../src/cargo_env.rs"]
+mod cargo_env;
+
 #[cfg(test)]
 mod tests {
     use std::{fs, path::Path, process::Command as ProcessCommand};
@@ -7,6 +10,8 @@ mod tests {
     use assert_cmd::Command;
     use predicates::str::contains;
     use tempfile::{TempDir, tempdir};
+
+    use crate::cargo_env;
 
     const TOOLCHAIN: &str = "nightly-2026-07-01";
 
@@ -100,7 +105,7 @@ mod tests {
 
     /// Create a lockfile without network access.
     fn generate_lockfile(manifest: &Path) {
-        let status = ProcessCommand::new("cargo")
+        let status = cargo_env::command("cargo")
             .args(["generate-lockfile", "--offline", "--manifest-path"])
             .arg(manifest)
             .status()

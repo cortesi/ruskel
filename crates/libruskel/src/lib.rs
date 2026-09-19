@@ -18,6 +18,8 @@
 //! [`Ruskel::capture_snapshot`]. Capture returns an in-memory [`ApiSnapshot`]
 //! and never writes a destination directory.
 
+mod cargo_env;
+
 /// Dedicated cache ownership and lifecycle controls.
 mod cache;
 /// Utilities for normalising rustdoc structures before rendering.

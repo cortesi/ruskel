@@ -1,14 +1,19 @@
 //! End-to-end coverage for retained helper attributes in canonical snapshots.
 
+#[path = "../src/cargo_env.rs"]
+mod cargo_env;
+
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::PathBuf, process::Command};
+    use std::{fs, path::PathBuf};
 
     use libruskel::{
         ApiSnapshot, Result, Ruskel, SnapshotFeatures, SnapshotProfile, SnapshotProfileOptions,
         SnapshotRequest,
     };
     use tempfile::{TempDir, tempdir};
+
+    use crate::cargo_env;
 
     const TOOLCHAIN: &str = "nightly-2026-07-01";
 
@@ -51,7 +56,7 @@ pub fn helper(_: TokenStream) -> TokenStream {
                 "[package]\nname = \"helper-api\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nhelper = { path = \"../helper\" }\n",
             )?;
             fs::write(api.join("src/lib.rs"), api_source("#[stable_api]"))?;
-            let status = Command::new("cargo")
+            let status = cargo_env::command("cargo")
                 .args(["generate-lockfile", "--offline", "--manifest-path"])
                 .arg(root.path().join("Cargo.toml"))
                 .status()?;
