@@ -147,6 +147,7 @@ fn capture_package(
         card::crate_card(package, &rendered.unnameable),
         rendered.contents
     );
+    let contents = format!("{}\n", contents.trim_end_matches('\n'));
 
     let named = NamedCrate {
         package_name: package.package_name.clone(),

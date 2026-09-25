@@ -130,6 +130,22 @@ mod tests {
     }
 
     #[test]
+    fn empty_public_crate_has_one_final_newline() -> Result<()> {
+        let root = tempdir()?;
+        write_package(root.path(), "empty-api", "", "");
+        generate_lockfile(&root.path().join("Cargo.toml"));
+        let snapshot = capture(
+            root.path(),
+            vec![root.path().to_path_buf()],
+            SnapshotFeatures::default(),
+        )?;
+        let contents = snapshot.crates()[0].contents();
+        assert!(contents.ends_with('\n'));
+        assert!(!contents.ends_with("\n\n"));
+        Ok(())
+    }
+
+    #[test]
     fn captures_root_workspace_libraries_proc_macros_and_skips_binary() -> Result<()> {
         let fixture = Fixture::workspace();
         let snapshot = capture(
