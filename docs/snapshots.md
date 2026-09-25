@@ -72,6 +72,8 @@ used in public signatures that have no public path. Treat each entry as an API f
 The `use` block after the crate docs lists foreign types used by the catalogue. It acts as a
 legend for the whole file, including nested modules. A new `use` line in a diff shows new public
 coupling. The display path uses the public facade when the capture can resolve it.
+Without rustdoc data for an external dependency, a type may appear under its defining crate
+instead of a re-exporting facade. Check source when the facade matters.
 
 Within each module, re-exports come first, then traits, types, functions, constants and statics,
 macros, and submodules. A type's inherent methods and trait impls follow its declaration. Trait
