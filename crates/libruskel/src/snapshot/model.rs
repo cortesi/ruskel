@@ -311,6 +311,14 @@ pub struct CrateSnapshot {
     pub(crate) filename: String,
     /// Complete canonical crate source.
     pub(crate) contents: String,
+    /// First sentence of the crate documentation.
+    pub(crate) summary: String,
+    /// Number of unique rendered declarations.
+    pub(crate) items: usize,
+    /// Dependency packages named by displayed public paths.
+    pub(crate) exposes: Vec<String>,
+    /// Publicly used local items without a public path.
+    pub(crate) unnameable: Vec<String>,
 }
 
 impl CrateSnapshot {
@@ -333,6 +341,26 @@ impl CrateSnapshot {
     pub fn contents(&self) -> &str {
         &self.contents
     }
+
+    /// Return the first sentence of the crate documentation.
+    pub fn summary(&self) -> &str {
+        &self.summary
+    }
+
+    /// Return the number of unique rendered declarations.
+    pub fn items(&self) -> usize {
+        self.items
+    }
+
+    /// Return dependency packages named by displayed public paths.
+    pub fn exposes(&self) -> &[String] {
+        &self.exposes
+    }
+
+    /// Return publicly used local items without a public path.
+    pub fn unnameable(&self) -> &[String] {
+        &self.unnameable
+    }
 }
 
 /// Complete ordered snapshot captured without destination I/O.
@@ -344,6 +372,8 @@ pub struct ApiSnapshot {
     pub(crate) crates: Vec<CrateSnapshot>,
     /// Canonically ordered binary-only package names.
     pub(crate) skipped_packages: Vec<String>,
+    /// Complete generated workspace index.
+    pub(crate) index: String,
 }
 
 impl ApiSnapshot {
@@ -360,6 +390,11 @@ impl ApiSnapshot {
     /// Return binary-only package names in canonical order.
     pub fn skipped_packages(&self) -> &[String] {
         &self.skipped_packages
+    }
+
+    /// Return the complete generated workspace index.
+    pub fn index(&self) -> &str {
+        &self.index
     }
 }
 

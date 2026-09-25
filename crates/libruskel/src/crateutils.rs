@@ -5,7 +5,7 @@ use rustdoc_types::{
     WherePredicate,
 };
 
-use crate::keywords::is_reserved_word;
+use crate::{keywords::is_reserved_word, render::names::active_base_name};
 
 /// Convenience macro to destructure `rustdoc_types::Item` variants during
 /// rendering.
@@ -56,7 +56,11 @@ pub fn docs(item: &Item) -> String {
     let mut output = String::new();
     if let Some(docs) = &item.docs {
         for line in docs.lines() {
-            output.push_str(&format!("/// {line}\n"));
+            if line.trim().is_empty() {
+                output.push_str("///\n");
+            } else {
+                output.push_str(&format!("/// {line}\n"));
+            }
         }
     }
     output
@@ -354,14 +358,7 @@ pub fn render_generic_bound(bound: &GenericBound) -> String {
 /// Render a type, tracking whether it is nested for parentheses handling.
 pub fn render_type_inner(ty: &Type, nested: bool) -> String {
     match ty {
-        Type::ResolvedPath(path) => {
-            let args = path
-                .args
-                .as_ref()
-                .map(|args| render_generic_args(args))
-                .unwrap_or_default();
-            format!("{}{}", path.path.replace("$crate::", ""), args)
-        }
+        Type::ResolvedPath(path) => render_path(path),
         Type::DynTrait(dyn_trait) => {
             let traits = dyn_trait
                 .traits
@@ -494,7 +491,8 @@ pub fn render_path(path: &Path) -> String {
         .as_ref()
         .map(|args| render_generic_args(args))
         .unwrap_or_default();
-    format!("{}{}", path.path.replace("$crate::", ""), args)
+    let base = active_base_name(path).unwrap_or_else(|| path.path.replace("$crate::", ""));
+    format!("{base}{args}")
 }
 
 /// Render a function pointer signature.

@@ -1,5 +1,6 @@
 use std::{
-    collections::HashMap,
+    cell::RefCell,
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     io::Write,
     path::Path as FsPath,
@@ -28,8 +29,10 @@ use crate::{
     toolchain::{remove_loader_paths, toolchain_binary},
 };
 
+mod async_trait;
 /// Canonical snapshot rendering rules.
 mod canonical;
+pub(crate) mod names;
 
 /// Exact rustfmt configuration for snapshot format 1.
 const SNAPSHOT_RUSTFMT_V1: &[u8] = include_bytes!("render/snapshot-rustfmt-v1.toml");
@@ -214,6 +217,83 @@ struct RenderedImplBody {
     docs: String,
     /// Rendered impl item contents.
     body: String,
+}
+
+/// One public occurrence in a snapshot module.
+struct SnapshotOccurrence {
+    /// The item at this occurrence, which may be a re-export.
+    item: Item,
+    /// Public path at this occurrence, including the `crate::` prefix.
+    path: String,
+}
+
+/// Order declarations by role within a catalogue module.
+fn snapshot_category(item: &Item) -> u8 {
+    match &item.inner {
+        ItemEnum::Trait(_) | ItemEnum::TraitAlias(_) => 1,
+        ItemEnum::Struct(_) | ItemEnum::Enum(_) | ItemEnum::Union(_) | ItemEnum::TypeAlias(_) => 2,
+        ItemEnum::Function(_) => 3,
+        ItemEnum::Constant { .. } | ItemEnum::Static(_) => 4,
+        ItemEnum::Macro(_) | ItemEnum::ProcMacro(_) => 5,
+        ItemEnum::Module(_) => 6,
+        _ => 7,
+    }
+}
+
+/// Find the first public local type named by trait arguments.
+fn first_public_type_in_args(
+    args: &GenericArgs,
+    paths: &names::PublicPathIndex,
+    crate_data: &Crate,
+) -> Option<Id> {
+    match args {
+        GenericArgs::AngleBracketed { args, .. } => {
+            args.iter().find_map(|argument| match argument {
+                GenericArg::Type(ty) => first_public_type(ty, paths, crate_data),
+                _ => None,
+            })
+        }
+        GenericArgs::Parenthesized { inputs, output } => inputs
+            .iter()
+            .find_map(|ty| first_public_type(ty, paths, crate_data))
+            .or_else(|| {
+                output
+                    .as_ref()
+                    .and_then(|ty| first_public_type(ty, paths, crate_data))
+            }),
+        GenericArgs::ReturnTypeNotation => None,
+    }
+}
+
+/// Find a public local type within a type expression.
+fn first_public_type(ty: &Type, paths: &names::PublicPathIndex, crate_data: &Crate) -> Option<Id> {
+    match ty {
+        Type::ResolvedPath(path) => {
+            let root_crate_id = crate_data
+                .index
+                .get(&crate_data.root)
+                .map(|root| root.crate_id);
+            crate_data
+                .index
+                .get(&path.id)
+                .filter(|item| Some(item.crate_id) == root_crate_id)
+                .and_then(|_| paths.canonical_path(path.id))
+                .map(|_| path.id)
+                .or_else(|| {
+                    path.args
+                        .as_ref()
+                        .and_then(|args| first_public_type_in_args(args, paths, crate_data))
+                })
+        }
+        Type::Tuple(types) => types
+            .iter()
+            .find_map(|ty| first_public_type(ty, paths, crate_data)),
+        Type::BorrowedRef { type_, .. }
+        | Type::RawPointer { type_, .. }
+        | Type::Slice(type_)
+        | Type::Array { type_, .. } => first_public_type(type_, paths, crate_data),
+        _ => None,
+    }
 }
 
 /// Render a normalized path key using the resolved item id.
@@ -549,8 +629,6 @@ pub struct Renderer {
     selection: Option<RenderSelection>,
     /// Optional frontmatter configuration rendered before crate content.
     frontmatter: Option<FrontmatterConfig>,
-    /// Optional generated prefix included in strict snapshot formatting.
-    snapshot_prefix: Option<String>,
 }
 
 /// Mutable rendering context shared across helper functions.
@@ -561,6 +639,30 @@ struct RenderState<'a, 'b> {
     crate_data: &'b Crate,
     /// Effective item selection after composing search and target filtering.
     selection: Option<RenderSelection>,
+    /// Public names and canonical declaration locations for snapshots.
+    public_paths: Option<names::PublicPathIndex>,
+    /// ID-aware name choices for this catalogue render.
+    name_plan: Option<names::NamePlan>,
+    /// Unique declarations emitted by the current render pass.
+    declarations: RefCell<HashSet<Id>>,
+    /// Impl IDs grouped by the public declaration that owns them.
+    snapshot_impls: BTreeMap<Id, Vec<Id>>,
+}
+
+/// Rendered catalogue and facts used by the workspace index.
+pub struct CatalogueRender {
+    /// Formatted Rust source for one catalogue file.
+    pub(crate) contents: String,
+    /// Number of unique declarations in the file.
+    pub(crate) items: usize,
+    /// Dependency packages named by displayed paths.
+    pub(crate) exposes: Vec<String>,
+    /// Local signature items with no public path.
+    pub(crate) unnameable: Vec<String>,
+    /// Number of names that use a definition-path fallback.
+    pub(crate) definition_fallbacks: usize,
+    /// Public paths for later workspace members.
+    pub(crate) public_paths: names::PublicPathIndex,
 }
 
 impl Default for Renderer {
@@ -582,7 +684,6 @@ impl Renderer {
             filter: String::new(),
             selection: None,
             frontmatter: None,
-            snapshot_prefix: None,
         }
     }
 
@@ -601,12 +702,6 @@ impl Renderer {
         renderer.render_blanket_impls = false;
         renderer.frontmatter = None;
         renderer
-    }
-
-    /// Include a generated header in the strict snapshot rustfmt input.
-    pub(crate) fn with_snapshot_prefix(mut self, prefix: impl Into<String>) -> Self {
-        self.snapshot_prefix = Some(prefix.into());
-        self
     }
 
     /// Apply a filter to output. The filter is a path BELOW the outermost
@@ -649,22 +744,68 @@ impl Renderer {
     /// Render a crate into formatted Rust source text.
     pub fn render(&self, crate_data: &Crate) -> Result<String> {
         if matches!(self.profile, RenderProfile::SnapshotV1 { .. }) {
-            canonical::validate_reachable(crate_data)?;
+            return self
+                .render_catalogue(crate_data, &[], &[], &BTreeMap::new())
+                .map(|catalogue| catalogue.contents);
         }
-        let canonical_data = matches!(self.profile, RenderProfile::SnapshotV1 { .. })
-            .then(|| canonical::canonicalized(crate_data));
-        let crate_data = canonical_data.as_ref().unwrap_or(crate_data);
         let selection = self.resolve_selection(crate_data)?;
         let mut state = RenderState {
             config: self,
             crate_data,
             selection,
+            public_paths: None,
+            name_plan: None,
+            declarations: RefCell::new(HashSet::new()),
+            snapshot_impls: BTreeMap::new(),
         };
         let source = state.render_source()?;
-        match &self.profile {
-            RenderProfile::Interactive => Ok(self.formatter.format_str(&source)?),
-            RenderProfile::SnapshotV1 { toolchain } => format_snapshot_v1(toolchain, &source),
-        }
+        Ok(self.formatter.format_str(&source)?)
+    }
+
+    /// Render a catalogue with workspace and standard-library name indexes.
+    pub(crate) fn render_catalogue(
+        &self,
+        crate_data: &Crate,
+        members: &[names::NamedCrate],
+        standard: &[names::NamedCrate],
+        dependency_aliases: &BTreeMap<String, String>,
+    ) -> Result<CatalogueRender> {
+        let RenderProfile::SnapshotV1 { toolchain } = &self.profile else {
+            return Err(RuskelError::Generate(
+                "catalogue rendering requires the snapshot profile".to_string(),
+            ));
+        };
+        canonical::validate_reachable(crate_data)?;
+        let normalized = canonical::canonicalized(crate_data);
+        let public_paths = names::PublicPathIndex::build(&normalized);
+        let plan = names::NamePlan::new(
+            &normalized,
+            &public_paths,
+            members,
+            standard,
+            dependency_aliases,
+        )?;
+        let selection = self.resolve_selection(&normalized)?;
+        let mut state = RenderState {
+            config: self,
+            crate_data: &normalized,
+            selection,
+            public_paths: Some(public_paths.clone()),
+            name_plan: Some(plan.clone()),
+            declarations: RefCell::new(HashSet::new()),
+            snapshot_impls: BTreeMap::new(),
+        };
+        state.snapshot_impls = state.build_snapshot_impl_index();
+        let source = plan.render(|| state.render_source())?;
+        let contents = format_snapshot_v1(toolchain, &source)?;
+        Ok(CatalogueRender {
+            contents,
+            items: state.declarations.borrow().len(),
+            exposes: plan.exposed_packages(),
+            unnameable: plan.unnameable(),
+            definition_fallbacks: plan.definition_fallbacks(),
+            public_paths,
+        })
     }
 
     /// Compose an explicit search selection with the target path filter.
@@ -702,6 +843,7 @@ mod snapshot_tests;
 impl RenderState<'_, '_> {
     /// Render the crate source before profile-specific formatting.
     fn render_source(&mut self) -> Result<String> {
+        self.declarations.borrow_mut().clear();
         // The root item is always a module
         let root_item = must_get(self.crate_data, &self.crate_data.root)?;
         let output = self.render_item("", root_item, None, false)?;
@@ -716,9 +858,6 @@ impl RenderState<'_, '_> {
         {
             composed.push_str(&prefix);
         }
-        if let Some(prefix) = &self.config.snapshot_prefix {
-            composed.push_str(prefix);
-        }
         composed.push_str(&output);
 
         Ok(composed)
@@ -732,10 +871,48 @@ impl RenderState<'_, '_> {
     /// Render documentation and retained snapshot attributes.
     fn item_prefix(&self, item: &Item) -> Result<String> {
         let mut output = String::new();
+        output.push_str(&docs(item));
         if self.is_snapshot() {
+            if let ItemEnum::Trait(trait_) = &item.inner {
+                if !trait_.is_dyn_compatible {
+                    output.push_str("// Not dyn-compatible.\n");
+                }
+                let root_crate_id = self
+                    .crate_data
+                    .index
+                    .get(&self.crate_data.root)
+                    .map(|root| root.crate_id);
+                let sealed = trait_.bounds.iter().any(|bound| {
+                    let GenericBound::TraitBound { trait_, .. } = bound else {
+                        return false;
+                    };
+                    self.crate_data
+                        .index
+                        .get(&trait_.id)
+                        .is_some_and(|supertrait| Some(supertrait.crate_id) == root_crate_id)
+                        && self
+                            .public_paths
+                            .as_ref()
+                            .is_none_or(|paths| paths.canonical_path(trait_.id).is_none())
+                });
+                if sealed {
+                    output.push_str("// Sealed.\n");
+                }
+            }
+            let impls = match &item.inner {
+                ItemEnum::Struct(value) => Some(value.impls.as_slice()),
+                ItemEnum::Enum(value) => Some(value.impls.as_slice()),
+                ItemEnum::Union(value) => Some(value.impls.as_slice()),
+                _ => None,
+            };
+            if let Some(impls) = impls {
+                Self::push_inline_derive_attribute(
+                    &mut output,
+                    &self.collect_inline_derive_traits(impls)?,
+                );
+            }
             output.push_str(&canonical::retained_attributes(item)?);
         }
-        output.push_str(&docs(item));
         Ok(output)
     }
 
@@ -794,11 +971,30 @@ impl RenderState<'_, '_> {
 
     /// Determine whether an impl block should be rendered in the output.
     fn should_render_impl(&self, impl_: &Impl) -> bool {
+        if self.is_snapshot() && derive_trait_name(impl_).is_some() && self.is_local_trait(impl_) {
+            return !impl_.is_synthetic
+                && (self.config.render_blanket_impls || impl_.blanket_impl.is_none());
+        }
         should_render_impl(
             impl_,
             self.config.render_auto_impls,
             self.config.render_blanket_impls,
         )
+    }
+
+    /// Check whether an impl names a trait defined by the captured crate.
+    fn is_local_trait(&self, impl_: &Impl) -> bool {
+        let root_crate_id = self
+            .crate_data
+            .index
+            .get(&self.crate_data.root)
+            .map(|root| root.crate_id);
+        impl_.trait_.as_ref().is_some_and(|trait_| {
+            self.crate_data
+                .index
+                .get(&trait_.id)
+                .is_some_and(|item| Some(item.crate_id) == root_crate_id)
+        })
     }
 
     /// Determine whether a module should emit a `//!` doc comment header.
@@ -839,6 +1035,12 @@ impl RenderState<'_, '_> {
         if !force_private && !self.is_visible(item) {
             Ok(String::new())
         } else {
+            if self.is_snapshot()
+                && !output.is_empty()
+                && (1..=5).contains(&snapshot_category(item))
+            {
+                self.declarations.borrow_mut().insert(item.id);
+            }
             Ok(output)
         }
     }
@@ -1100,8 +1302,14 @@ impl RenderState<'_, '_> {
                 continue;
             }
 
-            if let Some(name) = derive_trait_name(impl_) {
-                inline_traits.push(name.to_string());
+            if let Some(name) = derive_trait_name(impl_)
+                .filter(|_| !self.is_snapshot() || !self.is_local_trait(impl_))
+            {
+                let resolved = self
+                    .name_plan
+                    .as_ref()
+                    .and_then(|plan| impl_.trait_.as_ref().map(|path| plan.render_path(path)));
+                inline_traits.push(resolved.unwrap_or_else(|| name.to_string()));
             }
         }
 
@@ -1130,10 +1338,26 @@ impl RenderState<'_, '_> {
         let mut docs_output = String::new();
         let mut bodies = Vec::new();
 
+        let policies = group
+            .impl_ids
+            .iter()
+            .map(|impl_id| {
+                let impl_item = self.crate_data.index.get(impl_id)?;
+                let ItemEnum::Impl(impl_) = &impl_item.inner else {
+                    return None;
+                };
+                async_trait::classify(self.crate_data, &impl_.items)
+            })
+            .collect::<Vec<_>>();
+        let async_policy = policies
+            .first()
+            .copied()
+            .flatten()
+            .filter(|policy| policies.iter().all(|other| *other == Some(*policy)));
         for impl_id in &group.impl_ids {
             let impl_item = must_get(self.crate_data, impl_id)?;
             let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
-            if let Some(rendered) = self.render_impl_body(impl_item, impl_)? {
+            if let Some(rendered) = self.render_impl_body(impl_item, impl_, async_policy)? {
                 docs_output.push_str(&rendered.docs);
                 bodies.push(rendered.body);
             }
@@ -1145,6 +1369,11 @@ impl RenderState<'_, '_> {
 
         let mut output = String::new();
         output.push_str(&docs_output);
+        if (!self.is_snapshot() || group.signature.trait_path.is_none())
+            && let Some(policy) = async_policy
+        {
+            output.push_str(policy.attribute());
+        }
         output.push_str(&group.signature.render_header(target_rename));
         for body in bodies {
             output.push_str(&body);
@@ -1175,54 +1404,44 @@ impl RenderState<'_, '_> {
         Ok(fragments.concat())
     }
 
-    /// Render implementation fragments owned by one module child.
-    fn render_item_impls(&self, item: &Item) -> Result<Vec<String>> {
-        if !self.is_visible(item) {
-            return Ok(Vec::new());
-        }
-        match &item.inner {
-            ItemEnum::Struct(struct_) => Ok(vec![self.render_impls(item, &struct_.impls)?]),
-            ItemEnum::Union(union_) => Ok(vec![self.render_impls(item, &union_.impls)?]),
-            ItemEnum::Enum(enum_) => Ok(vec![self.render_impls(item, &enum_.impls)?]),
-            ItemEnum::Use(import) => {
-                let Some(imported_id) = import.id else {
-                    return Ok(Vec::new());
-                };
-                if is_external_reference(self.crate_data, imported_id) {
-                    return Ok(Vec::new());
-                }
-                let imported = must_get(self.crate_data, &imported_id)?;
-                if import.is_glob {
-                    let module = try_extract_item!(imported, ItemEnum::Module)?;
-                    let mut fragments = Vec::new();
-                    for child_id in &module.items {
-                        let child = must_get(self.crate_data, child_id)?;
-                        if self.is_visible(child) {
-                            fragments.extend(self.render_item_impls(child)?);
-                        }
-                    }
-                    Ok(fragments)
-                } else {
-                    let mut alias = imported.clone();
-                    alias.name = Some(import.name.clone());
-                    match &alias.inner {
-                        ItemEnum::Struct(struct_) => {
-                            Ok(vec![self.render_impls(&alias, &struct_.impls)?])
-                        }
-                        ItemEnum::Union(union_) => {
-                            Ok(vec![self.render_impls(&alias, &union_.impls)?])
-                        }
-                        ItemEnum::Enum(enum_) => Ok(vec![self.render_impls(&alias, &enum_.impls)?]),
-                        _ => Ok(Vec::new()),
-                    }
-                }
+    /// Show only negative Send and Sync facts reported for a public local type.
+    fn render_negative_auto_impls(&self, item: &Item, impl_ids: &[Id]) -> Result<String> {
+        let mut traits = Vec::new();
+        for impl_id in impl_ids {
+            let impl_item = must_get(self.crate_data, impl_id)?;
+            let impl_ = try_extract_item!(impl_item, ItemEnum::Impl)?;
+            if !impl_.is_synthetic || !impl_.is_negative {
+                continue;
             }
-            _ => Ok(Vec::new()),
+            let Some(trait_) = &impl_.trait_ else {
+                continue;
+            };
+            let Some(summary) = self.crate_data.paths.get(&trait_.id) else {
+                continue;
+            };
+            if summary.path.len() == 3
+                && summary.path[0] == "core"
+                && summary.path[1] == "marker"
+                && matches!(summary.path[2].as_str(), "Send" | "Sync")
+            {
+                traits.push(summary.path[2].as_str());
+            }
         }
+        traits.sort();
+        traits.dedup();
+        Ok(traits
+            .into_iter()
+            .map(|trait_name| format!("impl !{trait_name} for {} {{}}\n", render_name(item)))
+            .collect())
     }
 
     /// Render the contents for a single impl block, without its header.
-    fn render_impl_body(&self, item: &Item, impl_: &Impl) -> Result<Option<RenderedImplBody>> {
+    fn render_impl_body(
+        &self,
+        item: &Item,
+        impl_: &Impl,
+        async_policy: Option<async_trait::AsyncTraitPolicy>,
+    ) -> Result<Option<RenderedImplBody>> {
         if !self.selection_context_contains(&item.id) {
             return Ok(None);
         }
@@ -1247,27 +1466,42 @@ impl RenderState<'_, '_> {
         for item_id in &impl_.items {
             if let Ok(item) = must_get(self.crate_data, item_id) {
                 let is_trait_impl = impl_.trait_.is_some();
+                if self.is_snapshot()
+                    && is_trait_impl
+                    && matches!(&item.inner, ItemEnum::Function(_))
+                {
+                    continue;
+                }
                 if (!selection_active
                     || expand_children
                     || self.selection_context_contains(item_id))
                     && (is_trait_impl || self.is_visible(item))
                 {
-                    let rendered = self.render_impl_item(item, expand_children, is_trait_impl)?;
+                    let rendered =
+                        self.render_impl_item(item, expand_children, is_trait_impl, async_policy)?;
                     if !rendered.is_empty() {
-                        body_fragments.push(rendered);
+                        let category = match &item.inner {
+                            ItemEnum::AssocType { .. } | ItemEnum::TypeAlias(_) => 0,
+                            ItemEnum::AssocConst { .. } | ItemEnum::Constant { .. } => 1,
+                            _ => 2,
+                        };
+                        body_fragments.push((category, render_name(item), rendered));
                     }
                 }
             }
         }
 
-        if body_fragments.is_empty() && !impl_.is_negative {
+        if body_fragments.is_empty()
+            && !impl_.is_negative
+            && !(self.is_snapshot() && impl_.trait_.is_some())
+        {
             return Ok(None);
         }
 
         if self.is_snapshot() {
             body_fragments.sort();
         }
-        for fragment in body_fragments {
+        for (_, _, fragment) in body_fragments {
             body.push_str(&fragment);
         }
 
@@ -1283,13 +1517,14 @@ impl RenderState<'_, '_> {
         item: &Item,
         include_all: bool,
         is_trait_impl: bool,
+        async_policy: Option<async_trait::AsyncTraitPolicy>,
     ) -> Result<String> {
         if !include_all && !self.selection_context_contains(&item.id) {
             return Ok(String::new());
         }
 
         let rendered = match &item.inner {
-            ItemEnum::Function(_) => self.render_function(item, false)?,
+            ItemEnum::Function(_) => self.render_function_with_policy(item, false, async_policy)?,
             ItemEnum::Constant { .. } => self.render_constant(item)?,
             ItemEnum::AssocConst { .. } => self.render_associated_const(item, is_trait_impl)?,
             ItemEnum::AssocType { .. } => {
@@ -1302,6 +1537,10 @@ impl RenderState<'_, '_> {
             ItemEnum::TypeAlias(_) => self.render_type_alias(item)?,
             _ => String::new(),
         };
+
+        if self.is_snapshot() && !rendered.is_empty() {
+            self.declarations.borrow_mut().insert(item.id);
+        }
 
         Ok(rendered)
     }
@@ -1337,8 +1576,10 @@ impl RenderState<'_, '_> {
     fn render_union(&self, item: &Item) -> Result<String> {
         let union_ = try_extract_item!(item, ItemEnum::Union)?;
         let mut output = self.item_prefix(item)?;
-        let inline_traits = self.collect_inline_derive_traits(&union_.impls)?;
-        Self::push_inline_derive_attribute(&mut output, &inline_traits);
+        if !self.is_snapshot() {
+            let inline_traits = self.collect_inline_derive_traits(&union_.impls)?;
+            Self::push_inline_derive_attribute(&mut output, &inline_traits);
+        }
         let signature = signature::item_signature(self.crate_data, item, SearchItemKind::Union)
             .ok_or_else(|| {
                 RuskelError::Generate(format!(
@@ -1370,8 +1611,10 @@ impl RenderState<'_, '_> {
         let selection_active = self.selection().is_some();
         let include_all_variants = self.selection_expands(&item.id);
 
-        let inline_traits = self.collect_inline_derive_traits(&enum_.impls)?;
-        Self::push_inline_derive_attribute(&mut output, &inline_traits);
+        if !self.is_snapshot() {
+            let inline_traits = self.collect_inline_derive_traits(&enum_.impls)?;
+            Self::push_inline_derive_attribute(&mut output, &inline_traits);
+        }
 
         let signature = signature::item_signature(self.crate_data, item, SearchItemKind::Enum)
             .ok_or_else(|| {
@@ -1471,6 +1714,10 @@ impl RenderState<'_, '_> {
         let mut output = self.item_prefix(item)?;
 
         let trait_ = try_extract_item!(item, ItemEnum::Trait)?;
+        let async_policy = async_trait::classify(self.crate_data, &trait_.items);
+        if let Some(policy) = async_policy {
+            output.push_str(policy.attribute());
+        }
 
         if !self.selection_context_contains(&item.id) {
             return Ok(String::new());
@@ -1494,7 +1741,7 @@ impl RenderState<'_, '_> {
                 if !selection_active || expand_children || self.selection_context_contains(item_id)
                 {
                     let item = must_get(self.crate_data, item_id)?;
-                    let fragment = self.render_trait_item(item, expand_children)?;
+                    let fragment = self.render_trait_item(item, expand_children, async_policy)?;
                     if !fragment.is_empty() {
                         members.push(canonical::CanonicalItemKey::new(
                             self.crate_data,
@@ -1513,7 +1760,11 @@ impl RenderState<'_, '_> {
                 if !selection_active || expand_children || self.selection_context_contains(item_id)
                 {
                     let item = must_get(self.crate_data, item_id)?;
-                    output.push_str(&self.render_trait_item(item, expand_children)?);
+                    output.push_str(&self.render_trait_item(
+                        item,
+                        expand_children,
+                        async_policy,
+                    )?);
                 }
             }
         }
@@ -1540,12 +1791,17 @@ impl RenderState<'_, '_> {
     }
 
     /// Render an item contained within a trait (method, associated type, etc.).
-    fn render_trait_item(&self, item: &Item, include_all: bool) -> Result<String> {
+    fn render_trait_item(
+        &self,
+        item: &Item,
+        include_all: bool,
+        async_policy: Option<async_trait::AsyncTraitPolicy>,
+    ) -> Result<String> {
         if !include_all && !self.selection_context_contains(&item.id) {
             return Ok(String::new());
         }
         let rendered = match &item.inner {
-            ItemEnum::Function(_) => self.render_function(item, true)?,
+            ItemEnum::Function(_) => self.render_function_with_policy(item, true, async_policy)?,
             ItemEnum::AssocConst { .. } => self.render_associated_const(item, true)?,
             ItemEnum::AssocType { .. } => format!(
                 "{}{};\n",
@@ -1554,6 +1810,10 @@ impl RenderState<'_, '_> {
             ),
             _ => String::new(),
         };
+
+        if self.is_snapshot() && !rendered.is_empty() {
+            self.declarations.borrow_mut().insert(item.id);
+        }
 
         Ok(rendered)
     }
@@ -1572,8 +1832,10 @@ impl RenderState<'_, '_> {
         let expand_children = selection_active && self.selection_expands(&item.id);
         let force_fields = selection_active && expand_children;
 
-        let inline_traits = self.collect_inline_derive_traits(&struct_.impls)?;
-        Self::push_inline_derive_attribute(&mut output, &inline_traits);
+        if !self.is_snapshot() {
+            let inline_traits = self.collect_inline_derive_traits(&struct_.impls)?;
+            Self::push_inline_derive_attribute(&mut output, &inline_traits);
+        }
 
         let signature = signature::item_signature(self.crate_data, item, SearchItemKind::Struct)
             .ok_or_else(|| {
@@ -1618,13 +1880,23 @@ impl RenderState<'_, '_> {
                     output.push_str(&format!("{struct_prefix}({fields_str}){where_clause};\n\n"));
                 }
             }
-            StructKind::Plain { fields, .. } => {
+            StructKind::Plain {
+                fields,
+                has_stripped_fields,
+            } => {
                 output.push_str(&format!("{signature} {{\n"));
+                let mut private_fields = *has_stripped_fields;
                 for field in fields {
+                    if !self.is_visible(must_get(self.crate_data, field)?) {
+                        private_fields = true;
+                    }
                     let rendered = self.render_struct_field(field, force_fields)?;
                     if !rendered.is_empty() {
                         output.push_str(&rendered);
                     }
+                }
+                if self.is_snapshot() && private_fields {
+                    output.push_str("/* private fields */\n");
                 }
                 output.push_str("}\n\n");
             }
@@ -1715,6 +1987,292 @@ impl RenderState<'_, '_> {
         Ok(output)
     }
 
+    /// Expand public glob exports into occurrences at the importing module.
+    fn snapshot_occurrences(
+        &self,
+        module_id: Id,
+        prefix: &str,
+        visiting: &mut HashSet<Id>,
+    ) -> Result<Vec<SnapshotOccurrence>> {
+        if !visiting.insert(module_id) {
+            return Ok(Vec::new());
+        }
+        let module_item = must_get(self.crate_data, &module_id)?;
+        let module = try_extract_item!(module_item, ItemEnum::Module)?;
+        let mut entries = Vec::new();
+        for child_id in &module.items {
+            let child = must_get(self.crate_data, child_id)?;
+            if !self.is_visible(child) {
+                continue;
+            }
+            if let ItemEnum::Use(import) = &child.inner {
+                if import.is_glob {
+                    if let Some(id) = import.id
+                        && self
+                            .crate_data
+                            .index
+                            .get(&id)
+                            .is_some_and(|target| matches!(&target.inner, ItemEnum::Module(_)))
+                    {
+                        entries.extend(self.snapshot_occurrences(id, prefix, visiting)?);
+                    } else {
+                        entries.push(SnapshotOccurrence {
+                            item: child.clone(),
+                            path: format!("{prefix}::{}", import.source),
+                        });
+                    }
+                    continue;
+                }
+                entries.push(SnapshotOccurrence {
+                    item: child.clone(),
+                    path: format!("{prefix}::{}", import.name),
+                });
+                continue;
+            }
+            if let Some(name) = &child.name {
+                entries.push(SnapshotOccurrence {
+                    item: child.clone(),
+                    path: format!("{prefix}::{name}"),
+                });
+            }
+        }
+        visiting.remove(&module_id);
+        entries.sort_by(|left, right| left.path.cmp(&right.path));
+        entries.dedup_by(|left, right| left.path == right.path && left.item.id == right.item.id);
+        Ok(entries)
+    }
+
+    /// Render one public occurrence as its declaration or a public re-export.
+    fn render_snapshot_occurrence(
+        &mut self,
+        occurrence: SnapshotOccurrence,
+        module_id: Id,
+        prefix: &str,
+    ) -> Result<(u8, String, String)> {
+        let item = &occurrence.item;
+        let (target_id, visible_name) = match &item.inner {
+            ItemEnum::Use(import) => (import.id, import.name.as_str()),
+            _ => (Some(item.id), item.name.as_deref().unwrap_or("?")),
+        };
+        let canonical = target_id.and_then(|id| {
+            self.public_paths
+                .as_ref()
+                .and_then(|paths| paths.canonical_path(id))
+                .map(str::to_string)
+        });
+        let local_target = target_id.and_then(|id| self.crate_data.index.get(&id));
+        if let (Some(canonical), Some(_)) = (&canonical, local_target)
+            && canonical != &occurrence.path
+        {
+            let alias = if canonical.rsplit("::").next() == Some(visible_name) {
+                String::new()
+            } else {
+                format!(" as {}", escape_path(visible_name))
+            };
+            return Ok((
+                0,
+                occurrence.path,
+                format!("pub use {canonical}{alias};\n\n"),
+            ));
+        }
+        if let Some(target) = local_target {
+            let target_id = target.id;
+            let mut declaration = target.clone();
+            declaration.name = Some(visible_name.to_string());
+            if matches!(&item.inner, ItemEnum::Use(_)) {
+                let mut attributes = item.attrs.clone();
+                attributes.extend(declaration.attrs);
+                declaration.attrs = attributes;
+                declaration.docs = item.docs.clone().or(declaration.docs);
+                declaration.deprecation = item.deprecation.clone().or(declaration.deprecation);
+            }
+            let category = snapshot_category(&declaration);
+            let mut fragment = self.render_item(prefix, &declaration, Some(module_id), true)?;
+            if matches!(
+                &declaration.inner,
+                ItemEnum::Trait(_)
+                    | ItemEnum::Struct(_)
+                    | ItemEnum::Enum(_)
+                    | ItemEnum::Union(_)
+                    | ItemEnum::TypeAlias(_)
+            ) {
+                fragment.push_str(&self.render_snapshot_owned_impls(target_id, &declaration)?);
+            }
+            return Ok((category, occurrence.path, fragment));
+        }
+        let fragment = if matches!(&item.inner, ItemEnum::Use(_)) {
+            self.render_use(prefix, item)?
+        } else {
+            self.render_item(prefix, item, Some(module_id), false)?
+        };
+        Ok((0, occurrence.path, fragment))
+    }
+
+    /// Place each source impl once after its local type or trait.
+    fn render_snapshot_owned_impls(&self, owner: Id, declaration: &Item) -> Result<String> {
+        let mut impls = Vec::new();
+        for impl_id in self.snapshot_impls.get(&owner).into_iter().flatten() {
+            let item = must_get(self.crate_data, impl_id)?;
+            let ItemEnum::Impl(impl_) = &item.inner else {
+                continue;
+            };
+            let root_crate_id = self
+                .crate_data
+                .index
+                .get(&self.crate_data.root)
+                .map(|root| root.crate_id);
+            let local_blanket_trait = impl_.blanket_impl.is_some()
+                && Some(item.crate_id) == root_crate_id
+                && impl_.trait_.as_ref().is_some_and(|trait_| {
+                    self.crate_data
+                        .index
+                        .get(&trait_.id)
+                        .is_some_and(|trait_item| Some(trait_item.crate_id) == root_crate_id)
+                })
+                && !impl_.is_synthetic;
+            if !self.should_render_impl(impl_) && !local_blanket_trait {
+                continue;
+            }
+            let group = ImplGroup {
+                signature: ImplSignature::from_impl(impl_),
+                impl_ids: vec![item.id],
+            };
+            let rename = self.item_rename(declaration)?;
+            let fragment = self.render_impl_group(
+                &group,
+                rename
+                    .as_ref()
+                    .map(|(original, alias)| (original.as_str(), alias.as_str())),
+            )?;
+            if !fragment.is_empty() {
+                let priority = u8::from(impl_.trait_.is_some());
+                let trait_name = impl_.trait_.as_ref().map(render_path).unwrap_or_default();
+                impls.push((priority, trait_name, fragment));
+            }
+        }
+        impls.sort();
+        let mut output = impls
+            .into_iter()
+            .map(|(_, _, fragment)| fragment)
+            .collect::<String>();
+        let auto_impl_ids = match &declaration.inner {
+            ItemEnum::Struct(value) => Some(value.impls.as_slice()),
+            ItemEnum::Enum(value) => Some(value.impls.as_slice()),
+            ItemEnum::Union(value) => Some(value.impls.as_slice()),
+            _ => None,
+        };
+        if let Some(ids) = auto_impl_ids {
+            output.push_str(&self.render_negative_auto_impls(declaration, ids)?);
+        }
+        if !output.is_empty() && !output.ends_with("\n\n") {
+            output.push('\n');
+        }
+        Ok(output)
+    }
+
+    /// Classify source impls once before the two rendering passes.
+    fn build_snapshot_impl_index(&self) -> BTreeMap<Id, Vec<Id>> {
+        let mut by_owner = BTreeMap::<Id, Vec<Id>>::new();
+        for item in self.crate_data.index.values() {
+            if let ItemEnum::Impl(impl_) = &item.inner
+                && let Some(owner) = self.snapshot_impl_owner(impl_)
+            {
+                by_owner.entry(owner).or_default().push(item.id);
+            }
+        }
+        for ids in by_owner.values_mut() {
+            ids.sort();
+        }
+        by_owner
+    }
+
+    /// Select the local declaration that owns an impl's boundary fact.
+    fn snapshot_impl_owner(&self, impl_: &Impl) -> Option<Id> {
+        let paths = self.public_paths.as_ref()?;
+        if let Type::ResolvedPath(path) = &impl_.for_
+            && let Some(item) = self.crate_data.index.get(&path.id)
+            && Some(item.crate_id)
+                == self
+                    .crate_data
+                    .index
+                    .get(&self.crate_data.root)
+                    .map(|root| root.crate_id)
+        {
+            return paths.is_public(path.id).then_some(path.id);
+        }
+        if let Some(trait_) = &impl_.trait_
+            && let Some(args) = &trait_.args
+            && let Some(id) = first_public_type_in_args(args, paths, self.crate_data)
+        {
+            return Some(id);
+        }
+        impl_
+            .trait_
+            .as_ref()
+            .filter(|path| {
+                paths.canonical_path(path.id).is_some()
+                    && self.crate_data.index.get(&path.id).is_some_and(|item| {
+                        Some(item.crate_id)
+                            == self
+                                .crate_data
+                                .index
+                                .get(&self.crate_data.root)
+                                .map(|root| root.crate_id)
+                    })
+            })
+            .map(|path| path.id)
+    }
+
+    /// Render the snapshot root without a crate-name wrapper.
+    fn render_snapshot_module(
+        &mut self,
+        path_prefix: &str,
+        item: &Item,
+        parent: Option<Id>,
+    ) -> Result<String> {
+        let is_root = item.id == self.crate_data.root;
+        let prefix = if is_root {
+            "crate".to_string()
+        } else {
+            format!("{path_prefix}::{}", item.name.as_deref().unwrap_or("?"))
+        };
+        let mut output = String::new();
+        if !is_root {
+            output.push_str(&canonical::retained_attributes(item)?);
+            output.push_str(&format!(
+                "{}mod {} {{\n",
+                render_vis(item),
+                render_name(item)
+            ));
+        }
+        if self.should_module_doc(parent, item)
+            && let Some(docs) = &item.docs
+        {
+            for line in docs.lines() {
+                output.push_str(&format!("//! {line}\n"));
+            }
+            output.push('\n');
+        }
+        if is_root && let Some(plan) = &self.name_plan {
+            output.push_str(&plan.use_block());
+        }
+        let mut entries = Vec::new();
+        for occurrence in self.snapshot_occurrences(item.id, &prefix, &mut HashSet::new())? {
+            let rendered = self.render_snapshot_occurrence(occurrence, item.id, &prefix)?;
+            if !rendered.2.is_empty() {
+                entries.push(rendered);
+            }
+        }
+        entries.sort();
+        for (_, _, fragment) in entries {
+            output.push_str(&fragment);
+        }
+        if !is_root {
+            output.push_str("}\n\n");
+        }
+        Ok(output)
+    }
+
     /// Render a module and its children.
     fn render_module(
         &mut self,
@@ -1722,12 +2280,11 @@ impl RenderState<'_, '_> {
         item: &Item,
         parent: Option<Id>,
     ) -> Result<String> {
+        if self.is_snapshot() {
+            return self.render_snapshot_module(path_prefix, item, parent);
+        }
         let path_prefix = ppush(path_prefix, &render_name(item));
-        let mut output = if self.is_snapshot() {
-            canonical::retained_attributes(item)?
-        } else {
-            String::new()
-        };
+        let mut output = String::new();
         output.push_str(&format!(
             "{}mod {} {{\n",
             render_vis(item),
@@ -1746,34 +2303,9 @@ impl RenderState<'_, '_> {
         let module = try_extract_item!(item, ItemEnum::Module)?;
         let module_id = item.id;
 
-        if self.is_snapshot() {
-            let mut declarations = Vec::new();
-            let mut implementations = Vec::new();
-            for item_id in &module.items {
-                let item = must_get(self.crate_data, item_id)?;
-                let fragment = self.render_item(&path_prefix, item, Some(module_id), false)?;
-                if !fragment.is_empty() {
-                    declarations.push(canonical::CanonicalItemKey::new(
-                        self.crate_data,
-                        item,
-                        fragment,
-                    ));
-                }
-                implementations.extend(self.render_item_impls(item)?);
-            }
-            declarations.sort();
-            implementations.sort();
-            for declaration in declarations {
-                output.push_str(&declaration.into_fragment());
-            }
-            for implementation in implementations {
-                output.push_str(&implementation);
-            }
-        } else {
-            for item_id in &module.items {
-                let item = must_get(self.crate_data, item_id)?;
-                output.push_str(&self.render_item(&path_prefix, item, Some(module_id), false)?);
-            }
+        for item_id in &module.items {
+            let item = must_get(self.crate_data, item_id)?;
+            output.push_str(&self.render_item(&path_prefix, item, Some(module_id), false)?);
         }
 
         output.push_str("}\n\n");
@@ -1782,6 +2314,19 @@ impl RenderState<'_, '_> {
 
     /// Render a function or method signature.
     fn render_function(&self, item: &Item, is_trait_method: bool) -> Result<String> {
+        self.render_function_with_policy(item, is_trait_method, None)
+    }
+
+    /// Render a method after container-wide async expansion validation.
+    fn render_function_with_policy(
+        &self,
+        item: &Item,
+        is_trait_method: bool,
+        async_policy: Option<async_trait::AsyncTraitPolicy>,
+    ) -> Result<String> {
+        let rewritten =
+            async_policy.map(|policy| async_trait::rewrite(self.crate_data, item, policy));
+        let item = rewritten.as_ref().unwrap_or(item);
         let mut output = self.item_prefix(item)?;
         let function = try_extract_item!(item, ItemEnum::Function)?;
         let kind = if is_trait_method {
@@ -1800,7 +2345,7 @@ impl RenderState<'_, '_> {
 
         // Use semicolon for trait method declarations, empty body for
         // implementations
-        if is_trait_method && !function.has_body {
+        if (is_trait_method && !function.has_body) || (self.is_snapshot() && !is_trait_method) {
             output.push_str(";\n\n");
         } else {
             output.push_str(" {}\n\n");
@@ -1950,6 +2495,10 @@ mod tests {
             config: &renderer,
             crate_data: &crate_data,
             selection: None,
+            public_paths: None,
+            name_plan: None,
+            declarations: RefCell::new(HashSet::new()),
+            snapshot_impls: BTreeMap::new(),
         };
 
         let item = crate_data
@@ -2623,6 +3172,10 @@ path = "src/lib.rs"
                     config: &renderer,
                     crate_data,
                     selection: renderer.resolve_selection(crate_data)?,
+                    public_paths: None,
+                    name_plan: None,
+                    declarations: RefCell::new(HashSet::new()),
+                    snapshot_impls: BTreeMap::new(),
                 };
                 let mut composed = String::new();
                 if let Some(frontmatter) = &renderer.frontmatter
@@ -2651,6 +3204,10 @@ path = "src/lib.rs"
                     config: &renderer,
                     crate_data,
                     selection: renderer.resolve_selection(crate_data)?,
+                    public_paths: None,
+                    name_plan: None,
+                    declarations: RefCell::new(HashSet::new()),
+                    snapshot_impls: BTreeMap::new(),
                 };
                 let root = super::must_get(crate_data, &crate_data.root)?;
                 state.render_item("", root, None, false)

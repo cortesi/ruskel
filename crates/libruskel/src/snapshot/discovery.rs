@@ -1,10 +1,10 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs,
+    fs, mem,
     path::{Path, PathBuf},
 };
 
-use cargo::core::{Package, Workspace};
+use cargo::core::{Package, Workspace, dependency::DepKind};
 
 use crate::{
     error::{Result, RuskelError, convert_cargo_error},
@@ -24,7 +24,44 @@ pub struct DiscoveredPackage {
     /// Generated snapshot filename.
     pub(crate) filename: String,
     /// Cargo features declared by this package.
-    features: BTreeSet<String>,
+    pub(crate) features: BTreeSet<String>,
+    /// Publication policy from the Cargo manifest.
+    pub(crate) publish: String,
+    /// Binary targets of this package.
+    pub(crate) binaries: Vec<String>,
+    /// Direct normal dependencies on workspace packages.
+    pub(crate) workspace_dependencies: Vec<WorkspaceDependency>,
+    /// Workspace packages that depend on this package.
+    pub(crate) workspace_dependents: Vec<WorkspaceDependent>,
+    /// Normal dependency aliases mapped to package names.
+    pub(crate) dependency_aliases: BTreeMap<String, String>,
+}
+
+/// One normal dependency on a selected workspace package.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WorkspaceDependency {
+    /// Depended-on workspace package.
+    pub(crate) package: String,
+    /// Whether every normal edge to this package is optional.
+    pub(crate) optional: bool,
+}
+
+/// One selected workspace package that depends on another package.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WorkspaceDependent {
+    /// Dependent workspace package.
+    pub(crate) package: String,
+    /// Dependency kind used by the dependent.
+    pub(crate) kind: DepKind,
+}
+
+/// A selected package with no library target.
+#[derive(Debug, Clone)]
+pub struct BinaryPackage {
+    /// Cargo package name.
+    pub(crate) name: String,
+    /// Direct normal dependencies on workspace packages.
+    pub(crate) workspace_dependencies: Vec<WorkspaceDependency>,
 }
 
 /// Canonically ordered discovery result.
@@ -34,6 +71,8 @@ pub struct Discovery {
     pub(crate) packages: Vec<DiscoveredPackage>,
     /// Binary-only packages that cannot be captured.
     pub(crate) skipped_packages: Vec<String>,
+    /// Binary-only package metadata for the index.
+    pub(crate) binary_packages: Vec<BinaryPackage>,
 }
 
 /// Canonical shared feature policy and per-package Cargo arguments.
@@ -105,7 +144,7 @@ impl Discovery {
 pub fn discover(inputs: &[PathBuf], offline: bool) -> Result<Discovery> {
     let config = create_quiet_cargo_config(offline)?;
     let mut selected = BTreeMap::<PathBuf, DiscoveredPackage>::new();
-    let mut skipped = BTreeMap::<PathBuf, String>::new();
+    let mut skipped = BTreeMap::<PathBuf, BinaryPackage>::new();
 
     for input in inputs {
         let manifest_path = resolve_manifest(input)?;
@@ -114,10 +153,11 @@ pub fn discover(inputs: &[PathBuf], offline: bool) -> Result<Discovery> {
         })?;
         let workspace = Workspace::new(&manifest_path, &config)
             .map_err(|error| discovery_error(input, convert_cargo_error(&error).to_string()))?;
+        let members = workspace.members().collect::<Vec<_>>();
 
         if manifest.workspace.is_some() {
-            for package in workspace.members() {
-                collect_package(package, &mut selected, &mut skipped)?;
+            for package in &members {
+                collect_package(package, &members, &mut selected, &mut skipped)?;
             }
         } else {
             let package = workspace.current_opt().ok_or_else(|| {
@@ -126,18 +166,20 @@ pub fn discover(inputs: &[PathBuf], offline: bool) -> Result<Discovery> {
                     "manifest does not select a Cargo package".to_string(),
                 )
             })?;
-            collect_package(package, &mut selected, &mut skipped)?;
+            collect_package(package, &members, &mut selected, &mut skipped)?;
         }
     }
 
     let mut packages = selected.into_values().collect::<Vec<_>>();
-    packages.sort_by(|left, right| {
-        (&left.package_name, &left.crate_name).cmp(&(&right.package_name, &right.crate_name))
-    });
+    sort_by_dependencies(&mut packages);
     validate_artifact_names(&packages)?;
 
-    let mut skipped_packages = skipped.into_values().collect::<Vec<_>>();
-    skipped_packages.sort();
+    let mut binary_packages = skipped.into_values().collect::<Vec<_>>();
+    binary_packages.sort_by(|left, right| left.name.cmp(&right.name));
+    let skipped_packages = binary_packages
+        .iter()
+        .map(|package| package.name.clone())
+        .collect();
     if packages.is_empty() {
         return Err(RuskelError::SnapshotDiscovery {
             input: inputs.first().cloned().unwrap_or_default(),
@@ -147,6 +189,7 @@ pub fn discover(inputs: &[PathBuf], offline: bool) -> Result<Discovery> {
     Ok(Discovery {
         packages,
         skipped_packages,
+        binary_packages,
     })
 }
 
@@ -174,8 +217,9 @@ fn resolve_manifest(input: &Path) -> Result<PathBuf> {
 /// Add one Cargo package to the deduplicated selected or skipped set.
 fn collect_package(
     package: &Package,
+    members: &[&Package],
     selected: &mut BTreeMap<PathBuf, DiscoveredPackage>,
-    skipped: &mut BTreeMap<PathBuf, String>,
+    skipped: &mut BTreeMap<PathBuf, BinaryPackage>,
 ) -> Result<()> {
     let manifest_path = fs::canonicalize(package.manifest_path()).map_err(|error| {
         discovery_error(
@@ -187,8 +231,23 @@ fn collect_package(
         return Ok(());
     }
     let package_name = package.name().to_string();
+    let member_roots = members
+        .iter()
+        .filter_map(|member| {
+            fs::canonicalize(member.root())
+                .ok()
+                .map(|root| (root, member.name().to_string()))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let workspace_dependencies = workspace_dependencies(package, &member_roots);
     let Some(target) = package.library() else {
-        skipped.insert(manifest_path, package_name);
+        skipped.insert(
+            manifest_path,
+            BinaryPackage {
+                name: package_name,
+                workspace_dependencies,
+            },
+        );
         return Ok(());
     };
     let features = package
@@ -205,9 +264,133 @@ fn collect_package(
             package_name,
             crate_name: target.crate_name(),
             features,
+            publish: match package.publish() {
+                None => "crates.io".to_string(),
+                Some(registries) if registries.is_empty() => "no".to_string(),
+                Some(registries) => {
+                    let mut registries = registries.clone();
+                    registries.sort();
+                    registries.join(", ")
+                }
+            },
+            binaries: {
+                let mut names = package
+                    .targets()
+                    .iter()
+                    .filter(|target| target.is_bin())
+                    .map(|target| target.name().to_string())
+                    .collect::<Vec<_>>();
+                names.sort();
+                names
+            },
+            workspace_dependencies,
+            workspace_dependents: workspace_dependents(package, members),
+            dependency_aliases: package
+                .dependencies()
+                .iter()
+                .filter(|dependency| dependency.kind() == DepKind::Normal)
+                .map(|dependency| {
+                    (
+                        dependency.name_in_toml().replace('-', "_"),
+                        dependency.package_name().to_string(),
+                    )
+                })
+                .collect(),
         },
     );
     Ok(())
+}
+
+/// Find direct normal edges from one package to selected workspace members.
+fn workspace_dependencies(
+    package: &Package,
+    member_roots: &BTreeMap<PathBuf, String>,
+) -> Vec<WorkspaceDependency> {
+    let mut by_package = BTreeMap::<String, bool>::new();
+    for dependency in package
+        .dependencies()
+        .iter()
+        .filter(|dependency| dependency.kind() == DepKind::Normal)
+    {
+        let Some(root) = dependency
+            .source_id()
+            .local_path()
+            .and_then(|root| fs::canonicalize(root).ok())
+        else {
+            continue;
+        };
+        let Some(name) = member_roots.get(&root) else {
+            continue;
+        };
+        by_package
+            .entry(name.clone())
+            .and_modify(|optional| *optional &= dependency.is_optional())
+            .or_insert(dependency.is_optional());
+    }
+    by_package
+        .into_iter()
+        .map(|(package, optional)| WorkspaceDependency { package, optional })
+        .collect()
+}
+
+/// Find selected workspace packages that depend on this package.
+fn workspace_dependents(package: &Package, members: &[&Package]) -> Vec<WorkspaceDependent> {
+    let package_root = fs::canonicalize(package.root()).ok();
+    let mut dependents = members
+        .iter()
+        .flat_map(|member| {
+            member
+                .dependencies()
+                .iter()
+                .filter(|&dependency| {
+                    dependency.package_name().as_str() == package.name().as_str()
+                        && package_root.as_ref().is_some_and(|package_root| {
+                            dependency
+                                .source_id()
+                                .local_path()
+                                .and_then(|root| fs::canonicalize(root).ok())
+                                .as_ref()
+                                == Some(package_root)
+                        })
+                })
+                .map(|dependency| WorkspaceDependent {
+                    package: member.name().to_string(),
+                    kind: dependency.kind(),
+                })
+        })
+        .collect::<Vec<_>>();
+    dependents.sort();
+    dependents.dedup();
+    let normal = dependents
+        .iter()
+        .filter(|dependent| dependent.kind == DepKind::Normal)
+        .map(|dependent| dependent.package.clone())
+        .collect::<BTreeSet<_>>();
+    dependents.retain(|dependent| {
+        dependent.kind == DepKind::Normal || !normal.contains(&dependent.package)
+    });
+    dependents
+}
+
+/// Sort packages so each normal workspace dependency precedes its consumer.
+fn sort_by_dependencies(packages: &mut Vec<DiscoveredPackage>) {
+    let mut ordered = Vec::with_capacity(packages.len());
+    let mut pending = mem::take(packages);
+    pending.sort_by(|left, right| left.package_name.cmp(&right.package_name));
+    while !pending.is_empty() {
+        let next = pending
+            .iter()
+            .position(|package| {
+                !package.workspace_dependencies.iter().any(|dependency| {
+                    pending
+                        .iter()
+                        .any(|other| other.package_name == dependency.package)
+                })
+            })
+            .unwrap_or(0);
+        ordered.push(pending.remove(next));
+    }
+    *packages = ordered;
 }
 
 /// Validate all artifact paths before the first rustdoc build.
@@ -279,6 +462,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::snapshot::card;
 
     fn write_package(root: &Path, name: &str, extra: &str) {
         fs::create_dir_all(root.join("src")).expect("create fixture source");
@@ -358,6 +542,82 @@ mod tests {
     }
 
     #[test]
+    fn workspace_edges_and_cards_use_only_member_packages() -> Result<()> {
+        let root = tempdir()?;
+        let workspace = root.path().join("workspace");
+        fs::create_dir(&workspace)?;
+        write_package(&root.path().join("external"), "external", "");
+        write_package(&workspace.join("core"), "core", "");
+        write_package(
+            &workspace.join("app"),
+            "app",
+            "publish = false\n[lib]\nname = \"app_library\"\n[dependencies]\ncore_alias = { package = \"core\", path = \"../core\", optional = true }\nexternal = { path = \"../../external\" }",
+        );
+        write_package(
+            &workspace.join("dev"),
+            "dev",
+            "[dev-dependencies]\ncore = { path = \"../core\" }",
+        );
+        let binary = workspace.join("tool");
+        fs::create_dir_all(binary.join("src"))?;
+        fs::write(binary.join("src/main.rs"), "fn main() {}\n")?;
+        fs::write(
+            binary.join("Cargo.toml"),
+            "[package]\nname = \"tool\"\nversion = \"0.1.0\"\nedition = \"2024\"\n[dependencies]\napp = { path = \"../app\" }\n",
+        )?;
+        fs::write(
+            workspace.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"core\", \"app\", \"dev\", \"tool\"]\nresolver = \"3\"\n",
+        )?;
+
+        let discovery = discover(&[workspace], true)?;
+        assert_eq!(
+            discovery
+                .packages
+                .iter()
+                .map(|package| package.package_name.as_str())
+                .collect::<Vec<_>>(),
+            ["core", "app", "dev"]
+        );
+        let core = &discovery.packages[0];
+        assert_eq!(core.publish, "crates.io");
+        assert_eq!(
+            core.workspace_dependents,
+            [
+                WorkspaceDependent {
+                    package: "app".into(),
+                    kind: DepKind::Normal
+                },
+                WorkspaceDependent {
+                    package: "dev".into(),
+                    kind: DepKind::Development
+                },
+            ]
+        );
+        let app = &discovery.packages[1];
+        assert_eq!(app.publish, "no");
+        assert_eq!(app.crate_name, "app_library");
+        assert_eq!(
+            app.workspace_dependencies,
+            [WorkspaceDependency {
+                package: "core".into(),
+                optional: true
+            }]
+        );
+        assert_eq!(app.dependency_aliases["core_alias"], "core");
+        assert_eq!(app.dependency_aliases["external"], "external");
+        let card = card::crate_card(app, &[]);
+        assert!(card.contains("// Workspace dependencies: core (optional)\n"));
+        assert!(!card.contains("Workspace dependencies: external"));
+        assert_eq!(discovery.binary_packages[0].name, "tool");
+        assert_eq!(
+            discovery.binary_packages[0].workspace_dependencies[0].package,
+            "app"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn feature_routing_requires_qualification_for_workspaces() -> Result<()> {
         let package = |name: &str| DiscoveredPackage {
             manifest_path: PathBuf::from(format!("/{name}/Cargo.toml")),
@@ -365,10 +625,16 @@ mod tests {
             crate_name: name.to_string(),
             filename: format!("{name}.rs"),
             features: BTreeSet::from(["serde".to_string()]),
+            publish: "crates.io".into(),
+            binaries: Vec::new(),
+            workspace_dependencies: Vec::new(),
+            workspace_dependents: Vec::new(),
+            dependency_aliases: BTreeMap::new(),
         };
         let discovery = Discovery {
             packages: vec![package("alpha"), package("beta")],
             skipped_packages: Vec::new(),
+            binary_packages: Vec::new(),
         };
         assert!(
             discovery
@@ -411,6 +677,11 @@ mod tests {
             crate_name: name.replace('-', "_"),
             filename: format!("{name}.rs"),
             features: BTreeSet::new(),
+            publish: "crates.io".into(),
+            binaries: Vec::new(),
+            workspace_dependencies: Vec::new(),
+            workspace_dependents: Vec::new(),
+            dependency_aliases: BTreeMap::new(),
         };
         assert!(validate_artifact_names(&[package("Api"), package("api")]).is_err());
         assert!(validate_artifact_names(&[package("CON")]).is_err());

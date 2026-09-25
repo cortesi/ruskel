@@ -1,2 +1,4 @@
 brace_style = "PreferSameLine"
 newline_style = "Unix"
+group_imports = "StdExternalCrate"
+imports_granularity = "Crate"

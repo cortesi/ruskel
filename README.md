@@ -100,16 +100,18 @@ See the help output for all options:
 ruskel --help
 ```
 
-Capture the public APIs of workspace crates in a generated directory:
+Capture a workspace API catalogue in a generated directory:
 
 ```sh
 ruskel-snapshot --workspace --output ./api
 ```
 
-Snapshots use the installed `nightly` toolchain by default. Updating that
-toolchain can change the generated API text. See the [snapshot
-reference](docs/snapshots.md) for setup, capture options, Git hooks, and CI
-checks.
+`api/index.md` lists crate purpose, publication, workspace edges, and exposed
+crates. Each generated Rust file groups declarations with their methods and
+impls, and identifies foreign types in a `use` block. Snapshots use the
+installed `nightly` toolchain by default. Updating that toolchain can change
+the generated API text. See the [snapshot reference](docs/snapshots.md) for the
+format, capture options, Git hooks, and CI checks.
 
 ```sh
 # Current project

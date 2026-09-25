@@ -455,11 +455,9 @@ fn validate_marker(marker: &mut File, path: &Path) -> Result<()> {
         .map_err(|source| cache_io("read ownership marker", path, source))?;
 
     if content.is_empty() {
-        marker
-            .seek(SeekFrom::Start(0))
-            .and_then(|_| marker.write_all(MARKER_CONTENT.as_bytes()))
-            .and_then(|_| marker.sync_all())
-            .map_err(|source| cache_io("initialize ownership marker", path, source))?;
+        write_empty_marker_with(marker, path, |marker| {
+            marker.write_all(MARKER_CONTENT.as_bytes())
+        })?;
         return Ok(());
     }
     if content != MARKER_CONTENT {
@@ -467,6 +465,26 @@ fn validate_marker(marker: &mut File, path: &Path) -> Result<()> {
             path: path.to_path_buf(),
             message: "unsupported or invalid cache layout version".to_string(),
         });
+    }
+    Ok(())
+}
+
+/// Keep a failed first marker write empty so the next opener can retry it.
+fn write_empty_marker_with(
+    marker: &mut File,
+    path: &Path,
+    write: impl FnOnce(&mut File) -> io::Result<()>,
+) -> Result<()> {
+    let result = marker
+        .seek(SeekFrom::Start(0))
+        .and_then(|_| write(marker))
+        .and_then(|_| marker.sync_all());
+    if let Err(source) = result {
+        marker
+            .set_len(0)
+            .and_then(|_| marker.sync_all())
+            .map_err(|error| cache_io("clear incomplete ownership marker", path, error))?;
+        return Err(cache_io("initialize ownership marker", path, source));
     }
     Ok(())
 }
@@ -655,14 +673,26 @@ fn validate_opened_regular_file(file: &File, path: &Path, label: &str) -> Result
 
 /// Create, write, and flush one new metadata file.
 fn write_new_file(path: &Path, content: &[u8], action: &'static str) -> Result<()> {
+    write_new_file_with(path, action, |file| file.write_all(content))
+}
+
+/// Remove an incomplete owned file if writing or syncing it fails.
+fn write_new_file_with(
+    path: &Path,
+    action: &'static str,
+    write: impl FnOnce(&mut fs::File) -> io::Result<()>,
+) -> Result<()> {
     let mut file = OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(path)
         .map_err(|source| cache_io(action, path, source))?;
-    file.write_all(content)
-        .and_then(|_| file.sync_all())
-        .map_err(|source| cache_io(action, path, source))
+    if let Err(source) = write(&mut file).and_then(|_| file.sync_all()) {
+        drop(file);
+        drop(fs::remove_file(path));
+        return Err(cache_io(action, path, source));
+    }
+    Ok(())
 }
 
 /// Attach an operation and path to one cache I/O error.
@@ -683,6 +713,41 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn failed_metadata_write_removes_its_partial_file() -> Result<()> {
+        let root = tempdir()?;
+        let path = root.path().join("partial");
+        let error = write_new_file_with(&path, "write test metadata", |file| {
+            file.write_all(b"partial")?;
+            Err(io::Error::other("injected write failure"))
+        })
+        .expect_err("injected write failure");
+        assert!(matches!(error, RuskelError::CacheIo { .. }));
+        assert!(!path.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn failed_marker_write_remains_retryable() -> Result<()> {
+        let root = tempdir()?;
+        let path = root.path().join(MARKER_NAME);
+        let mut marker = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)?;
+        let error = write_empty_marker_with(&mut marker, &path, |marker| {
+            marker.write_all(b"partial")?;
+            Err(io::Error::other("injected write failure"))
+        })
+        .expect_err("injected write failure");
+        assert!(matches!(error, RuskelError::CacheIo { .. }));
+        assert_eq!(fs::metadata(&path)?.len(), 0);
+        validate_marker(&mut marker, &path)?;
+        assert_eq!(fs::read(&path)?, MARKER_CONTENT.as_bytes());
+        Ok(())
+    }
 
     #[test]
     fn initializes_and_reopens_owned_layout() -> Result<()> {

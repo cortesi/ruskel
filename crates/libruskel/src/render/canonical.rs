@@ -455,20 +455,22 @@ fn variant_fields(variant: &rustdoc_types::Variant) -> Vec<Id> {
 /// Map an item to the fixed format 1 category and signature kind.
 fn item_category_and_kind(item: &Item) -> (u8, Option<SearchItemKind>) {
     match &item.inner {
-        ItemEnum::Module(_) => (0, Some(SearchItemKind::Module)),
-        ItemEnum::Macro(_) | ItemEnum::ProcMacro(_) => (1, Some(SearchItemKind::Macro)),
+        ItemEnum::Use(_) => (0, Some(SearchItemKind::Use)),
+        ItemEnum::Trait(_) => (1, Some(SearchItemKind::Trait)),
+        ItemEnum::TraitAlias(_) => (1, Some(SearchItemKind::TraitAlias)),
         ItemEnum::Union(_) => (2, Some(SearchItemKind::Union)),
         ItemEnum::Struct(_) => (2, Some(SearchItemKind::Struct)),
         ItemEnum::Enum(_) => (2, Some(SearchItemKind::Enum)),
         ItemEnum::TypeAlias(_) => (2, Some(SearchItemKind::TypeAlias)),
-        ItemEnum::Trait(_) => (3, Some(SearchItemKind::Trait)),
-        ItemEnum::TraitAlias(_) => (3, Some(SearchItemKind::TraitAlias)),
+        ItemEnum::Function(_) => (3, Some(SearchItemKind::Function)),
         ItemEnum::Constant { .. } => (4, Some(SearchItemKind::Constant)),
         ItemEnum::Static(_) => (4, Some(SearchItemKind::Static)),
-        ItemEnum::Function(_) => (5, Some(SearchItemKind::Function)),
-        ItemEnum::Impl(_) => (6, None),
-        ItemEnum::Use(_) => (2, Some(SearchItemKind::Use)),
-        _ => (7, None),
+        ItemEnum::Macro(_) | ItemEnum::ProcMacro(_) => (5, Some(SearchItemKind::Macro)),
+        ItemEnum::Module(_) => (6, Some(SearchItemKind::Module)),
+        ItemEnum::AssocType { .. } => (0, None),
+        ItemEnum::AssocConst { .. } => (1, None),
+        ItemEnum::Impl(_) => (7, None),
+        _ => (8, None),
     }
 }
 

@@ -1,5 +1,10 @@
 # Unreleased
 
+- [change] Replace workspace API snapshots with crate cards and `api/index.md`.
+  Resolve public names by item identity, group methods with their types, and
+  show workspace edges and exposed crates for API review.
+- [fix] Restore `async_trait` signatures as `async fn` in snapshots and normal
+  Ruskel output when the full expansion matches.
 - [fix] Fold derivable trait impls into `#[derive(...)]` in API snapshots,
   matching `ruskel` output. Snapshots no longer expand serde, thiserror, and
   similar derives into impl blocks with macro-internal paths.

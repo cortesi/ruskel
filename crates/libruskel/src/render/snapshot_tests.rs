@@ -1,7 +1,9 @@
 use std::{
     collections::HashMap,
-    fs,
+    env, fs,
     path::{Path, PathBuf},
+    process::Command,
+    sync::OnceLock,
 };
 
 use rustdoc_types::{Crate, ItemEnum, MacroKind, ProcMacro, Type};
@@ -59,6 +61,8 @@ pub mod zed {
 }
 
 /// An ordered data type.
+///
+/// More detail.
 #[repr(C)]
 #[doc(hidden)]
 #[derive(Clone)]
@@ -195,6 +199,269 @@ fn snapshot(crate_data: &Crate) -> Result<String> {
     Renderer::snapshot_v1(SNAPSHOT_TOOLCHAIN).render(crate_data)
 }
 
+/// Build a locked crate from one source string for focused catalogue checks.
+fn fixture_from_source(source: &str) -> Result<Fixture> {
+    let root = tempfile::tempdir()?;
+    let package = root.path().join("project");
+    fs::create_dir_all(package.join("src"))?;
+    fs::write(
+        package.join("Cargo.toml"),
+        "[package]\nname = \"stage2-render-fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )?;
+    fs::write(package.join("src/lib.rs"), source)?;
+    let status = cargo_env::command("cargo")
+        .arg("generate-lockfile")
+        .arg("--manifest-path")
+        .arg(package.join("Cargo.toml"))
+        .status()?;
+    assert!(status.success(), "fixture lockfile generation failed");
+    Ok(Fixture {
+        _root: root,
+        package,
+    })
+}
+
+/// Public paths, impl ownership, and boundary markers in one source crate.
+const STAGE2_SOURCE: &str = r#"
+pub trait Marker {}
+
+impl<T: Clone> Marker for T {}
+
+pub struct LocalError;
+
+impl From<LocalError> for std::io::Error {
+    fn from(_: LocalError) -> Self {
+        std::io::Error::other("local")
+    }
+}
+
+pub struct Dual;
+
+impl Dual {
+    pub fn first(&self) {}
+}
+
+impl Dual {
+    pub fn second(&self) {}
+}
+
+pub mod first {
+    pub struct Shared;
+
+    impl Shared {
+        pub fn shared(&self) {}
+    }
+}
+
+pub mod second {
+    pub use crate::first::Shared;
+}
+
+pub use first::Shared;
+pub use first::Shared as Alias;
+pub use second::*;
+
+mod private_home {
+    pub struct Internal;
+
+    impl Internal {
+        pub fn ping(&self) {}
+    }
+
+    pub trait Sealed {}
+}
+
+pub use private_home::Internal;
+
+pub trait Exposed: private_home::Sealed {}
+
+pub struct ThreadBound {
+    pub value: std::rc::Rc<()>,
+}
+
+/// A type with one unwind marker.
+pub struct UnwindOnly<'a> {
+    pub value: &'a mut u8,
+}
+
+pub trait Send {}
+
+pub struct Named;
+
+impl Send for Named {}
+
+pub struct Partial {
+    pub visible: u8,
+    hidden: u8,
+}
+
+pub trait StaticOnly {
+    fn make() -> Self;
+}
+
+pub fn free_function() {}
+"#;
+
+/// Share the compiled rustdoc fixture across focused tests in this process.
+fn stage2_crate() -> &'static Crate {
+    static FIXTURE: OnceLock<(Fixture, Crate)> = OnceLock::new();
+    let (_, crate_data) = FIXTURE.get_or_init(|| {
+        let fixture = fixture_from_source(STAGE2_SOURCE).expect("stage 2 fixture files");
+        let crate_data = inspect_fixture(&fixture.package).expect("stage 2 rustdoc JSON");
+        (fixture, crate_data)
+    });
+    crate_data
+}
+
+/// Return canonical trait paths for compiler-generated negative impls.
+fn negative_auto_traits(crate_data: &Crate, name: &str) -> Vec<String> {
+    let item = crate_data
+        .index
+        .values()
+        .find(|item| item.name.as_deref() == Some(name))
+        .expect("fixture struct");
+    let ItemEnum::Struct(struct_) = &item.inner else {
+        panic!("fixture item must be a struct");
+    };
+    struct_
+        .impls
+        .iter()
+        .filter_map(|id| {
+            let ItemEnum::Impl(impl_) = &crate_data.index.get(id)?.inner else {
+                return None;
+            };
+            (impl_.is_synthetic && impl_.is_negative)
+                .then_some(impl_.trait_.as_ref())
+                .flatten()
+                .and_then(|trait_| crate_data.paths.get(&trait_.id))
+                .map(|summary| summary.path.join("::"))
+        })
+        .collect()
+}
+
+#[test]
+fn snapshot_places_reexports_and_impls_once() -> Result<()> {
+    let output = snapshot(stage2_crate())?;
+
+    // Alias wins the equal-length public-path tie by lexical order.
+    assert_eq!(output.matches("pub struct Alias").count(), 1, "{output}");
+    assert_eq!(output.matches("pub struct Shared").count(), 0, "{output}");
+    assert_eq!(
+        output.matches("pub use crate::Alias as Shared;").count(),
+        3,
+        "{output}"
+    );
+    assert_eq!(output.matches("pub struct Internal").count(), 1, "{output}");
+    assert_eq!(
+        output.matches("pub fn shared(&self)").count(),
+        1,
+        "{output}"
+    );
+    assert_eq!(output.matches("pub fn ping(&self)").count(), 1, "{output}");
+    assert!(!output.contains("pub mod private_home"), "{output}");
+    assert!(output.contains("pub mod first"), "{output}");
+    assert!(output.contains("pub mod second"), "{output}");
+    assert!(output.contains("pub fn first(&self);"), "{output}");
+    assert!(output.contains("pub fn second(&self);"), "{output}");
+    assert_eq!(output.matches("impl Dual").count(), 2, "{output}");
+
+    let local = output
+        .find("pub struct LocalError")
+        .expect("local trait argument");
+    let from = output
+        .find("impl From<LocalError> for")
+        .expect("foreign impl");
+    let named = output.find("pub struct Named").expect("next local type");
+    assert!(local < from && from < named, "{output}");
+    assert_eq!(
+        output.matches("impl From<LocalError> for").count(),
+        1,
+        "{output}"
+    );
+
+    let marker = output.find("pub trait Marker").expect("local trait");
+    let blanket = output
+        .find("impl<T: Clone> Marker for T")
+        .expect("blanket impl");
+    let send = output.find("pub trait Send").expect("next local trait");
+    assert!(marker < blanket && blanket < send, "{output}");
+    Ok(())
+}
+
+#[test]
+fn private_self_impl_does_not_leak_through_public_trait_argument() -> Result<()> {
+    let fixture = fixture_from_source(
+        "pub struct PublicError;\nmod private {\n    pub(crate) struct Hidden;\n    impl From<super::PublicError> for Hidden {\n        fn from(_: super::PublicError) -> Self { Self }\n    }\n}\n",
+    )?;
+    let output = snapshot(&inspect_fixture(&fixture.package)?)?;
+    assert!(output.contains("pub struct PublicError;"), "{output}");
+    assert!(!output.contains("Hidden"), "{output}");
+    Ok(())
+}
+
+#[test]
+fn snapshot_marks_boundary_facts_without_other_auto_traits() -> Result<()> {
+    let crate_data = stage2_crate();
+    let thread_traits = negative_auto_traits(crate_data, "ThreadBound");
+    assert!(thread_traits.contains(&"core::marker::Send".to_string()));
+    assert!(thread_traits.contains(&"core::marker::Sync".to_string()));
+    assert!(
+        negative_auto_traits(crate_data, "UnwindOnly")
+            .contains(&"core::panic::unwind_safe::UnwindSafe".to_string())
+    );
+
+    let output = snapshot(crate_data)?;
+    assert!(
+        output.contains("pub visible: u8,\n    /* private fields */"),
+        "{output}"
+    );
+    assert!(output.contains("impl !Send for ThreadBound {}"), "{output}");
+    assert!(output.contains("impl !Sync for ThreadBound {}"), "{output}");
+    assert!(
+        output.contains("impl !Sync for ThreadBound {}\n\n/// A type with one unwind marker."),
+        "{output}"
+    );
+    assert!(!output.contains("impl !UnwindSafe"), "{output}");
+    assert!(output.contains("pub trait Send"), "{output}");
+    assert!(output.contains("impl crate::Send for Named {}"), "{output}");
+    assert!(
+        output.contains("// Not dyn-compatible.\npub trait StaticOnly"),
+        "{output}"
+    );
+    assert!(output.contains("// Sealed.\npub trait Exposed"), "{output}");
+    assert!(output.contains("pub fn free_function();"), "{output}");
+    Ok(())
+}
+
+#[test]
+fn snapshot_stage2_is_stable_across_processes() -> Result<()> {
+    const OUTPUT_PATH: &str = "RUSKEL_STAGE2_SNAPSHOT_CHILD_OUTPUT";
+    if let Some(path) = env::var_os(OUTPUT_PATH) {
+        fs::write(path, snapshot(stage2_crate())?)?;
+        return Ok(());
+    }
+
+    let output_dir = tempfile::tempdir()?;
+    let binary = env::current_exe()?;
+    let mut captures = Vec::new();
+    for index in 0..2 {
+        let path = output_dir.path().join(format!("capture-{index}.rs"));
+        let child = Command::new(&binary)
+            .arg("--exact")
+            .arg("render::snapshot_tests::snapshot_stage2_is_stable_across_processes")
+            .env(OUTPUT_PATH, &path)
+            .output()?;
+        assert!(
+            child.status.success(),
+            "child snapshot failed: {}",
+            String::from_utf8_lossy(&child.stderr)
+        );
+        captures.push(fs::read(path)?);
+    }
+    assert_eq!(captures[0], captures[1]);
+    Ok(())
+}
+
 #[test]
 fn snapshot_rustfmt_command_and_configuration_are_exact() {
     let command = snapshot_rustfmt_command(
@@ -220,7 +487,7 @@ fn snapshot_rustfmt_command_and_configuration_are_exact() {
     assert_eq!(command.get_current_dir(), Some(Path::new("/empty")));
     assert_eq!(
         SNAPSHOT_RUSTFMT_V1,
-        b"brace_style = \"PreferSameLine\"\nnewline_style = \"Unix\"\n"
+        b"brace_style = \"PreferSameLine\"\nnewline_style = \"Unix\"\ngroup_imports = \"StdExternalCrate\"\nimports_granularity = \"Crate\"\n"
     );
 }
 
@@ -229,6 +496,7 @@ fn snapshot_is_stable_across_unordered_rustdoc_sequences() -> Result<()> {
     let root = fixture()?;
     let original = inspect_fixture(&root.package)?;
     let expected = snapshot(&original)?;
+    assert!(!expected.contains("TrivialClone"), "{expected}");
     let mut permuted = original.clone();
 
     let mut values: Vec<_> = permuted.index.drain().collect();
@@ -260,10 +528,10 @@ fn snapshot_is_stable_across_unordered_rustdoc_sequences() -> Result<()> {
         expected.contains("#[doc(hidden)]"),
         "snapshot omitted doc(hidden):\n{expected}"
     );
-    assert!(expected.contains("#[derive(Clone, Display)]\n    pub struct Alpha"));
+    assert!(expected.contains("/// An ordered data type.\n///\n/// More detail.\n#[derive(Clone, Display)]\n#[repr(C)]\n#[doc(hidden)]\npub struct Alpha"));
     assert!(!expected.contains("impl Clone for Alpha"));
     assert!(!expected.contains("impl Display for Alpha"));
-    assert!(expected.contains("#[derive(Clone, Copy)]\n    pub union Choice"));
+    assert!(expected.contains("#[derive(Clone, Copy)]\npub union Choice"));
     assert!(!expected.contains("impl Clone for Choice"));
     assert!(expected.contains("impl Renamed"));
     assert!(expected.contains("pub const VERSION: u8 = 1;"));
@@ -423,7 +691,9 @@ fn snapshot_preserves_ordered_api_sequences() -> Result<()> {
         panic!("Container where predicate must have a trait bound");
     };
     trait_.path = "Send".to_string();
-    assert_ne!(snapshot(&associated_type_where)?, expected);
+    // Name resolution follows the item ID, so a written-path change has no
+    // effect.
+    assert_eq!(snapshot(&associated_type_where)?, expected);
 
     let mut associated_const = original.clone();
     let version = associated_const

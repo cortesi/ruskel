@@ -186,6 +186,7 @@ mod tests {
             concat!(
                 "changed     alpha-api.rs\n",
                 "changed     beta-api.rs\n",
+                "changed     index.md\n",
                 "skipped     workspace-tool (no library target)\n",
             )
         );
@@ -210,6 +211,7 @@ mod tests {
             concat!(
                 "unchanged   alpha-api.rs\n",
                 "unchanged   beta-api.rs\n",
+                "unchanged   index.md\n",
                 "removed     .ruskel-snapshot.toml\n",
                 "skipped     workspace-tool (no library target)\n",
             )
@@ -260,6 +262,7 @@ mod tests {
             concat!(
                 "changed     alpha-api.rs\n",
                 "unchanged   beta-api.rs\n",
+                "changed     index.md\n",
                 "skipped     workspace-tool (no library target)\n",
             )
         );
@@ -268,7 +271,7 @@ mod tests {
             .map(|entry| entry.expect("tree entry").file_name())
             .collect::<Vec<_>>();
         entries.sort();
-        assert_eq!(entries, ["alpha-api.rs", "beta-api.rs"]);
+        assert_eq!(entries, ["alpha-api.rs", "beta-api.rs", "index.md"]);
     }
 
     #[test]

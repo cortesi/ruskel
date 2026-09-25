@@ -529,7 +529,7 @@ gen_tests! {
                         U: Into<T>,
                     {
                         type Error = never;
-                        fn try_from(value: U) -> Result<T, <T as TryFrom<U>>::Error> {}
+                        fn try_from(value: U) -> Result<T, never> {}
                     }
                     impl<T> Any for MyStruct
                     where

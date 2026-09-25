@@ -30,7 +30,7 @@ const DERIVE_TRAITS: &[&str] = &[
 ];
 
 /// Compiler-internal marker traits whose impls are never rendered.
-const HIDDEN_TRAITS: &[&str] = &["StructuralPartialEq"];
+const HIDDEN_TRAITS: &[&str] = &["StructuralPartialEq", "TrivialClone"];
 
 /// One parent-to-child occurrence in the render traversal.
 pub type RenderEdge = (Option<Id>, Id);
