@@ -230,10 +230,10 @@ struct SnapshotOccurrence {
 /// Order declarations by role within a catalogue module.
 fn snapshot_category(item: &Item) -> u8 {
     match &item.inner {
-        ItemEnum::Trait(_) | ItemEnum::TraitAlias(_) => 1,
-        ItemEnum::Struct(_) | ItemEnum::Enum(_) | ItemEnum::Union(_) | ItemEnum::TypeAlias(_) => 2,
-        ItemEnum::Function(_) => 3,
-        ItemEnum::Constant { .. } | ItemEnum::Static(_) => 4,
+        ItemEnum::Constant { .. } | ItemEnum::Static(_) => 1,
+        ItemEnum::Trait(_) | ItemEnum::TraitAlias(_) => 2,
+        ItemEnum::Struct(_) | ItemEnum::Enum(_) | ItemEnum::Union(_) | ItemEnum::TypeAlias(_) => 3,
+        ItemEnum::Function(_) => 4,
         ItemEnum::Macro(_) | ItemEnum::ProcMacro(_) => 5,
         ItemEnum::Module(_) => 6,
         _ => 7,

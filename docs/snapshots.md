@@ -75,7 +75,7 @@ coupling. The display path uses the public facade when the capture can resolve i
 Without rustdoc data for an external dependency, a type may appear under its defining crate
 instead of a re-exporting facade. Check source when the facade matters.
 
-Within each module, re-exports come first, then traits, types, functions, constants and statics,
+Within each module, re-exports come first, then constants and statics, traits, types, functions,
 macros, and submodules. A type's inherent methods and trait impls follow its declaration. Trait
 impls show conformance, conditions, and associated items without repeating methods. A declaration
 ends with a semicolon. A provided trait method keeps `{}`. `/* private fields */`, `impl !Send`,

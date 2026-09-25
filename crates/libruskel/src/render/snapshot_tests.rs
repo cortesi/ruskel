@@ -127,6 +127,10 @@ pub type SingletonTuple = (u32,);
 pub type CCallback = unsafe extern "C" fn(value: i32) -> i32;
 pub type HrtbCallback = for<'a> fn(value: &'a i32) -> &'a i32;
 
+pub use std::cmp::Ordering as PublicOrdering;
+
+pub const GLOBAL_LIMIT: u8 = 3;
+
 #[unsafe(no_mangle)]
 pub static EXPORTED: u8 = 7;
 
@@ -554,6 +558,29 @@ fn snapshot_is_stable_across_unordered_rustdoc_sequences() -> Result<()> {
         .expect("private-only fixture");
     item.docs = Some("A private-only change.".to_string());
     assert_eq!(snapshot(&private_only)?, expected);
+    Ok(())
+}
+
+#[test]
+fn snapshot_orders_declarations_by_role() -> Result<()> {
+    let fixture = fixture()?;
+    let output = snapshot(&inspect_fixture(&fixture.package)?)?;
+    let position = |needle: &str| {
+        output
+            .find(needle)
+            .unwrap_or_else(|| panic!("missing {needle}"))
+    };
+
+    let reexport = position("pub use std::cmp::Ordering as PublicOrdering;");
+    let constant = position("pub const GLOBAL_LIMIT");
+    let global = position("pub static EXPORTED");
+    let trait_ = position("pub trait Alias");
+    let struct_ = position("pub struct Alpha");
+    let function = position("pub fn constrained");
+
+    assert!(reexport < constant && reexport < global);
+    assert!(constant < trait_ && global < trait_);
+    assert!(trait_ < struct_ && struct_ < function);
     Ok(())
 }
 
