@@ -1,7 +1,6 @@
 //! Process-level checks for the `ruskel-snapshot` command.
 
-#[path = "../src/cargo_env.rs"]
-mod cargo_env;
+mod support;
 
 #[cfg(test)]
 mod tests {
@@ -11,7 +10,7 @@ mod tests {
     use predicates::str::contains;
     use tempfile::{TempDir, tempdir};
 
-    use crate::cargo_env;
+    use crate::support::cargo_command;
 
     const TOOLCHAIN: &str = "nightly-2026-07-01";
 
@@ -105,7 +104,7 @@ mod tests {
 
     /// Create a lockfile without network access.
     fn generate_lockfile(manifest: &Path) {
-        let status = cargo_env::command("cargo")
+        let status = cargo_command()
             .args(["generate-lockfile", "--offline", "--manifest-path"])
             .arg(manifest)
             .status()
@@ -136,7 +135,19 @@ mod tests {
 
     /// Build a CLI command without Nextest's current-toolchain loader paths.
     fn cargo_binary(name: &str) -> Command {
-        let mut command = Command::cargo_bin(name).expect("Cargo binary");
+        let mut command = match name {
+            "ruskel-snapshot" => Command::new(env!("CARGO_BIN_EXE_ruskel-snapshot")),
+            "ruskel" => {
+                // Cargo exposes binary paths only for this integration test's
+                // package.
+                let mut command = cargo_command();
+                command.args(["run", "--quiet", "--manifest-path"]);
+                command.arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../ruskel/Cargo.toml"));
+                command.arg("--");
+                Command::from_std(command)
+            }
+            _ => panic!("unsupported test binary: {name}"),
+        };
         for variable in [
             "DYLD_LIBRARY_PATH",
             "DYLD_FALLBACK_LIBRARY_PATH",

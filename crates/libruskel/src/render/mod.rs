@@ -35,7 +35,7 @@ mod canonical;
 pub(crate) mod names;
 
 /// Exact rustfmt configuration for snapshot format 1.
-const SNAPSHOT_RUSTFMT_V1: &[u8] = include_bytes!("render/snapshot-rustfmt-v1.toml");
+const SNAPSHOT_RUSTFMT_V1: &[u8] = include_bytes!("snapshot-rustfmt-v1.toml");
 
 /// Rendering and formatting policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -837,7 +837,6 @@ impl Renderer {
 }
 
 #[cfg(test)]
-#[path = "render/snapshot_tests.rs"]
 mod snapshot_tests;
 
 impl RenderState<'_, '_> {

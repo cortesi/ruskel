@@ -1,7 +1,6 @@
 //! End-to-end coverage for retained helper attributes in canonical snapshots.
 
-#[path = "../src/cargo_env.rs"]
-mod cargo_env;
+mod support;
 
 #[cfg(test)]
 mod tests {
@@ -13,7 +12,7 @@ mod tests {
     };
     use tempfile::{TempDir, tempdir};
 
-    use crate::cargo_env;
+    use crate::support::cargo_command;
 
     const TOOLCHAIN: &str = "nightly-2026-07-01";
 
@@ -56,7 +55,7 @@ pub fn helper(_: TokenStream) -> TokenStream {
                 "[package]\nname = \"helper-api\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nhelper = { path = \"../helper\" }\n",
             )?;
             fs::write(api.join("src/lib.rs"), api_source("#[stable_api]"))?;
-            let status = cargo_env::command("cargo")
+            let status = cargo_command()
                 .args(["generate-lockfile", "--offline", "--manifest-path"])
                 .arg(root.path().join("Cargo.toml"))
                 .status()?;

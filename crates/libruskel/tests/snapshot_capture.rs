@@ -1,7 +1,6 @@
 //! End-to-end tests for canonical workspace snapshot capture.
 
-#[path = "../src/cargo_env.rs"]
-mod cargo_env;
+mod support;
 
 #[cfg(test)]
 mod tests {
@@ -16,7 +15,7 @@ mod tests {
     };
     use tempfile::{TempDir, tempdir};
 
-    use crate::cargo_env;
+    use crate::support::cargo_command;
 
     const TOOLCHAIN: &str = "nightly-2026-07-01";
 
@@ -96,7 +95,7 @@ mod tests {
     }
 
     fn generate_lockfile(manifest: &Path) {
-        let status = cargo_env::command("cargo")
+        let status = cargo_command()
             .args(["generate-lockfile", "--offline", "--manifest-path"])
             .arg(manifest)
             .status()
